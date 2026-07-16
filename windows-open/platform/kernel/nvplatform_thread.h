@@ -25,6 +25,20 @@ void NvPlatformThreadExit(NvS32 status);
 NV_STATUS NvPlatformThreadWait(
 	NvU64 threadId,
 	NvS32* returnStatus);
+NvU64 NvPlatformThreadGetPriority(NvU64 threadId);
+void NvPlatformThreadSetPriority(NvU64 threadId, NvU64 priority);
+NV_STATUS NvPlatformThreadSetAffinity(
+	NvU64 group,
+	NvU64 mask,
+	NvU64* previousGroup,
+	NvU64* previousMask);
+NV_STATUS NvPlatformThreadSetAffinityByIndex(
+	NvU32 coreIndex,
+	NvU64* previousGroup,
+	NvU64* previousMask);
+NV_STATUS NvPlatformThreadRevertAffinity(
+	NvU64 previousGroup,
+	NvU64 previousMask);
 
 #ifdef __cplusplus
 }

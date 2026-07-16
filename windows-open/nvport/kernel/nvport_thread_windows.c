@@ -5,6 +5,10 @@
 
 const PORT_THREAD PORT_THREAD_INVALID = {0ULL};
 const PORT_PROCESS PORT_PROCESS_INVALID = {0ULL};
+const NvU64 portThreadPriorityMin = 0ULL;
+const NvU64 portThreadPriorityDefault = 8ULL;
+const NvU64 portThreadPriorityLowRealtime = 16ULL;
+const NvU64 portThreadPriorityMax = 31ULL;
 
 NvBool portThreadIsValid(PORT_THREAD thread)
 {
@@ -73,4 +77,58 @@ NV_STATUS portThreadWaitToComplete(
 void portThreadYield(void)
 {
     NvPlatformYieldThread();
+}
+
+NvU64 portThreadExGetPriority(NvU64 threadId)
+{
+    return NvPlatformThreadGetPriority(threadId);
+}
+
+void portThreadExSetPriority(NvU64 threadId, NvU64 priority)
+{
+    NvPlatformThreadSetPriority(threadId, priority);
+}
+
+NV_STATUS portThreadExSetAffinity(
+    const PORT_THREAD_AFFINITY* affinity,
+    PORT_THREAD_AFFINITY* previousAffinity)
+{
+    if (affinity == NULL || previousAffinity == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NvPlatformThreadSetAffinity(
+        affinity->cpuGroup,
+        affinity->mask,
+        &previousAffinity->cpuGroup,
+        &previousAffinity->mask);
+}
+
+NV_STATUS portThreadExSetSystemGroupAffinity(
+    NvU32 coreIndex,
+    PORT_THREAD_AFFINITY* previousAffinity)
+{
+    if (previousAffinity == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NvPlatformThreadSetAffinityByIndex(
+        coreIndex,
+        &previousAffinity->cpuGroup,
+        &previousAffinity->mask);
+}
+
+NV_STATUS portThreadExRevertToUserGroupAffinity(
+    PORT_THREAD_AFFINITY* previousAffinity)
+{
+    if (previousAffinity == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NvPlatformThreadRevertAffinity(
+        previousAffinity->cpuGroup,
+        previousAffinity->mask);
 }

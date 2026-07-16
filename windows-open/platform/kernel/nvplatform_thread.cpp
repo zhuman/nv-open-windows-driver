@@ -63,6 +63,32 @@ void ThreadStart(void* context)
     CompleteThread(state, state->threadMain(state->argument));
 }
 
+PETHREAD ReferenceThread(NvU64 threadId) noexcept
+{
+    PETHREAD threadObject = nullptr;
+
+    if (threadRegistryInitialized)
+    {
+        ExAcquireFastMutex(&threadListMutex);
+        const ThreadState* state = FindThreadStateLocked(threadId);
+        if (state != nullptr)
+        {
+            threadObject = state->threadObject;
+            ObReferenceObject(threadObject);
+        }
+        ExReleaseFastMutex(&threadListMutex);
+    }
+
+    if (threadObject == nullptr)
+    {
+        (void)PsLookupThreadByThreadId(
+            reinterpret_cast<HANDLE>(threadId),
+            &threadObject);
+    }
+
+    return threadObject;
+}
+
 } // namespace
 
 extern "C" NV_STATUS NvPlatformThreadInitialize(void)
@@ -259,6 +285,100 @@ extern "C" NV_STATUS NvPlatformThreadWait(
         *returnStatus = state->returnStatus;
     }
 
+    return NV_OK;
+}
+
+extern "C" NvU64 NvPlatformThreadGetPriority(NvU64 threadId)
+{
+    PETHREAD threadObject = ReferenceThread(threadId);
+    if (threadObject == nullptr)
+    {
+        return 0;
+    }
+
+    const KPRIORITY priority = KeQueryPriorityThread(threadObject);
+    ObDereferenceObject(threadObject);
+    return static_cast<NvU64>(priority);
+}
+
+extern "C" void NvPlatformThreadSetPriority(NvU64 threadId, NvU64 priority)
+{
+    PETHREAD threadObject = ReferenceThread(threadId);
+    if (threadObject != nullptr)
+    {
+        (void)KeSetPriorityThread(
+            threadObject,
+            static_cast<KPRIORITY>(priority));
+        ObDereferenceObject(threadObject);
+    }
+}
+
+extern "C" NV_STATUS NvPlatformThreadSetAffinity(
+    NvU64 group,
+    NvU64 mask,
+    NvU64* previousGroup,
+    NvU64* previousMask)
+{
+    if (previousGroup == nullptr || previousMask == nullptr ||
+        group > MAXUSHORT || mask == 0)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return NV_ERR_INVALID_IRQ_LEVEL;
+    }
+
+    GROUP_AFFINITY affinity{};
+    GROUP_AFFINITY previousAffinity{};
+    affinity.Group = static_cast<USHORT>(group);
+    affinity.Mask = static_cast<KAFFINITY>(mask);
+    KeSetSystemGroupAffinityThread(&affinity, &previousAffinity);
+    *previousGroup = previousAffinity.Group;
+    *previousMask = previousAffinity.Mask;
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformThreadSetAffinityByIndex(
+    NvU32 coreIndex,
+    NvU64* previousGroup,
+    NvU64* previousMask)
+{
+    PROCESSOR_NUMBER processorNumber{};
+    const NTSTATUS status = KeGetProcessorNumberFromIndex(
+        coreIndex,
+        &processorNumber);
+    if (!NT_SUCCESS(status))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NvPlatformThreadSetAffinity(
+        processorNumber.Group,
+        1ULL << processorNumber.Number,
+        previousGroup,
+        previousMask);
+}
+
+extern "C" NV_STATUS NvPlatformThreadRevertAffinity(
+    NvU64 previousGroup,
+    NvU64 previousMask)
+{
+    if (previousGroup > MAXUSHORT || previousMask == 0)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return NV_ERR_INVALID_IRQ_LEVEL;
+    }
+
+    GROUP_AFFINITY previousAffinity{};
+    previousAffinity.Group = static_cast<USHORT>(previousGroup);
+    previousAffinity.Mask = static_cast<KAFFINITY>(previousMask);
+    KeRevertToUserGroupAffinityThread(&previousAffinity);
     return NV_OK;
 }
 

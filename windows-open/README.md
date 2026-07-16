@@ -50,8 +50,9 @@ The thread sidecar implements invalid-handle constants, current thread/process
 identity, ID lookup and comparison, scheduler yield, and kernel thread create,
 exit, join, and destroy over a narrow WDK platform contract. Created threads
 retain their kernel object and completion status in a registry owned by the
-NvPort binding lifecycle. The thread module remains disabled until the
-Windows-only priority, affinity, and process-notification extensions are added.
+NvPort binding lifecycle. Priority and processor-group affinity operations are
+also implemented. The thread module remains disabled until the Windows-only
+process-notification extension is added.
 
 Add upstream files to the manifests under `manifests/` only after they compile
 in both address spaces or after their mode-specific dependencies are understood.
@@ -82,7 +83,6 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
 Both INFs use root-enumerated development hardware IDs. They deliberately do
 not match NVIDIA PCI devices yet.
 
-The next NvPort expansion is Windows thread priority, affinity, and process
-notification support. Keep using sidecar
+The next NvPort expansion is Windows process-notification support. Keep using sidecar
 Windows backends and explicit module definitions; do not modify the published
 NvPort headers or compile Unix kernel backend files.
