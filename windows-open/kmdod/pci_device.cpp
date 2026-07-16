@@ -4,6 +4,40 @@ namespace {
 
 constexpr USHORT NvidiaVendorId = 0x10DE;
 
+NTSTATUS ReadConfig(
+    _In_ void* context,
+    _Out_writes_bytes_(length) void* buffer,
+    _In_ ULONG offset,
+    _In_ ULONG length,
+    _Out_ ULONG* bytesRead)
+{
+    const auto* dxgkInterface = static_cast<const DXGKRNL_INTERFACE*>(context);
+    return dxgkInterface->DxgkCbReadDeviceSpace(
+        dxgkInterface->DeviceHandle,
+        DXGK_WHICHSPACE_CONFIG,
+        buffer,
+        offset,
+        length,
+        bytesRead);
+}
+
+NTSTATUS WriteConfig(
+    _In_ void* context,
+    _In_reads_bytes_(length) const void* buffer,
+    _In_ ULONG offset,
+    _In_ ULONG length,
+    _Out_ ULONG* bytesWritten)
+{
+    const auto* dxgkInterface = static_cast<const DXGKRNL_INTERFACE*>(context);
+    return dxgkInterface->DxgkCbWriteDeviceSpace(
+        dxgkInterface->DeviceHandle,
+        DXGK_WHICHSPACE_CONFIG,
+        const_cast<void*>(buffer),
+        offset,
+        length,
+        bytesWritten);
+}
+
 } // namespace
 
 namespace nv::kmdod {
@@ -11,6 +45,7 @@ namespace nv::kmdod {
 PciDevice::PciDevice() noexcept
     : identity_{},
     registerBarAddress_{},
+    configAccess_{},
       present_(false)
 {
 }
@@ -31,23 +66,22 @@ NTSTATUS PciDevice::Initialize(
         return STATUS_NOT_SUPPORTED;
     }
 
+    NV_PLATFORM_PCI_CONFIG_ACCESS configAccess = {};
+    configAccess.context = const_cast<DXGKRNL_INTERFACE*>(&dxgkInterface);
+    configAccess.read = ::ReadConfig;
+    configAccess.write = dxgkInterface.DxgkCbWriteDeviceSpace != nullptr
+        ? ::WriteConfig
+        : nullptr;
+
     PCI_COMMON_CONFIG configuration = {};
-    ULONG bytesRead = 0;
-    const NTSTATUS status = dxgkInterface.DxgkCbReadDeviceSpace(
-        dxgkInterface.DeviceHandle,
-        DXGK_WHICHSPACE_CONFIG,
-        &configuration,
+    const NTSTATUS status = NvPlatformReadPciConfig(
+        &configAccess,
         0,
-        PCI_COMMON_HDR_LENGTH,
-        &bytesRead);
+        &configuration,
+        PCI_COMMON_HDR_LENGTH);
     if (!NT_SUCCESS(status))
     {
         return status;
-    }
-
-    if (bytesRead != PCI_COMMON_HDR_LENGTH)
-    {
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
     if (configuration.VendorID == PCI_INVALID_VENDORID || configuration.VendorID == 0)
@@ -87,6 +121,7 @@ NTSTATUS PciDevice::Initialize(
     identity_.subclass = configuration.SubClass;
     identity_.baseClass = configuration.BaseClass;
     registerBarAddress_.QuadPart = registerBarAddress;
+    configAccess_ = configAccess;
     present_ = true;
     return STATUS_SUCCESS;
 }
@@ -95,7 +130,28 @@ void PciDevice::Reset() noexcept
 {
     RtlZeroMemory(&identity_, sizeof(identity_));
     registerBarAddress_.QuadPart = 0;
+    RtlZeroMemory(&configAccess_, sizeof(configAccess_));
     present_ = false;
+}
+
+NTSTATUS PciDevice::ReadConfig(
+    _In_ ULONG offset,
+    _Out_writes_bytes_(length) void* buffer,
+    _In_ ULONG length) const noexcept
+{
+    return present_
+        ? NvPlatformReadPciConfig(&configAccess_, offset, buffer, length)
+        : STATUS_INVALID_DEVICE_STATE;
+}
+
+NTSTATUS PciDevice::WriteConfig(
+    _In_ ULONG offset,
+    _In_reads_bytes_(length) const void* buffer,
+    _In_ ULONG length) const noexcept
+{
+    return present_
+        ? NvPlatformWritePciConfig(&configAccess_, offset, buffer, length)
+        : STATUS_INVALID_DEVICE_STATE;
 }
 
 bool PciDevice::IsPresent() const noexcept

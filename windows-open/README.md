@@ -11,7 +11,9 @@ Windows port. It does not replace or modify the NVIDIA source build system.
   Clang-CL.
 - `platform/kernel/nvplatform-kernel.vcxproj` provides Windows kernel platform
   primitives for the future RM host layer. Its first contract owns physical
-  MMIO mappings and checked register access.
+  MMIO mappings, checked register access, and adapter-scoped PCI configuration
+  access. Its public headers retain C linkage and C-compatible declarations so
+  upstream RM C translation units can consume them later.
 - `kmdod/nv-kmdod.vcxproj` is the WDDM display-only miniport scaffold.
 - `iddcx/nv-iddcx.vcxproj` is the UMDF 2 and IddCx scaffold.
 
@@ -42,3 +44,9 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
 
 Both INFs use root-enumerated development hardware IDs. They deliberately do
 not match NVIDIA PCI devices yet.
+
+The next RM library boundary is NvPort. Its portable core is reusable, but the
+published headers identify this source profile as Unix and do not enable MSVC.
+Build it as a separate Clang-CL project with a Windows forced-include profile
+and Windows allocator/synchronization/time backends; do not modify the
+published NvPort headers or compile its Unix kernel backend files.

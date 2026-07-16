@@ -28,7 +28,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="nvplatform_mmio.cpp" />
+    <ClCompile Include="nvplatform_pci.cpp" />
     <ClInclude Include="nvplatform_mmio.h" />
+    <ClInclude Include="nvplatform_pci.h" />
   </ItemGroup>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
     <ItemGroup>

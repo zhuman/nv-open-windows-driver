@@ -1,31 +1,42 @@
 #pragma once
 
-extern "C" {
 #include <ntddk.h>
-}
 
-struct NV_PLATFORM_MMIO_MAPPING
+#ifdef __cplusplus
+extern "C" {
+#define NV_PLATFORM_NOEXCEPT noexcept
+#else
+#define NV_PLATFORM_NOEXCEPT
+#endif
+
+typedef struct NV_PLATFORM_MMIO_MAPPING
 {
     void* mappingBase;
     volatile UCHAR* address;
     SIZE_T mappingLength;
     SIZE_T length;
-};
+} NV_PLATFORM_MMIO_MAPPING;
 
-extern "C" NTSTATUS NvPlatformMapMmio(
+NTSTATUS NvPlatformMapMmio(
     _In_ PHYSICAL_ADDRESS physicalAddress,
     _In_ SIZE_T length,
-    _Out_ NV_PLATFORM_MMIO_MAPPING* mapping) noexcept;
+    _Out_ NV_PLATFORM_MMIO_MAPPING* mapping) NV_PLATFORM_NOEXCEPT;
 
-extern "C" void NvPlatformUnmapMmio(
-    _Inout_ NV_PLATFORM_MMIO_MAPPING* mapping) noexcept;
+void NvPlatformUnmapMmio(
+    _Inout_ NV_PLATFORM_MMIO_MAPPING* mapping) NV_PLATFORM_NOEXCEPT;
 
-extern "C" NTSTATUS NvPlatformReadMmio32(
+NTSTATUS NvPlatformReadMmio32(
     _In_ const NV_PLATFORM_MMIO_MAPPING* mapping,
     _In_ SIZE_T offset,
-    _Out_ ULONG* value) noexcept;
+    _Out_ ULONG* value) NV_PLATFORM_NOEXCEPT;
 
-extern "C" NTSTATUS NvPlatformWriteMmio32(
+NTSTATUS NvPlatformWriteMmio32(
     _In_ const NV_PLATFORM_MMIO_MAPPING* mapping,
     _In_ SIZE_T offset,
-    _In_ ULONG value) noexcept;
+    _In_ ULONG value) NV_PLATFORM_NOEXCEPT;
+
+#ifdef __cplusplus
+}
+#endif
+
+#undef NV_PLATFORM_NOEXCEPT

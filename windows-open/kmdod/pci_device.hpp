@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nvplatform_pci.h"
 #include "wdk.hpp"
 
 namespace nv::kmdod {
@@ -27,6 +28,16 @@ public:
 
     void Reset() noexcept;
 
+    NTSTATUS ReadConfig(
+        _In_ ULONG offset,
+        _Out_writes_bytes_(length) void* buffer,
+        _In_ ULONG length) const noexcept;
+
+    NTSTATUS WriteConfig(
+        _In_ ULONG offset,
+        _In_reads_bytes_(length) const void* buffer,
+        _In_ ULONG length) const noexcept;
+
     [[nodiscard]] bool IsPresent() const noexcept;
     [[nodiscard]] const PciIdentity* Identity() const noexcept;
     [[nodiscard]] PHYSICAL_ADDRESS RegisterBarAddress() const noexcept;
@@ -34,6 +45,7 @@ public:
 private:
     PciIdentity identity_;
     PHYSICAL_ADDRESS registerBarAddress_;
+    NV_PLATFORM_PCI_CONFIG_ACCESS configAccess_;
     bool present_;
 };
 
