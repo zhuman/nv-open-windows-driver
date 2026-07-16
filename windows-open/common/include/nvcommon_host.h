@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define NV_COMMON_HOST_SERVICES_VERSION 1U
+#define NV_COMMON_HOST_SERVICES_VERSION 4U
 
 typedef void* (*NV_COMMON_ALLOCATE)(
     void* providerContext,
@@ -20,6 +20,12 @@ typedef void (*NV_COMMON_FREE)(
     NvBool nonPaged);
 
 typedef NvU64 (*NV_COMMON_GET_MONOTONIC_TIME_100NS)(void* providerContext);
+
+typedef NvU64 (*NV_COMMON_GET_UNIX_TIME_100NS)(void* providerContext);
+
+typedef NvBool (*NV_COMMON_IS_ALLOCATION_SAFE)(
+    void* providerContext,
+    NvBool nonPaged);
 
 typedef void (*NV_COMMON_LOG)(
     void* providerContext,
@@ -34,6 +40,8 @@ typedef struct NV_COMMON_HOST_SERVICES
     NV_COMMON_ALLOCATE allocate;
     NV_COMMON_FREE free;
     NV_COMMON_GET_MONOTONIC_TIME_100NS getMonotonicTime100ns;
+    NV_COMMON_GET_UNIX_TIME_100NS getUnixTime100ns;
+    NV_COMMON_IS_ALLOCATION_SAFE isAllocationSafe;
     NV_COMMON_LOG log;
 } NV_COMMON_HOST_SERVICES;
 
@@ -61,6 +69,13 @@ void nvCommonHostFree(
 
 NvU64 nvCommonHostGetMonotonicTime100ns(
     const NV_COMMON_HOST_CONTEXT* context);
+
+NvU64 nvCommonHostGetUnixTime100ns(
+    const NV_COMMON_HOST_CONTEXT* context);
+
+NvBool nvCommonHostIsAllocationSafe(
+    const NV_COMMON_HOST_CONTEXT* context,
+    NvBool nonPaged);
 
 void nvCommonHostLog(
     const NV_COMMON_HOST_CONTEXT* context,

@@ -19,6 +19,8 @@ NV_STATUS nvCommonHostInitialize(
         services->allocate == NULL ||
         services->free == NULL ||
         services->getMonotonicTime100ns == NULL ||
+        services->getUnixTime100ns == NULL ||
+        services->isAllocationSafe == NULL ||
         services->log == NULL)
     {
         return NV_ERR_INVALID_ARGUMENT;
@@ -42,7 +44,10 @@ void* nvCommonHostAllocate(
     NvU64 length,
     NvBool nonPaged)
 {
-    if (context == NULL || !context->initialized || length == 0)
+    if (context == NULL ||
+        !context->initialized ||
+        length == 0 ||
+        !nvCommonHostIsAllocationSafe(context, nonPaged))
     {
         return NULL;
     }
@@ -77,6 +82,32 @@ NvU64 nvCommonHostGetMonotonicTime100ns(
 
     return context->services.getMonotonicTime100ns(
         context->services.providerContext);
+}
+
+NvU64 nvCommonHostGetUnixTime100ns(
+    const NV_COMMON_HOST_CONTEXT* context)
+{
+    if (context == NULL || !context->initialized)
+    {
+        return 0;
+    }
+
+    return context->services.getUnixTime100ns(
+        context->services.providerContext);
+}
+
+NvBool nvCommonHostIsAllocationSafe(
+    const NV_COMMON_HOST_CONTEXT* context,
+    NvBool nonPaged)
+{
+    if (context == NULL || !context->initialized)
+    {
+        return NV_FALSE;
+    }
+
+    return context->services.isAllocationSafe(
+        context->services.providerContext,
+        nonPaged);
 }
 
 void nvCommonHostLog(

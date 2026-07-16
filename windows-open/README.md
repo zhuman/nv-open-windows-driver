@@ -9,6 +9,9 @@ Windows port. It does not replace or modify the NVIDIA source build system.
   slice for kernel mode with Clang-CL.
 - `common/user/nvcommon-user.vcxproj` builds the same slice for user mode with
   Clang-CL.
+- `nvport/kernel/nvport-kernel.vcxproj` builds the first kernel NvPort slice
+  with Clang-CL. It compiles upstream core and generic time conversion code
+  with sidecar Windows memory and time backends.
 - `platform/kernel/nvplatform-kernel.vcxproj` provides Windows kernel platform
   primitives for the future RM host layer. Its first contract owns physical
   MMIO mappings, checked register access, and adapter-scoped PCI configuration
@@ -19,11 +22,20 @@ Windows port. It does not replace or modify the NVIDIA source build system.
 
 The common projects compile upstream `nvstatus.c` and `nvSha256.c` in both
 address spaces. They also compile the sidecar `nvcommon_host.c`, which validates
-and wraps a versioned host-services table for allocation, monotonic time, and
-logging. KMDOD supplies nonpaged/paged pool, kernel time, and debugger logging
-callbacks; IddCx supplies process-heap, user-mode monotonic time, and debugger
-logging callbacks. Each device owns its common context and tears it down with
-the adapter or WDF object lifecycle.
+and wraps a versioned host-services table for allocation, Unix-epoch time,
+monotonic uptime, execution-context allocation safety, and logging. KMDOD
+supplies pool, kernel time, IRQL, and debugger callbacks; IddCx supplies
+process-heap, user-mode time, and debugger callbacks. Each device owns its
+common context and tears it down with the adapter or WDF object lifecycle.
+
+KMDOD binds its common host context to NvPort before hardware discovery and
+unbinds NvPort before destroying that context. The current NvPort profile
+enables core, memory, and time only. Its allocation header retains the pool
+type needed by the host free callback; kernel allocations remain
+zero-initialized through the default `ExAllocatePool2` behavior. Atomic,
+debug, synchronization, thread, CPU, crypto, string, safe, and utility modules
+remain disabled until their Windows backends or portable source selections are
+added.
 
 Add upstream files to the manifests under `manifests/` only after they compile
 in both address spaces or after their mode-specific dependencies are understood.
@@ -54,8 +66,7 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
 Both INFs use root-enumerated development hardware IDs. They deliberately do
 not match NVIDIA PCI devices yet.
 
-The next RM library boundary is NvPort. Its portable core is reusable, but the
-published headers identify this source profile as Unix and do not enable MSVC.
-Build it as a separate Clang-CL project with a Windows forced-include profile
-and Windows allocator/synchronization/time backends; do not modify the
-published NvPort headers or compile its Unix kernel backend files.
+The next NvPort expansion is the atomic, debug, and synchronization foundation
+required by memory tracking and the selected RM core. Keep using sidecar
+Windows backends and explicit module definitions; do not modify the published
+NvPort headers or compile Unix kernel backend files.

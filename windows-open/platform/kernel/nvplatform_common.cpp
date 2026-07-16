@@ -42,6 +42,23 @@ NvU64 GetMonotonicTime100ns(void* providerContext)
     return KeQueryUnbiasedInterruptTime();
 }
 
+NvU64 GetUnixTime100ns(void* providerContext)
+{
+    constexpr NvU64 WindowsToUnixEpoch100ns = 116444736000000000ULL;
+    LARGE_INTEGER systemTime{};
+
+    UNREFERENCED_PARAMETER(providerContext);
+    KeQuerySystemTimePrecise(&systemTime);
+    return static_cast<NvU64>(systemTime.QuadPart) - WindowsToUnixEpoch100ns;
+}
+
+NvBool IsAllocationSafe(void* providerContext, NvBool nonPaged)
+{
+    UNREFERENCED_PARAMETER(providerContext);
+    const KIRQL maximumIrql = nonPaged ? DISPATCH_LEVEL : APC_LEVEL;
+    return KeGetCurrentIrql() <= maximumIrql ? NV_TRUE : NV_FALSE;
+}
+
 void Log(void* providerContext, NvU32 level, const char* message)
 {
     UNREFERENCED_PARAMETER(providerContext);
@@ -55,6 +72,8 @@ const NV_COMMON_HOST_SERVICES Services = {
     Allocate,
     Free,
     GetMonotonicTime100ns,
+    GetUnixTime100ns,
+    IsAllocationSafe,
     Log,
 };
 

@@ -6,6 +6,7 @@
   <Project Path="common/user/nvcommon-user.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" />
   <Project Path="iddcx/nv-iddcx.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" />
   <Project Path="kmdod/nv-kmdod.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" />
+  <Project Path="nvport/kernel/nvport-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" />
   <Project Path="platform/kernel/nvplatform-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" />
   <Properties Name="Visual Studio">
     <Property Name="MinimumVersion" Value="18.0.0.0" />

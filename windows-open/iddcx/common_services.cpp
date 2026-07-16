@@ -30,6 +30,26 @@ NvU64 GetMonotonicTime100ns(void* providerContext)
     return GetTickCount64() * 10000ULL;
 }
 
+NvU64 GetUnixTime100ns(void* providerContext)
+{
+    constexpr NvU64 WindowsToUnixEpoch100ns = 116444736000000000ULL;
+    FILETIME fileTime{};
+    ULARGE_INTEGER systemTime{};
+
+    UNREFERENCED_PARAMETER(providerContext);
+    GetSystemTimePreciseAsFileTime(&fileTime);
+    systemTime.LowPart = fileTime.dwLowDateTime;
+    systemTime.HighPart = fileTime.dwHighDateTime;
+    return systemTime.QuadPart - WindowsToUnixEpoch100ns;
+}
+
+NvBool IsAllocationSafe(void* providerContext, NvBool nonPaged)
+{
+    UNREFERENCED_PARAMETER(providerContext);
+    UNREFERENCED_PARAMETER(nonPaged);
+    return NV_TRUE;
+}
+
 void Log(void* providerContext, NvU32 level, const char* message)
 {
     UNREFERENCED_PARAMETER(providerContext);
@@ -44,6 +64,8 @@ const NV_COMMON_HOST_SERVICES Services = {
     Allocate,
     Free,
     GetMonotonicTime100ns,
+    GetUnixTime100ns,
+    IsAllocationSafe,
     Log,
 };
 

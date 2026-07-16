@@ -100,6 +100,13 @@ NTSTATUS Adapter::Start(
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
+    nvStatus = nvPortWindowsInitialize(&commonHost_);
+    if (nvStatus != NV_OK)
+    {
+        ClearRuntimeState();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+
     NTSTATUS status = dxgkInterface_.DxgkCbGetDeviceInformation(
         dxgkInterface_.DeviceHandle,
         &deviceInfo_);
@@ -262,6 +269,7 @@ bool Adapter::IsStarted() const noexcept
 
 void Adapter::ClearRuntimeState() noexcept
 {
+    nvPortWindowsShutdown(&commonHost_);
     nvCommonHostShutdown(&commonHost_);
     registerAperture_.Reset();
     pciDevice_.Reset();

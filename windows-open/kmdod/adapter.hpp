@@ -2,6 +2,7 @@
 
 #include "hardware_resources.hpp"
 #include "nvcommon_host.h"
+#include "nvport_windows.h"
 #include "nvplatform_common.h"
 #include "pci_device.hpp"
 #include "register_aperture.hpp"

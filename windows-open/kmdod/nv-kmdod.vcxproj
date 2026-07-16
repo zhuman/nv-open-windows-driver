@@ -29,7 +29,7 @@
     <ClCompile>
       <DisableSpecificWarnings>4505;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <ExceptionHandling>false</ExceptionHandling>
-      <AdditionalIncludeDirectories>$(WindowsOpenRoot)platform\kernel;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\kernel;$(WindowsOpenRoot)platform\kernel;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>NV_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp23</LanguageStandard>
     </ClCompile>
@@ -61,6 +61,9 @@
   <ItemGroup>
     <ProjectReference Include="..\common\kernel\nvcommon-kernel.vcxproj">
       <Project>{C83A5FEA-A7E8-45C5-A0D6-34E95160B902}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\nvport\kernel\nvport-kernel.vcxproj">
+      <Project>{695D7A36-27E0-4D57-A593-4B52E93A67B0}</Project>
     </ProjectReference>
     <ProjectReference Include="..\platform\kernel\nvplatform-kernel.vcxproj">
       <Project>{9C8369B9-FB13-4DEB-B215-9C4B4B77E5DA}</Project>
