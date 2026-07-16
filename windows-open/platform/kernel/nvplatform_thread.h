@@ -40,6 +40,17 @@ NV_STATUS NvPlatformThreadRevertAffinity(
 	NvU64 previousGroup,
 	NvU64 previousMask);
 
+typedef void (*NV_PLATFORM_PROCESS_NOTIFY_ROUTINE)(
+	NvU64 processId,
+	NvU32 notifyEvent,
+	void* context);
+
+NV_STATUS NvPlatformThreadSetProcessNotifyRoutine(
+	NV_PLATFORM_PROCESS_NOTIFY_ROUTINE notifyRoutine,
+	void* context,
+	NV_PLATFORM_PROCESS_NOTIFY_ROUTINE* previousNotifyRoutine,
+	void** previousContext);
+
 #ifdef __cplusplus
 }
 #endif

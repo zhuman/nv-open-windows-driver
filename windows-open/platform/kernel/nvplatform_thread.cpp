@@ -27,6 +27,8 @@ struct ThreadState
 FAST_MUTEX threadListMutex;
 LIST_ENTRY threadList;
 bool threadRegistryInitialized;
+NV_PLATFORM_PROCESS_NOTIFY_ROUTINE processNotifyRoutine;
+void* processNotifyContext;
 
 ThreadState* FindThreadStateLocked(NvU64 threadId) noexcept
 {
@@ -89,6 +91,30 @@ PETHREAD ReferenceThread(NvU64 threadId) noexcept
     return threadObject;
 }
 
+void ProcessNotify(
+    PEPROCESS process,
+    HANDLE processId,
+    PPS_CREATE_NOTIFY_INFO createInfo)
+{
+    NV_PLATFORM_PROCESS_NOTIFY_ROUTINE notifyRoutine;
+    void* context;
+
+    UNREFERENCED_PARAMETER(process);
+
+    ExAcquireFastMutex(&threadListMutex);
+    notifyRoutine = processNotifyRoutine;
+    context = processNotifyContext;
+    ExReleaseFastMutex(&threadListMutex);
+
+    if (notifyRoutine != nullptr)
+    {
+        notifyRoutine(
+            reinterpret_cast<NvU64>(processId),
+            createInfo != nullptr ? 0U : 1U,
+            context);
+    }
+}
+
 } // namespace
 
 extern "C" NV_STATUS NvPlatformThreadInitialize(void)
@@ -106,6 +132,15 @@ extern "C" NV_STATUS NvPlatformThreadInitialize(void)
 
 extern "C" void NvPlatformThreadShutdown(void)
 {
+    NV_PLATFORM_PROCESS_NOTIFY_ROUTINE oldRoutine;
+    void* oldContext;
+
+    (void)NvPlatformThreadSetProcessNotifyRoutine(
+        nullptr,
+        nullptr,
+        &oldRoutine,
+        &oldContext);
+
     while (threadRegistryInitialized)
     {
         NvU64 threadId = 0;
@@ -379,6 +414,62 @@ extern "C" NV_STATUS NvPlatformThreadRevertAffinity(
     previousAffinity.Group = static_cast<USHORT>(previousGroup);
     previousAffinity.Mask = static_cast<KAFFINITY>(previousMask);
     KeRevertToUserGroupAffinityThread(&previousAffinity);
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformThreadSetProcessNotifyRoutine(
+    NV_PLATFORM_PROCESS_NOTIFY_ROUTINE notifyRoutine,
+    void* context,
+    NV_PLATFORM_PROCESS_NOTIFY_ROUTINE* previousNotifyRoutine,
+    void** previousContext)
+{
+    if (!threadRegistryInitialized || previousNotifyRoutine == nullptr ||
+        previousContext == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    ExAcquireFastMutex(&threadListMutex);
+    *previousNotifyRoutine = processNotifyRoutine;
+    *previousContext = processNotifyContext;
+    const bool wasRegistered = processNotifyRoutine != nullptr;
+    ExReleaseFastMutex(&threadListMutex);
+
+    if (!wasRegistered && notifyRoutine != nullptr)
+    {
+        ExAcquireFastMutex(&threadListMutex);
+        processNotifyRoutine = notifyRoutine;
+        processNotifyContext = context;
+        ExReleaseFastMutex(&threadListMutex);
+
+        const NTSTATUS status = PsSetCreateProcessNotifyRoutineEx(
+            ProcessNotify,
+            FALSE);
+        if (!NT_SUCCESS(status))
+        {
+            ExAcquireFastMutex(&threadListMutex);
+            processNotifyRoutine = *previousNotifyRoutine;
+            processNotifyContext = *previousContext;
+            ExReleaseFastMutex(&threadListMutex);
+            return NV_ERR_OPERATING_SYSTEM;
+        }
+        return NV_OK;
+    }
+    else if (wasRegistered && notifyRoutine == nullptr)
+    {
+        const NTSTATUS status = PsSetCreateProcessNotifyRoutineEx(
+            ProcessNotify,
+            TRUE);
+        if (!NT_SUCCESS(status))
+        {
+            return NV_ERR_OPERATING_SYSTEM;
+        }
+    }
+
+    ExAcquireFastMutex(&threadListMutex);
+    processNotifyRoutine = notifyRoutine;
+    processNotifyContext = context;
+    ExReleaseFastMutex(&threadListMutex);
     return NV_OK;
 }
 

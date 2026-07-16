@@ -34,7 +34,7 @@ common context and tears it down with the adapter or WDF object lifecycle.
 KMDOD binds its common host context to NvPort before hardware discovery and
 unbinds NvPort before destroying that context. The current NvPort profile
 enables core, atomic, debug, memory, safe arithmetic, string, synchronization,
-time, and utility.
+thread, time, and utility.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
@@ -51,8 +51,8 @@ identity, ID lookup and comparison, scheduler yield, and kernel thread create,
 exit, join, and destroy over a narrow WDK platform contract. Created threads
 retain their kernel object and completion status in a registry owned by the
 NvPort binding lifecycle. Priority and processor-group affinity operations are
-also implemented. The thread module remains disabled until the Windows-only
-process-notification extension is added.
+also implemented. Process create/exit notification registration preserves the
+NvPort callback replacement contract over the WDK process-notify routine.
 
 Add upstream files to the manifests under `manifests/` only after they compile
 in both address spaces or after their mode-specific dependencies are understood.
@@ -83,6 +83,7 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
 Both INFs use root-enumerated development hardware IDs. They deliberately do
 not match NVIDIA PCI devices yet.
 
-The next NvPort expansion is Windows process-notification support. Keep using sidecar
-Windows backends and explicit module definitions; do not modify the published
-NvPort headers or compile Unix kernel backend files.
+The next NvPort expansion should follow the first thread and allocator call
+sites reached while importing the selected RM core. Keep using sidecar Windows
+backends and explicit module definitions; do not modify the published NvPort
+headers or compile Unix kernel backend files.

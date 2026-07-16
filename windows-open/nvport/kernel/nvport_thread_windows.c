@@ -132,3 +132,45 @@ NV_STATUS portThreadExRevertToUserGroupAffinity(
         previousAffinity->cpuGroup,
         previousAffinity->mask);
 }
+
+NV_STATUS portThreadExRegisterProcessNotifyRoutine(
+    PORT_THREAD_PROCESS_NOTIFY_ROUTINE notifyRoutine,
+    void* context,
+    PORT_THREAD_PROCESS_NOTIFY_ROUTINE* previousNotifyRoutine,
+    void** previousContext)
+{
+    NV_PLATFORM_PROCESS_NOTIFY_ROUTINE platformPreviousRoutine;
+    NV_STATUS status;
+
+    if (previousNotifyRoutine == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    status = NvPlatformThreadSetProcessNotifyRoutine(
+        (NV_PLATFORM_PROCESS_NOTIFY_ROUTINE)notifyRoutine,
+        context,
+        &platformPreviousRoutine,
+        previousContext);
+    if (status == NV_OK)
+    {
+        *previousNotifyRoutine =
+            (PORT_THREAD_PROCESS_NOTIFY_ROUTINE)platformPreviousRoutine;
+    }
+
+    return status;
+}
+
+NV_STATUS portThreadExUnregisterProcessNotifyRoutine(
+    PORT_THREAD_PROCESS_NOTIFY_ROUTINE previousNotifyRoutine,
+    void* previousContext)
+{
+    NV_PLATFORM_PROCESS_NOTIFY_ROUTINE currentNotifyRoutine;
+    void* currentContext;
+
+    return NvPlatformThreadSetProcessNotifyRoutine(
+        (NV_PLATFORM_PROCESS_NOTIFY_ROUTINE)previousNotifyRoutine,
+        previousContext,
+        &currentNotifyRoutine,
+        &currentContext);
+}
