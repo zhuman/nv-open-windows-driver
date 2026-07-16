@@ -4,13 +4,15 @@
     <WindowsOpenRoot>$(MSBuildThisFileDirectory)</WindowsOpenRoot>
     <RepoRoot>$([System.IO.Path]::GetFullPath('$(WindowsOpenRoot)..\'))</RepoRoot>
     <NvidiaSdkInclude>$(RepoRoot)src\common\sdk\nvidia\inc</NvidiaSdkInclude>
+    <NvidiaCommonInclude>$(RepoRoot)src\common\inc</NvidiaCommonInclude>
+    <NvWindowsCommonInclude>$(WindowsOpenRoot)common\include</NvWindowsCommonInclude>
     <OutDir>$(WindowsOpenRoot)out\$(Platform)\$(Configuration)\$(MSBuildProjectName)\</OutDir>
     <IntDir>$(WindowsOpenRoot)out\obj\$(Platform)\$(Configuration)\$(MSBuildProjectName)\</IntDir>
     <TargetName>$(MSBuildProjectName)</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(NvidiaSdkInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NvidiaSdkInclude);$(NvidiaCommonInclude);$(NvWindowsCommonInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <TreatWarningAsError>true</TreatWarningAsError>

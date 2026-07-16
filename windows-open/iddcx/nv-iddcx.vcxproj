@@ -26,7 +26,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ItemDefinitionGroup>
     <ClCompile>
-      <DisableSpecificWarnings>4471;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4471;4505;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <ExceptionHandling>false</ExceptionHandling>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <PreprocessorDefinitions>UMDF_DRIVER;NV_USER_MODE;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=4;IDDCX_MINIMUM_VERSION_REQUIRED=4;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -39,12 +39,14 @@
     </DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="common_services.cpp" />
     <ClCompile Include="device.cpp" />
     <ClCompile Include="driver.cpp" />
     <ClCompile Include="hardware_services.cpp" />
     <Inf Include="nv-iddcx.inf" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="common_services.hpp" />
     <ClInclude Include="device.hpp" />
     <ClInclude Include="hardware_services.hpp" />
   </ItemGroup>

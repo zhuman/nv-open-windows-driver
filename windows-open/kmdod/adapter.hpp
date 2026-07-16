@@ -1,6 +1,8 @@
 #pragma once
 
 #include "hardware_resources.hpp"
+#include "nvcommon_host.h"
+#include "nvplatform_common.h"
 #include "pci_device.hpp"
 #include "register_aperture.hpp"
 #include "wdk.hpp"
@@ -75,6 +77,7 @@ private:
     HardwareResources hardwareResources_;
     PciDevice pciDevice_;
     RegisterAperture registerAperture_;
+    NV_COMMON_HOST_CONTEXT commonHost_;
     DEVICE_POWER_STATE adapterPowerState_;
     State state_;
 };

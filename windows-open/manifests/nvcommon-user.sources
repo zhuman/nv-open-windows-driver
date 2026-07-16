@@ -1,2 +1,3 @@
 # Paths are relative to the repository root.
+src/common/src/nvSha256.c
 src/common/shared/nvstatus/nvstatus.c

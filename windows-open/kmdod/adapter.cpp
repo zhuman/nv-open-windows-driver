@@ -25,6 +25,7 @@ Adapter::Adapter(_In_ DEVICE_OBJECT* physicalDeviceObject) noexcept
     hardwareResources_{},
     pciDevice_{},
     registerAperture_{},
+    commonHost_{},
       adapterPowerState_(PowerDeviceD0),
       state_(State::Stopped)
 {
@@ -89,6 +90,15 @@ NTSTATUS Adapter::Start(
 
     startInfo_ = *startInfo;
     dxgkInterface_ = *dxgkInterface;
+
+    NV_STATUS nvStatus = nvCommonHostInitialize(
+        &commonHost_,
+        NvPlatformGetCommonHostServices());
+    if (nvStatus != NV_OK)
+    {
+        ClearRuntimeState();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
 
     NTSTATUS status = dxgkInterface_.DxgkCbGetDeviceInformation(
         dxgkInterface_.DeviceHandle,
@@ -252,6 +262,7 @@ bool Adapter::IsStarted() const noexcept
 
 void Adapter::ClearRuntimeState() noexcept
 {
+    nvCommonHostShutdown(&commonHost_);
     registerAperture_.Reset();
     pciDevice_.Reset();
     hardwareResources_.Reset();

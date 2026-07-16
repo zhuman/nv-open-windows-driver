@@ -26,6 +26,7 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
 
     WDF_OBJECT_ATTRIBUTES attributes;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, DeviceContext);
+    attributes.EvtCleanupCallback = DeviceCleanup;
 
     WDFDEVICE device = nullptr;
     status = WdfDeviceCreate(&deviceInit, &attributes, &device);
@@ -35,9 +36,26 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     }
 
     void* contextStorage = GetDeviceContext(device);
-    new (contextStorage) DeviceContext{};
+    auto* context = new (contextStorage) DeviceContext{};
+
+    const NV_STATUS nvStatus = nvCommonHostInitialize(
+        &context->commonHost,
+        GetCommonHostServices());
+    if (nvStatus != NV_OK)
+    {
+        WdfObjectDelete(device);
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
 
     return IddCxDeviceInitialize(device);
+}
+
+_Use_decl_annotations_
+void DeviceCleanup(WDFOBJECT deviceObject)
+{
+    DeviceContext* context = GetDeviceContext(deviceObject);
+    nvCommonHostShutdown(&context->commonHost);
+    context->~DeviceContext();
 }
 
 _Use_decl_annotations_

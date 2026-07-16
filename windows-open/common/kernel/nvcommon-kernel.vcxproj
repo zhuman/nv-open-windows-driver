@@ -27,11 +27,18 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="$(WindowsOpenRoot)common\shared\nvcommon_host.c">
+      <Link>sidecar\nvcommon_host.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\common\src\nvSha256.c">
+      <Link>upstream\nvSha256.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\common\shared\nvstatus\nvstatus.c">
       <Link>upstream\nvstatus.c</Link>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="$(WindowsOpenRoot)common\include\nvcommon_host.h" />
     <None Include="$(WindowsOpenRoot)manifests\nvcommon-kernel.sources" />
   </ItemGroup>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">

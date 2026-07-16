@@ -21,14 +21,17 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ItemDefinitionGroup>
     <ClCompile>
+      <DisableSpecificWarnings>4505;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <ExceptionHandling>false</ExceptionHandling>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <PreprocessorDefinitions>NV_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="nvplatform_common.cpp" />
     <ClCompile Include="nvplatform_mmio.cpp" />
     <ClCompile Include="nvplatform_pci.cpp" />
+    <ClInclude Include="nvplatform_common.h" />
     <ClInclude Include="nvplatform_mmio.h" />
     <ClInclude Include="nvplatform_pci.h" />
   </ItemGroup>

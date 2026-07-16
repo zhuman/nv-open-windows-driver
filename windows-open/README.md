@@ -17,9 +17,18 @@ Windows port. It does not replace or modify the NVIDIA source build system.
 - `kmdod/nv-kmdod.vcxproj` is the WDDM display-only miniport scaffold.
 - `iddcx/nv-iddcx.vcxproj` is the UMDF 2 and IddCx scaffold.
 
-The common projects initially compile only `nvstatus.c`. Add upstream files to
-the manifests under `manifests/` after they compile in both address spaces or
-after their mode-specific dependencies are understood.
+The common projects compile upstream `nvstatus.c` and `nvSha256.c` in both
+address spaces. They also compile the sidecar `nvcommon_host.c`, which validates
+and wraps a versioned host-services table for allocation, monotonic time, and
+logging. KMDOD supplies nonpaged/paged pool, kernel time, and debugger logging
+callbacks; IddCx supplies process-heap, user-mode monotonic time, and debugger
+logging callbacks. Each device owns its common context and tears it down with
+the adapter or WDF object lifecycle.
+
+Add upstream files to the manifests under `manifests/` only after they compile
+in both address spaces or after their mode-specific dependencies are understood.
+Sidecar import implementations remain explicit project items rather than
+upstream manifest entries.
 
 ## Prerequisites
 
