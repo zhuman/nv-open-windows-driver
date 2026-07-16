@@ -24,7 +24,7 @@
       <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)platform\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\src\libraries\nvport\sync;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <OmitDefaultLibName>true</OmitDefaultLibName>
-      <PreprocessorDefinitions>_AMD64_=1;_KERNEL_MODE;NV_KERNEL_MODE;_LANGUAGE_C;__NO_CTYPE;NVRM;LOCK_VAL_ENABLED=0;PORT_ATOMIC_64_BIT_SUPPORTED=1;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=1;PORT_MODULE_core=1;PORT_MODULE_cpu=1;PORT_MODULE_crypto=0;PORT_MODULE_debug=1;PORT_MODULE_example=0;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=1;PORT_MODULE_string=1;PORT_MODULE_sync=1;PORT_MODULE_thread=1;PORT_MODULE_time=1;PORT_MODULE_util=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_AMD64_=1;_KERNEL_MODE;NV_KERNEL_MODE;_LANGUAGE_C;__NO_CTYPE;NVRM;LOCK_VAL_ENABLED=0;PORT_ATOMIC_64_BIT_SUPPORTED=1;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=1;PORT_MODULE_core=1;PORT_MODULE_cpu=1;PORT_MODULE_crypto=1;PORT_MODULE_debug=1;PORT_MODULE_example=0;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=1;PORT_MODULE_string=1;PORT_MODULE_sync=1;PORT_MODULE_thread=1;PORT_MODULE_time=1;PORT_MODULE_util=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
       <RuntimeLibrary Condition="'$(Configuration)' == 'Release'">MultiThreaded</RuntimeLibrary>
     </ClCompile>
@@ -38,6 +38,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvport\cpu\cpu_x86_amd64.c">
       <Link>upstream\cpu_x86_amd64.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvport\crypto\crypto_random_xorshift.c">
+      <Link>upstream\crypto_random_xorshift.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvport\memory\memory_tracking.c">
       <Link>upstream\memory_tracking.c</Link>

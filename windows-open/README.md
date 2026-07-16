@@ -37,10 +37,12 @@ with Dxgkrnl and unbinds it from the driver unload callback. Adapter start and
 stop only manage device-owned PCI, MMIO, interrupt, and display state, so
 multiple GPU instances share NvPort without reinitializing or tearing down its
 global services. The current NvPort profile
-enables core, atomic, CPU discovery, debug, memory, safe arithmetic, string,
-synchronization, thread, time, and utility. CPU identity and performance-counter
-time are implemented; privileged MSR, PMU, and integrated-memory-controller
-operations report that they are unsupported.
+enables core, atomic, CPU discovery, debug, memory, pseudorandom generation,
+safe arithmetic, string, synchronization, thread, time, and utility. CPU
+identity and performance-counter time are implemented; privileged MSR, PMU,
+and integrated-memory-controller operations report that they are unsupported.
+The xorshift generator is available for RM jitter and identifiers but is not a
+cryptographic entropy source.
 The kernel platform layer retains the driver service registry key for the
 driver lifetime and provides typed DWORD reads from the root or a relative
 subkey. This gives global RM initialization one immutable settings source shared

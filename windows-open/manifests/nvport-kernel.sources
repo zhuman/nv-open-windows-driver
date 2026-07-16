@@ -2,6 +2,7 @@
 src/nvidia/src/libraries/nvport/core/core.c
 src/nvidia/src/libraries/nvport/cpu/cpu_common.c
 src/nvidia/src/libraries/nvport/cpu/cpu_x86_amd64.c
+src/nvidia/src/libraries/nvport/crypto/crypto_random_xorshift.c
 src/nvidia/src/libraries/nvport/memory/memory_tracking.c
 src/nvidia/src/libraries/nvport/string/string_generic.c
 src/nvidia/src/libraries/nvport/time/time_generic.c
