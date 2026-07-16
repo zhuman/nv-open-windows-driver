@@ -4,7 +4,7 @@
 
 namespace nv::kmdod {
 
-NTSTATUS InitializeDriverRuntime() noexcept;
+NTSTATUS InitializeDriverRuntime(_In_ const UNICODE_STRING* registryPath) noexcept;
 void ShutdownDriverRuntime() noexcept;
 
 } // namespace nv::kmdod

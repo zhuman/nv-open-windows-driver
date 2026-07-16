@@ -3,6 +3,7 @@
 
 #include "nvcommon_host.h"
 #include "nvplatform_common.h"
+#include "nvplatform_registry.h"
 #include "nvport_windows.h"
 
 namespace {
@@ -14,11 +15,17 @@ bool runtimeInitialized;
 
 namespace nv::kmdod {
 
-NTSTATUS InitializeDriverRuntime() noexcept
+NTSTATUS InitializeDriverRuntime(_In_ const UNICODE_STRING* registryPath) noexcept
 {
     if (runtimeInitialized)
     {
         return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    NTSTATUS ntStatus = NvPlatformRegistryInitialize(registryPath);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        return ntStatus;
     }
 
     NV_STATUS status = nvCommonHostInitialize(
@@ -26,6 +33,7 @@ NTSTATUS InitializeDriverRuntime() noexcept
         NvPlatformGetCommonHostServices());
     if (status != NV_OK)
     {
+        NvPlatformRegistryShutdown();
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
@@ -33,6 +41,7 @@ NTSTATUS InitializeDriverRuntime() noexcept
     if (status != NV_OK)
     {
         nvCommonHostShutdown(&commonHost);
+        NvPlatformRegistryShutdown();
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
@@ -46,6 +55,7 @@ void ShutdownDriverRuntime() noexcept
     {
         nvPortWindowsShutdown(&commonHost);
         nvCommonHostShutdown(&commonHost);
+        NvPlatformRegistryShutdown();
         runtimeInitialized = false;
     }
 }
@@ -59,7 +69,7 @@ extern "C" NTSTATUS DriverEntry(
     PDRIVER_OBJECT driverObject,
     PUNICODE_STRING registryPath)
 {
-    NTSTATUS status = nv::kmdod::InitializeDriverRuntime();
+    NTSTATUS status = nv::kmdod::InitializeDriverRuntime(registryPath);
     if (!NT_SUCCESS(status))
     {
         return status;

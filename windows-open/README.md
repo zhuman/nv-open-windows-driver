@@ -41,6 +41,10 @@ enables core, atomic, CPU discovery, debug, memory, safe arithmetic, string,
 synchronization, thread, time, and utility. CPU identity and performance-counter
 time are implemented; privileged MSR, PMU, and integrated-memory-controller
 operations report that they are unsupported.
+The kernel platform layer retains the driver service registry key for the
+driver lifetime and provides typed DWORD reads from the root or a relative
+subkey. This gives global RM initialization one immutable settings source shared
+by every adapter.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
