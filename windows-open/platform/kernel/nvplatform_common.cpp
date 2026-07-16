@@ -1,5 +1,7 @@
 #include "nvplatform_common.h"
 
+#include <stdarg.h>
+
 extern "C" {
 #include <ntddk.h>
 }
@@ -82,4 +84,21 @@ const NV_COMMON_HOST_SERVICES Services = {
 extern "C" const NV_COMMON_HOST_SERVICES* NvPlatformGetCommonHostServices(void)
 {
     return &Services;
+}
+
+extern "C" void NvPlatformDebugPrintf(
+    NvU32 level,
+    const char* format,
+    ...)
+{
+    va_list arguments;
+
+    if (format == nullptr)
+    {
+        return;
+    }
+
+    va_start(arguments, format);
+    vDbgPrintEx(DPFLTR_IHVVIDEO_ID, level, format, arguments);
+    va_end(arguments);
 }

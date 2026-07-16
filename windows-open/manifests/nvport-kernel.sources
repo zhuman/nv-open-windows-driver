@@ -1,5 +1,6 @@
 # Paths are relative to the repository root.
 src/nvidia/src/libraries/nvport/core/core.c
+src/nvidia/src/libraries/nvport/string/string_generic.c
 src/nvidia/src/libraries/nvport/time/time_generic.c
 # sync_common.h is included by the sidecar Windows synchronization backend.
 src/nvidia/src/libraries/nvport/sync/sync_common.h

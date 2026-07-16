@@ -8,6 +8,11 @@ extern "C" {
 
 const NV_COMMON_HOST_SERVICES* NvPlatformGetCommonHostServices(void);
 
+void NvPlatformDebugPrintf(
+	NvU32 level,
+	const char* format,
+	...);
+
 #ifdef __cplusplus
 }
 #endif
