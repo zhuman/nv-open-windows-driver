@@ -51,6 +51,9 @@
     <ClCompile Include="nvport_sync_windows.c">
       <Link>sidecar\nvport_sync_windows.c</Link>
     </ClCompile>
+    <ClCompile Include="nvport_thread_windows.c">
+      <Link>sidecar\nvport_thread_windows.c</Link>
+    </ClCompile>
     <ClCompile Include="nvport_util_windows.c">
       <Link>sidecar\nvport_util_windows.c</Link>
     </ClCompile>

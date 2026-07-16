@@ -46,6 +46,11 @@ intrinsics come from upstream, with sidecar interrupt-context, spin, and delay
 operations. Thread, CPU, and crypto modules remain disabled until their Windows
 backends or portable source selections are added.
 
+The thread sidecar currently implements invalid-handle constants, current
+thread/process identity, ID lookup and comparison, and scheduler yield over a
+narrow WDK platform contract. The thread module remains disabled until
+create, exit, join, and destroy have retained kernel-thread lifecycle state.
+
 Add upstream files to the manifests under `manifests/` only after they compile
 in both address spaces or after their mode-specific dependencies are understood.
 Sidecar import implementations remain explicit project items rather than
@@ -75,7 +80,7 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
 Both INFs use root-enumerated development hardware IDs. They deliberately do
 not match NVIDIA PCI devices yet.
 
-The next NvPort expansion is the thread functions reached by the selected RM
-core. Keep using sidecar
+The next NvPort expansion is kernel thread creation and join lifecycle support.
+Keep using sidecar
 Windows backends and explicit module definitions; do not modify the published
 NvPort headers or compile Unix kernel backend files.
