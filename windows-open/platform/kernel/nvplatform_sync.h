@@ -33,6 +33,7 @@ NvBool NvPlatformRwLockTryAcquireWrite(void* handle);
 void NvPlatformRwLockRelease(void* handle);
 
 NvU64 NvPlatformGetCurrentExecutionLevel(void);
+void NvPlatformDelayMilliseconds(NvU32 milliseconds);
 NvU64 NvPlatformDisablePreemption(void);
 void NvPlatformRestorePreemption(NvU64 previousIrql);
 

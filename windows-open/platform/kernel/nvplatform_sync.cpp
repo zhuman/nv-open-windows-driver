@@ -266,6 +266,13 @@ extern "C" NvU64 NvPlatformGetCurrentExecutionLevel(void)
     return KeGetCurrentIrql();
 }
 
+extern "C" void NvPlatformDelayMilliseconds(NvU32 milliseconds)
+{
+    LARGE_INTEGER interval{};
+    interval.QuadPart = -static_cast<LONGLONG>(milliseconds) * 10000LL;
+    (void)KeDelayExecutionThread(KernelMode, FALSE, &interval);
+}
+
 extern "C" NvU64 NvPlatformDisablePreemption(void)
 {
     const KIRQL currentIrql = KeGetCurrentIrql();
