@@ -34,9 +34,11 @@ common context and tears it down with the adapter or WDF object lifecycle.
 KMDOD binds its common host context to NvPort before hardware discovery and
 unbinds NvPort before destroying that context. The current NvPort profile
 enables core, atomic, debug, memory, string, synchronization, time, and utility.
-Its allocation header retains the pool type needed by the host free callback; kernel
-allocations remain zero-initialized through the default `ExAllocatePool2`
-behavior. Clang C11 atomics are used unchanged. Debug strings route through the
+Its raw allocation header retains the pool type needed by the host free callback;
+kernel allocations remain zero-initialized through the default `ExAllocatePool2`
+behavior. Upstream counter-only memory tracking reports aggregate and
+per-allocator usage without allocation staging overhead. Clang C11 atomics are
+used unchanged. Debug strings route through the
 common host logger, formatted output uses WDK `vDbgPrintEx`, and opaque
 synchronization handles keep WDK types out of the Clang library. Utility
 intrinsics come from upstream, with sidecar interrupt-context, spin, and delay
@@ -72,7 +74,7 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
 Both INFs use root-enumerated development hardware IDs. They deliberately do
 not match NVIDIA PCI devices yet.
 
-The next NvPort expansion is memory tracking, followed by the safe and thread
-functions reached by the selected RM core. Keep using sidecar
+The next NvPort expansion is the safe and thread functions reached by the
+selected RM core. Keep using sidecar
 Windows backends and explicit module definitions; do not modify the published
 NvPort headers or compile Unix kernel backend files.

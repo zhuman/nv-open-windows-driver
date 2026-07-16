@@ -33,6 +33,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvport\core\core.c">
       <Link>upstream\core.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvport\memory\memory_tracking.c">
+      <Link>upstream\memory_tracking.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvport\time\time_generic.c">
       <Link>upstream\time_generic.c</Link>
     </ClCompile>
