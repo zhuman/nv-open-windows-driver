@@ -2,6 +2,7 @@
 
 #include "hardware_resources.hpp"
 #include "pci_device.hpp"
+#include "register_aperture.hpp"
 #include "wdk.hpp"
 
 namespace nv::kmdod {
@@ -23,6 +24,8 @@ public:
 
     NTSTATUS Stop() noexcept;
     void Reset() noexcept;
+    BOOLEAN InterruptRoutine(_In_ ULONG messageNumber) noexcept;
+    void DpcRoutine() noexcept;
 
     NTSTATUS DispatchIoRequest(
         _In_ ULONG vidPnSourceId,
@@ -71,6 +74,7 @@ private:
     DXGK_DEVICE_INFO deviceInfo_;
     HardwareResources hardwareResources_;
     PciDevice pciDevice_;
+    RegisterAperture registerAperture_;
     DEVICE_POWER_STATE adapterPowerState_;
     State state_;
 };

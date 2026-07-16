@@ -22,8 +22,9 @@ Adapter::Adapter(_In_ DEVICE_OBJECT* physicalDeviceObject) noexcept
       startInfo_{},
       dxgkInterface_{},
       deviceInfo_{},
-            hardwareResources_{},
+    hardwareResources_{},
     pciDevice_{},
+    registerAperture_{},
       adapterPowerState_(PowerDeviceD0),
       state_(State::Stopped)
 {
@@ -114,6 +115,13 @@ NTSTATUS Adapter::Start(
         return status;
     }
 
+    status = registerAperture_.Initialize(hardwareResources_, pciDevice_);
+    if (!NT_SUCCESS(status))
+    {
+        ClearRuntimeState();
+        return status;
+    }
+
     adapterPowerState_ = PowerDeviceD0;
     state_ = State::Started;
 
@@ -139,6 +147,21 @@ void Adapter::Reset() noexcept
     {
         adapterPowerState_ = PowerDeviceD0;
     }
+}
+
+BOOLEAN Adapter::InterruptRoutine(_In_ ULONG messageNumber) noexcept
+{
+    if (state_ != State::Started)
+    {
+        return FALSE;
+    }
+
+    UNREFERENCED_PARAMETER(messageNumber);
+    return FALSE;
+}
+
+void Adapter::DpcRoutine() noexcept
+{
 }
 
 NTSTATUS Adapter::DispatchIoRequest(
@@ -229,6 +252,7 @@ bool Adapter::IsStarted() const noexcept
 
 void Adapter::ClearRuntimeState() noexcept
 {
+    registerAperture_.Reset();
     pciDevice_.Reset();
     hardwareResources_.Reset();
     RtlZeroMemory(&startInfo_, sizeof(startInfo_));

@@ -97,15 +97,18 @@ NTSTATUS DispatchIoRequest(
 _Use_decl_annotations_
 BOOLEAN InterruptRoutine(void* deviceContext, ULONG messageNumber)
 {
-    UNREFERENCED_PARAMETER(deviceContext);
-    UNREFERENCED_PARAMETER(messageNumber);
-    return FALSE;
+    Adapter* adapter = GetAdapter(deviceContext);
+    return adapter == nullptr ? FALSE : adapter->InterruptRoutine(messageNumber);
 }
 
 _Use_decl_annotations_
 void DpcRoutine(void* deviceContext)
 {
-    UNREFERENCED_PARAMETER(deviceContext);
+    Adapter* adapter = GetAdapter(deviceContext);
+    if (adapter != nullptr)
+    {
+        adapter->DpcRoutine();
+    }
 }
 
 _Use_decl_annotations_

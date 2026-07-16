@@ -10,6 +10,7 @@ namespace nv::kmdod {
 
 PciDevice::PciDevice() noexcept
     : identity_{},
+    registerBarAddress_{},
       present_(false)
 {
 }
@@ -59,6 +60,24 @@ NTSTATUS PciDevice::Initialize(
         return STATUS_NOT_SUPPORTED;
     }
 
+    const ULONG registerBarLow = configuration.u.type0.BaseAddresses[0];
+    if ((registerBarLow & PCI_ADDRESS_IO_SPACE) != 0)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ULONGLONG registerBarAddress = registerBarLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK;
+    if ((registerBarLow & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT)
+    {
+        registerBarAddress |=
+            static_cast<ULONGLONG>(configuration.u.type0.BaseAddresses[1]) << 32;
+    }
+
+    if (registerBarAddress == 0)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
     identity_.vendorId = configuration.VendorID;
     identity_.deviceId = configuration.DeviceID;
     identity_.subsystemVendorId = configuration.u.type0.SubVendorID;
@@ -67,6 +86,7 @@ NTSTATUS PciDevice::Initialize(
     identity_.programmingInterface = configuration.ProgIf;
     identity_.subclass = configuration.SubClass;
     identity_.baseClass = configuration.BaseClass;
+    registerBarAddress_.QuadPart = registerBarAddress;
     present_ = true;
     return STATUS_SUCCESS;
 }
@@ -74,6 +94,7 @@ NTSTATUS PciDevice::Initialize(
 void PciDevice::Reset() noexcept
 {
     RtlZeroMemory(&identity_, sizeof(identity_));
+    registerBarAddress_.QuadPart = 0;
     present_ = false;
 }
 
@@ -85,6 +106,11 @@ bool PciDevice::IsPresent() const noexcept
 const PciIdentity* PciDevice::Identity() const noexcept
 {
     return present_ ? &identity_ : nullptr;
+}
+
+PHYSICAL_ADDRESS PciDevice::RegisterBarAddress() const noexcept
+{
+    return registerBarAddress_;
 }
 
 } // namespace nv::kmdod

@@ -29,9 +29,11 @@ public:
 
     [[nodiscard]] bool IsPresent() const noexcept;
     [[nodiscard]] const PciIdentity* Identity() const noexcept;
+    [[nodiscard]] PHYSICAL_ADDRESS RegisterBarAddress() const noexcept;
 
 private:
     PciIdentity identity_;
+    PHYSICAL_ADDRESS registerBarAddress_;
     bool present_;
 };
 

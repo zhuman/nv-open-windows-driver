@@ -16,7 +16,9 @@ namespace nv::kmdod {
 
 HardwareResources::HardwareResources() noexcept
     : memoryRanges_{},
-      memoryRangeCount_(0)
+    memoryRangeCount_(0),
+    interrupts_{},
+    interruptCount_(0)
 {
 }
 
@@ -51,6 +53,15 @@ NTSTATUS HardwareResources::Initialize(
                     return status;
                 }
             }
+            else if (descriptor.Type == CmResourceTypeInterrupt)
+            {
+                const NTSTATUS status = AddInterrupt(descriptor);
+                if (!NT_SUCCESS(status))
+                {
+                    Reset();
+                    return status;
+                }
+            }
         }
 
         fullDescriptor = NextFullDescriptor(*fullDescriptor);
@@ -63,6 +74,8 @@ void HardwareResources::Reset() noexcept
 {
     RtlZeroMemory(memoryRanges_, sizeof(memoryRanges_));
     memoryRangeCount_ = 0;
+    RtlZeroMemory(interrupts_, sizeof(interrupts_));
+    interruptCount_ = 0;
 }
 
 ULONG HardwareResources::MemoryRangeCount() const noexcept
@@ -73,6 +86,16 @@ ULONG HardwareResources::MemoryRangeCount() const noexcept
 const MemoryRange* HardwareResources::MemoryRangeAt(_In_ ULONG index) const noexcept
 {
     return index < memoryRangeCount_ ? &memoryRanges_[index] : nullptr;
+}
+
+ULONG HardwareResources::InterruptCount() const noexcept
+{
+    return interruptCount_;
+}
+
+const InterruptResource* HardwareResources::InterruptAt(_In_ ULONG index) const noexcept
+{
+    return index < interruptCount_ ? &interrupts_[index] : nullptr;
 }
 
 NTSTATUS HardwareResources::AddMemoryRange(
@@ -142,6 +165,36 @@ NTSTATUS HardwareResources::DecodeMemoryRange(
     }
 
     *length = static_cast<SIZE_T>(decodedLength);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS HardwareResources::AddInterrupt(
+    _In_ const CM_PARTIAL_RESOURCE_DESCRIPTOR& descriptor) noexcept
+{
+    if (interruptCount_ == MaximumInterruptCount)
+    {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    InterruptResource& interrupt = interrupts_[interruptCount_];
+    interrupt.flags = descriptor.Flags;
+    interrupt.messageSignaled =
+        (descriptor.Flags & CM_RESOURCE_INTERRUPT_MESSAGE) != 0;
+
+    if (interrupt.messageSignaled)
+    {
+        interrupt.vector = descriptor.u.MessageInterrupt.Translated.Vector;
+        interrupt.level = descriptor.u.MessageInterrupt.Translated.Level;
+        interrupt.affinity = descriptor.u.MessageInterrupt.Translated.Affinity;
+    }
+    else
+    {
+        interrupt.vector = descriptor.u.Interrupt.Vector;
+        interrupt.level = descriptor.u.Interrupt.Level;
+        interrupt.affinity = descriptor.u.Interrupt.Affinity;
+    }
+
+    ++interruptCount_;
     return STATUS_SUCCESS;
 }
 
