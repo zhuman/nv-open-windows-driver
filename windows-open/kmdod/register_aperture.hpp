@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hardware_resources.hpp"
+#include "nvplatform_mmio.h"
 #include "pci_device.hpp"
 #include "wdk.hpp"
 
@@ -23,12 +24,14 @@ public:
 
     void Reset() noexcept;
 
+    NTSTATUS Read32(_In_ SIZE_T offset, _Out_ ULONG* value) const noexcept;
+
     [[nodiscard]] bool IsMapped() const noexcept;
+    [[nodiscard]] SIZE_T Length() const noexcept;
     [[nodiscard]] const BootIdentity* Identity() const noexcept;
 
 private:
-    volatile UCHAR* registers_;
-    SIZE_T mappedLength_;
+    NV_PLATFORM_MMIO_MAPPING mapping_;
     BootIdentity identity_;
 };
 

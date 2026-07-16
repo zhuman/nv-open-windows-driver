@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{EFD07F6E-F079-4910-B2D3-4192344C9911}</ProjectGuid>
@@ -22,8 +28,9 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <ExceptionHandling>false</ExceptionHandling>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)platform\kernel;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>NV_KERNEL_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpp23</LanguageStandard>
     </ClCompile>
     <Link>
       <AdditionalDependencies>displib.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -53,6 +60,9 @@
   <ItemGroup>
     <ProjectReference Include="..\common\kernel\nvcommon-kernel.vcxproj">
       <Project>{C83A5FEA-A7E8-45C5-A0D6-34E95160B902}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\platform\kernel\nvplatform-kernel.vcxproj">
+      <Project>{9C8369B9-FB13-4DEB-B215-9C4B4B77E5DA}</Project>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

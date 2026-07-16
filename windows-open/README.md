@@ -9,6 +9,9 @@ Windows port. It does not replace or modify the NVIDIA source build system.
   slice for kernel mode with Clang-CL.
 - `common/user/nvcommon-user.vcxproj` builds the same slice for user mode with
   Clang-CL.
+- `platform/kernel/nvplatform-kernel.vcxproj` provides Windows kernel platform
+  primitives for the future RM host layer. Its first contract owns physical
+  MMIO mappings and checked register access.
 - `kmdod/nv-kmdod.vcxproj` is the WDDM display-only miniport scaffold.
 - `iddcx/nv-iddcx.vcxproj` is the UMDF 2 and IddCx scaffold.
 

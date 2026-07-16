@@ -7,6 +7,9 @@ windows-open/out/
 windows-open/x64/
 windows-open/iddcx/x64/
 windows-open/kmdod/x64/
+windows-open/platform/kernel/x64/
 *.user
 *.suo
 *.VC.db
+.vs/
+.vscode/

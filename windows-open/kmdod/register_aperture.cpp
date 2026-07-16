@@ -4,15 +4,14 @@ namespace {
 
 constexpr ULONG PmcBoot0Offset = 0x00000000;
 constexpr ULONG PmcBoot42Offset = 0x00000A00;
-constexpr SIZE_T IdentityMappingLength = PAGE_SIZE;
+constexpr SIZE_T RequiredIdentityLength = PmcBoot42Offset + sizeof(ULONG);
 
 } // namespace
 
 namespace nv::kmdod {
 
 RegisterAperture::RegisterAperture() noexcept
-    : registers_(nullptr),
-      mappedLength_(0),
+    : mapping_{},
       identity_{}
 {
 }
@@ -41,25 +40,31 @@ NTSTATUS RegisterAperture::Initialize(
         }
     }
 
-    if (registerRange == nullptr || registerRange->length < IdentityMappingLength)
+    if (registerRange == nullptr || registerRange->length < RequiredIdentityLength)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
-    registers_ = static_cast<volatile UCHAR*>(MmMapIoSpaceEx(
+    NTSTATUS status = NvPlatformMapMmio(
         registerRange->physicalAddress,
-        IdentityMappingLength,
-        PAGE_READWRITE | PAGE_NOCACHE));
-    if (registers_ == nullptr)
+        registerRange->length,
+        &mapping_);
+    if (!NT_SUCCESS(status))
     {
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return status;
     }
 
-    mappedLength_ = IdentityMappingLength;
-    identity_.boot0 = READ_REGISTER_ULONG(
-        reinterpret_cast<volatile ULONG*>(registers_ + PmcBoot0Offset));
-    identity_.boot42 = READ_REGISTER_ULONG(
-        reinterpret_cast<volatile ULONG*>(registers_ + PmcBoot42Offset));
+    status = Read32(PmcBoot0Offset, &identity_.boot0);
+    if (NT_SUCCESS(status))
+    {
+        status = Read32(PmcBoot42Offset, &identity_.boot42);
+    }
+
+    if (!NT_SUCCESS(status))
+    {
+        Reset();
+        return status;
+    }
 
     if (identity_.boot0 == MAXULONG && identity_.boot42 == MAXULONG)
     {
@@ -72,19 +77,25 @@ NTSTATUS RegisterAperture::Initialize(
 
 void RegisterAperture::Reset() noexcept
 {
-    if (registers_ != nullptr)
-    {
-        MmUnmapIoSpace(const_cast<UCHAR*>(registers_), mappedLength_);
-    }
-
-    registers_ = nullptr;
-    mappedLength_ = 0;
+    NvPlatformUnmapMmio(&mapping_);
     RtlZeroMemory(&identity_, sizeof(identity_));
+}
+
+NTSTATUS RegisterAperture::Read32(
+    _In_ SIZE_T offset,
+    _Out_ ULONG* value) const noexcept
+{
+    return NvPlatformReadMmio32(&mapping_, offset, value);
 }
 
 bool RegisterAperture::IsMapped() const noexcept
 {
-    return registers_ != nullptr;
+    return mapping_.address != nullptr;
+}
+
+SIZE_T RegisterAperture::Length() const noexcept
+{
+    return mapping_.length;
 }
 
 const BootIdentity* RegisterAperture::Identity() const noexcept
