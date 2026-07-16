@@ -21,9 +21,10 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <CompileAs>CompileAsC</CompileAs>
-      <AdditionalIncludeDirectories>$(RepoRoot)src\nvidia\inc\libraries;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)platform\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\src\libraries\nvport\sync;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <OmitDefaultLibName>true</OmitDefaultLibName>
-      <PreprocessorDefinitions>_KERNEL_MODE;NV_KERNEL_MODE;_LANGUAGE_C;__NO_CTYPE;NVRM;PORT_ATOMIC=volatile;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=0;PORT_MODULE_core=1;PORT_MODULE_cpu=0;PORT_MODULE_crypto=0;PORT_MODULE_debug=0;PORT_MODULE_example=0;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=0;PORT_MODULE_string=0;PORT_MODULE_sync=0;PORT_MODULE_thread=0;PORT_MODULE_time=1;PORT_MODULE_util=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_KERNEL_MODE;NV_KERNEL_MODE;_LANGUAGE_C;__NO_CTYPE;NVRM;LOCK_VAL_ENABLED=0;PORT_ATOMIC_64_BIT_SUPPORTED=1;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=1;PORT_MODULE_core=1;PORT_MODULE_cpu=0;PORT_MODULE_crypto=0;PORT_MODULE_debug=1;PORT_MODULE_example=0;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=0;PORT_MODULE_string=0;PORT_MODULE_sync=1;PORT_MODULE_thread=0;PORT_MODULE_time=1;PORT_MODULE_util=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
       <RuntimeLibrary Condition="'$(Configuration)' == 'Release'">MultiThreaded</RuntimeLibrary>
     </ClCompile>
@@ -38,14 +39,22 @@
     <ClCompile Include="nvport_windows.c">
       <Link>sidecar\nvport_windows.c</Link>
     </ClCompile>
+    <ClCompile Include="nvport_sync_windows.c">
+      <Link>sidecar\nvport_sync_windows.c</Link>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h" />
+    <ClInclude Include="$(WindowsOpenRoot)nvport\include\nvport\inline\debug_win_kernel.h" />
     <ClInclude Include="nvport_windows.h" />
     <None Include="$(WindowsOpenRoot)manifests\nvport-kernel.sources" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\common\kernel\nvcommon-kernel.vcxproj">
       <Project>{C83A5FEA-A7E8-45C5-A0D6-34E95160B902}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\platform\kernel\nvplatform-kernel.vcxproj">
+      <Project>{9C8369B9-FB13-4DEB-B215-9C4B4B77E5DA}</Project>
     </ProjectReference>
   </ItemGroup>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">

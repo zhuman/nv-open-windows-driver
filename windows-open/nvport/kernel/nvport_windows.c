@@ -18,6 +18,8 @@ typedef union NVPORT_WINDOWS_ALLOCATION_HEADER
 } NVPORT_WINDOWS_ALLOCATION_HEADER;
 
 static const NV_COMMON_HOST_CONTEXT* hostContext;
+static PORT_MEM_ALLOCATOR globalPagedAllocator;
+static PORT_MEM_ALLOCATOR globalNonPagedAllocator;
 
 static void* Allocate(NvLength lengthBytes, NvBool nonPaged)
 {
@@ -79,8 +81,83 @@ void nvPortWindowsShutdown(
     }
 }
 
+void nvPortWindowsDebugPrintString(
+    const char* string,
+    NvLength length)
+{
+    char buffer[256];
+
+    if (string == NULL)
+    {
+        return;
+    }
+
+    while (length != 0)
+    {
+        NvLength index;
+        NvLength chunkLength = length;
+
+        if (chunkLength >= sizeof(buffer))
+        {
+            chunkLength = sizeof(buffer) - 1;
+        }
+
+        for (index = 0; index < chunkLength; ++index)
+        {
+            buffer[index] = string[index];
+        }
+        buffer[chunkLength] = '\0';
+        nvCommonHostLog(hostContext, 0, buffer);
+
+        string += chunkLength;
+        length -= chunkLength;
+    }
+}
+
+static void* PagedAllocatorAllocate(
+    PORT_MEM_ALLOCATOR* allocator,
+    NvLength lengthBytes)
+{
+    PORT_UNREFERENCED_VARIABLE(allocator);
+    return portMemAllocPaged(lengthBytes);
+}
+
+static void* NonPagedAllocatorAllocate(
+    PORT_MEM_ALLOCATOR* allocator,
+    NvLength lengthBytes)
+{
+    PORT_UNREFERENCED_VARIABLE(allocator);
+    return portMemAllocNonPaged(lengthBytes);
+}
+
+static void AllocatorFree(PORT_MEM_ALLOCATOR* allocator, void* memory)
+{
+    PORT_UNREFERENCED_VARIABLE(allocator);
+    portMemFree(memory);
+}
+
+static void AllocatorRelease(PORT_MEM_ALLOCATOR* allocator)
+{
+    portMemFree(allocator);
+}
+
+static void InitializeAllocator(
+    PORT_MEM_ALLOCATOR* allocator,
+    PortMemAllocatorAlloc* allocate)
+{
+    allocator->_portAlloc = allocate;
+    allocator->_portFree = AllocatorFree;
+    allocator->_portRelease = AllocatorRelease;
+    allocator->pTracking = NULL;
+    allocator->pImpl = NULL;
+}
+
 void portMemInitialize(void)
 {
+    InitializeAllocator(&globalPagedAllocator, PagedAllocatorAllocate);
+    InitializeAllocator(&globalNonPagedAllocator, NonPagedAllocatorAllocate);
+    globalPagedAllocator._portRelease = NULL;
+    globalNonPagedAllocator._portRelease = NULL;
 }
 
 void portMemShutdown(NvBool forceSilent)
@@ -116,6 +193,66 @@ void portMemFree(void* data)
 
     header->fields.signature = 0;
     nvCommonHostFree(hostContext, header, header->fields.nonPaged);
+}
+
+void* _portMemAllocatorAlloc(
+    PORT_MEM_ALLOCATOR* allocator,
+    NvLength lengthBytes)
+{
+    if (allocator == NULL || allocator->_portAlloc == NULL)
+    {
+        return NULL;
+    }
+
+    return allocator->_portAlloc(allocator, lengthBytes);
+}
+
+void _portMemAllocatorFree(
+    PORT_MEM_ALLOCATOR* allocator,
+    void* memory)
+{
+    if (allocator != NULL && allocator->_portFree != NULL)
+    {
+        allocator->_portFree(allocator, memory);
+    }
+}
+
+PORT_MEM_ALLOCATOR* portMemAllocatorCreatePaged(void)
+{
+    PORT_MEM_ALLOCATOR* allocator = portMemAllocPaged(sizeof(*allocator));
+    if (allocator != NULL)
+    {
+        InitializeAllocator(allocator, PagedAllocatorAllocate);
+    }
+    return allocator;
+}
+
+PORT_MEM_ALLOCATOR* portMemAllocatorCreateNonPaged(void)
+{
+    PORT_MEM_ALLOCATOR* allocator = portMemAllocNonPaged(sizeof(*allocator));
+    if (allocator != NULL)
+    {
+        InitializeAllocator(allocator, NonPagedAllocatorAllocate);
+    }
+    return allocator;
+}
+
+void portMemAllocatorRelease(PORT_MEM_ALLOCATOR* allocator)
+{
+    if (allocator != NULL && allocator->_portRelease != NULL)
+    {
+        allocator->_portRelease(allocator);
+    }
+}
+
+PORT_MEM_ALLOCATOR* portMemAllocatorGetGlobalNonPaged(void)
+{
+    return &globalNonPagedAllocator;
+}
+
+PORT_MEM_ALLOCATOR* portMemAllocatorGetGlobalPaged(void)
+{
+    return &globalPagedAllocator;
 }
 
 void* portMemCopy(

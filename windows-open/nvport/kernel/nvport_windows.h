@@ -12,6 +12,10 @@ NV_STATUS nvPortWindowsInitialize(
 void nvPortWindowsShutdown(
     const NV_COMMON_HOST_CONTEXT* hostContext);
 
+void nvPortWindowsDebugPrintString(
+    const char* string,
+    NvLength length);
+
 #ifdef __cplusplus
 }
 #endif
