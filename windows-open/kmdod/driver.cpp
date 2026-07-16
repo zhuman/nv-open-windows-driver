@@ -1,4 +1,56 @@
 #include "ddi.hpp"
+#include "driver.hpp"
+
+#include "nvcommon_host.h"
+#include "nvplatform_common.h"
+#include "nvport_windows.h"
+
+namespace {
+
+NV_COMMON_HOST_CONTEXT commonHost;
+bool runtimeInitialized;
+
+} // namespace
+
+namespace nv::kmdod {
+
+NTSTATUS InitializeDriverRuntime() noexcept
+{
+    if (runtimeInitialized)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    NV_STATUS status = nvCommonHostInitialize(
+        &commonHost,
+        NvPlatformGetCommonHostServices());
+    if (status != NV_OK)
+    {
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+
+    status = nvPortWindowsInitialize(&commonHost);
+    if (status != NV_OK)
+    {
+        nvCommonHostShutdown(&commonHost);
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+
+    runtimeInitialized = true;
+    return STATUS_SUCCESS;
+}
+
+void ShutdownDriverRuntime() noexcept
+{
+    if (runtimeInitialized)
+    {
+        nvPortWindowsShutdown(&commonHost);
+        nvCommonHostShutdown(&commonHost);
+        runtimeInitialized = false;
+    }
+}
+
+} // namespace nv::kmdod
 
 extern "C" DRIVER_INITIALIZE DriverEntry;
 
@@ -7,6 +59,12 @@ extern "C" NTSTATUS DriverEntry(
     PDRIVER_OBJECT driverObject,
     PUNICODE_STRING registryPath)
 {
+    NTSTATUS status = nv::kmdod::InitializeDriverRuntime();
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
     KMDDOD_INITIALIZATION_DATA initializationData = {};
     initializationData.Version = DXGKDDI_INTERFACE_VERSION;
     initializationData.DxgkDdiAddDevice = nv::kmdod::ddi::AddDevice;
@@ -39,8 +97,14 @@ extern "C" NTSTATUS DriverEntry(
     initializationData.DxgkDdiSystemDisplayEnable = nv::kmdod::ddi::SystemDisplayEnable;
     initializationData.DxgkDdiSystemDisplayWrite = nv::kmdod::ddi::SystemDisplayWrite;
 
-    return DxgkInitializeDisplayOnlyDriver(
+    status = DxgkInitializeDisplayOnlyDriver(
         driverObject,
         registryPath,
         &initializationData);
+    if (!NT_SUCCESS(status))
+    {
+        nv::kmdod::ShutdownDriverRuntime();
+    }
+
+    return status;
 }

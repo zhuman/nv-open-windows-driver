@@ -29,10 +29,14 @@ and wraps a versioned host-services table for allocation, Unix-epoch time,
 monotonic uptime, execution-context allocation safety, and logging. KMDOD
 supplies pool, kernel time, IRQL, and debugger callbacks; IddCx supplies
 process-heap, user-mode time, and debugger callbacks. Each device owns its
-common context and tears it down with the adapter or WDF object lifecycle.
+device-specific resources and tears them down with the adapter or WDF object
+lifecycle.
 
-KMDOD binds its common host context to NvPort before hardware discovery and
-unbinds NvPort before destroying that context. The current NvPort profile
+KMDOD binds one driver-owned common host context to NvPort before registering
+with Dxgkrnl and unbinds it from the driver unload callback. Adapter start and
+stop only manage device-owned PCI, MMIO, interrupt, and display state, so
+multiple GPU instances share NvPort without reinitializing or tearing down its
+global services. The current NvPort profile
 enables core, atomic, debug, memory, safe arithmetic, string, synchronization,
 thread, time, and utility.
 Its raw allocation header retains the pool type needed by the host free callback;

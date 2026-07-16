@@ -53,6 +53,7 @@
   <ItemGroup>
     <ClInclude Include="adapter.hpp" />
     <ClInclude Include="ddi.hpp" />
+    <ClInclude Include="driver.hpp" />
     <ClInclude Include="hardware_resources.hpp" />
     <ClInclude Include="pci_device.hpp" />
     <ClInclude Include="register_aperture.hpp" />

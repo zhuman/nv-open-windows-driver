@@ -1,6 +1,7 @@
 #include "ddi.hpp"
 
 #include "adapter.hpp"
+#include "driver.hpp"
 
 namespace {
 
@@ -78,6 +79,7 @@ _Use_decl_annotations_
 void Unload()
 {
     PAGED_CODE();
+    ShutdownDriverRuntime();
 }
 
 _Use_decl_annotations_
