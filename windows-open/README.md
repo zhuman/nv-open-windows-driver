@@ -37,8 +37,10 @@ with Dxgkrnl and unbinds it from the driver unload callback. Adapter start and
 stop only manage device-owned PCI, MMIO, interrupt, and display state, so
 multiple GPU instances share NvPort without reinitializing or tearing down its
 global services. The current NvPort profile
-enables core, atomic, debug, memory, safe arithmetic, string, synchronization,
-thread, time, and utility.
+enables core, atomic, CPU discovery, debug, memory, safe arithmetic, string,
+synchronization, thread, time, and utility. CPU identity and performance-counter
+time are implemented; privileged MSR, PMU, and integrated-memory-controller
+operations report that they are unsupported.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

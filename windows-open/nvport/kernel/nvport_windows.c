@@ -89,6 +89,11 @@ void nvPortWindowsShutdown(
     }
 }
 
+NvU64 nvPortWindowsGetMonotonicTime100ns(void)
+{
+    return nvCommonHostGetMonotonicTime100ns(hostContext);
+}
+
 void nvPortWindowsDebugPrintString(
     const char* string,
     NvLength length)
