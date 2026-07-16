@@ -38,6 +38,38 @@ NvBool portThreadEqual(PORT_THREAD thread1, PORT_THREAD thread2)
     return thread1.threadId == thread2.threadId ? NV_TRUE : NV_FALSE;
 }
 
+NV_STATUS portThreadCreate(
+    PORT_THREAD* thread,
+    PORT_THREAD_MAIN threadMain,
+    void* argument)
+{
+    if (thread == NULL)
+    {
+        return NV_ERR_INVALID_POINTER;
+    }
+
+    thread->threadId = 0;
+    return NvPlatformThreadCreate(&thread->threadId, threadMain, argument);
+}
+
+void portThreadDestroy(PORT_THREAD thread)
+{
+    NvPlatformThreadDestroy(thread.threadId);
+}
+
+void portThreadExit(NvS32 status)
+{
+    NvPlatformThreadExit(status);
+    PORT_BREAKPOINT_CHECKED();
+}
+
+NV_STATUS portThreadWaitToComplete(
+    PORT_THREAD threadToWaitOn,
+    NvS32* returnStatus)
+{
+    return NvPlatformThreadWait(threadToWaitOn.threadId, returnStatus);
+}
+
 void portThreadYield(void)
 {
     NvPlatformYieldThread();

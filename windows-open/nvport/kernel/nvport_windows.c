@@ -1,6 +1,7 @@
 #include "nvport_windows.h"
 
 #include "nvport/nvport.h"
+#include "nvplatform_thread.h"
 
 #include <stddef.h>
 
@@ -60,9 +61,17 @@ NV_STATUS nvPortWindowsInitialize(
     }
 
     hostContext = newHostContext;
+    status = NvPlatformThreadInitialize();
+    if (status != NV_OK)
+    {
+        hostContext = NULL;
+        return status;
+    }
+
     status = portInitialize();
     if (status != NV_OK)
     {
+        NvPlatformThreadShutdown();
         hostContext = NULL;
     }
 
@@ -75,6 +84,7 @@ void nvPortWindowsShutdown(
     if (hostContext == currentHostContext)
     {
         portShutdown();
+        NvPlatformThreadShutdown();
         hostContext = NULL;
     }
 }
