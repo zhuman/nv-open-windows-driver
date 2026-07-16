@@ -37,11 +37,15 @@
     <ClCompile Include="adapter.cpp" />
     <ClCompile Include="ddi.cpp" />
     <ClCompile Include="driver.cpp" />
+    <ClCompile Include="hardware_resources.cpp" />
+    <ClCompile Include="pci_device.cpp" />
     <Inf Include="nv-kmdod.inf" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="adapter.hpp" />
     <ClInclude Include="ddi.hpp" />
+    <ClInclude Include="hardware_resources.hpp" />
+    <ClInclude Include="pci_device.hpp" />
     <ClInclude Include="wdk.hpp" />
   </ItemGroup>
   <ItemGroup>

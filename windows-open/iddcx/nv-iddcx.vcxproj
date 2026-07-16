@@ -17,9 +17,9 @@
     <PlatformToolset>WindowsUserModeDriver10.0</PlatformToolset>
     <TargetVersion>Windows10</TargetVersion>
     <UMDF_VERSION_MAJOR>2</UMDF_VERSION_MAJOR>
-    <UMDF_VERSION_MINOR>25</UMDF_VERSION_MINOR>
+    <UMDF_VERSION_MINOR>35</UMDF_VERSION_MINOR>
     <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
-    <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
+    <IDDCX_VERSION_MINOR>11</IDDCX_VERSION_MINOR>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
   </PropertyGroup>
@@ -28,6 +28,7 @@
     <ClCompile>
       <DisableSpecificWarnings>4471;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <ExceptionHandling>false</ExceptionHandling>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <PreprocessorDefinitions>UMDF_DRIVER;NV_USER_MODE;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=4;IDDCX_MINIMUM_VERSION_REQUIRED=4;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -38,8 +39,14 @@
     </DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="device.cpp" />
     <ClCompile Include="driver.cpp" />
+    <ClCompile Include="hardware_services.cpp" />
     <Inf Include="nv-iddcx.inf" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="device.hpp" />
+    <ClInclude Include="hardware_services.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\common\user\nvcommon-user.vcxproj">

@@ -22,6 +22,8 @@ Adapter::Adapter(_In_ DEVICE_OBJECT* physicalDeviceObject) noexcept
       startInfo_{},
       dxgkInterface_{},
       deviceInfo_{},
+            hardwareResources_{},
+    pciDevice_{},
       adapterPowerState_(PowerDeviceD0),
       state_(State::Stopped)
 {
@@ -87,9 +89,25 @@ NTSTATUS Adapter::Start(
     startInfo_ = *startInfo;
     dxgkInterface_ = *dxgkInterface;
 
-    const NTSTATUS status = dxgkInterface_.DxgkCbGetDeviceInformation(
+    NTSTATUS status = dxgkInterface_.DxgkCbGetDeviceInformation(
         dxgkInterface_.DeviceHandle,
         &deviceInfo_);
+    if (!NT_SUCCESS(status))
+    {
+        ClearRuntimeState();
+        return status;
+    }
+
+    status = hardwareResources_.Initialize(deviceInfo_.TranslatedResourceList);
+    if (!NT_SUCCESS(status))
+    {
+        ClearRuntimeState();
+        return status;
+    }
+
+    status = pciDevice_.Initialize(
+        dxgkInterface_,
+        hardwareResources_.MemoryRangeCount() != 0);
     if (!NT_SUCCESS(status))
     {
         ClearRuntimeState();
@@ -211,6 +229,8 @@ bool Adapter::IsStarted() const noexcept
 
 void Adapter::ClearRuntimeState() noexcept
 {
+    pciDevice_.Reset();
+    hardwareResources_.Reset();
     RtlZeroMemory(&startInfo_, sizeof(startInfo_));
     RtlZeroMemory(&dxgkInterface_, sizeof(dxgkInterface_));
     RtlZeroMemory(&deviceInfo_, sizeof(deviceInfo_));

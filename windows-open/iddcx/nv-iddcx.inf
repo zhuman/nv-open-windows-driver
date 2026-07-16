@@ -47,6 +47,8 @@ Needs=WUDFRD.NT.Services
 [NvIddCx_Install.NT.Wdf]
 UmdfService=nv-iddcx,NvIddCx_Service
 UmdfServiceOrder=nv-iddcx
+UmdfDirectHardwareAccess=AllowDirectHardwareAccessAndDma
+UmdfHostProcessSharing=ProcessSharingDisabled
 
 [NvIddCx_Service]
 UmdfLibraryVersion=$UMDFVERSION$

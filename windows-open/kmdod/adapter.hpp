@@ -1,5 +1,7 @@
 #pragma once
 
+#include "hardware_resources.hpp"
+#include "pci_device.hpp"
 #include "wdk.hpp"
 
 namespace nv::kmdod {
@@ -67,6 +69,8 @@ private:
     DXGK_START_INFO startInfo_;
     DXGKRNL_INTERFACE dxgkInterface_;
     DXGK_DEVICE_INFO deviceInfo_;
+    HardwareResources hardwareResources_;
+    PciDevice pciDevice_;
     DEVICE_POWER_STATE adapterPowerState_;
     State state_;
 };
