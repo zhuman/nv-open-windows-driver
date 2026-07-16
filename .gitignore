@@ -3,3 +3,10 @@
 *.o.cmd
 *.o.d
 _out/
+windows-open/out/
+windows-open/x64/
+windows-open/iddcx/x64/
+windows-open/kmdod/x64/
+*.user
+*.suo
+*.VC.db

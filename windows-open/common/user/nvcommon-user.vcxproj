@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{20D7D8A6-432F-4DFA-8DBA-7AFFD8AA1E61}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>NvCommonUser</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>ClangCL</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <CompileAs>CompileAsC</CompileAs>
+      <PreprocessorDefinitions>NV_USER_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)' == 'Release'">MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(RepoRoot)src\common\shared\nvstatus\nvstatus.c">
+      <Link>upstream\nvstatus.c</Link>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(WindowsOpenRoot)manifests\nvcommon-user.sources" />
+  </ItemGroup>
+  <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
+    <ItemGroup>
+      <DriverProjectAttributes Include="$(ProjectGuid)">
+        <DriverType>Library</DriverType>
+        <PlatformToolset>$(PlatformToolset)</PlatformToolset>
+        <IsKernelModeToolset>false</IsKernelModeToolset>
+        <IsUserModeToolset>false</IsUserModeToolset>
+        <ProjectPath>$(MSBuildProjectFullPath)</ProjectPath>
+      </DriverProjectAttributes>
+    </ItemGroup>
+  </Target>
+  <Target Name="GetPackageFiles" Returns="@(PackageFiles)" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

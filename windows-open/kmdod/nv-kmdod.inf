@@ -1,0 +1,46 @@
+[Version]
+Signature="$Windows NT$"
+Class=Display
+ClassGuid={4d36e968-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderName%
+CatalogFile=nv-kmdod.cat
+DriverVer=07/15/2026,0.1.0.0
+PnpLockDown=1
+
+[Manufacturer]
+%ProviderName%=Models,NTamd64.10.0
+
+[Models.NTamd64.10.0]
+%DeviceName%=NvKmdod_Install,Root\NvWindowsKmdod
+
+[DestinationDirs]
+DriverCopy=12
+
+[SourceDisksNames]
+1=%DiskName%
+
+[SourceDisksFiles]
+nv-kmdod.sys=1
+
+[DriverCopy]
+nv-kmdod.sys
+
+[NvKmdod_Install]
+CopyFiles=DriverCopy
+FeatureScore=F8
+
+[NvKmdod_Install.Services]
+AddService=nv-kmdod,0x00000002,NvKmdod_Service
+
+[NvKmdod_Service]
+DisplayName=%ServiceName%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\nv-kmdod.sys
+
+[Strings]
+ProviderName="NVIDIA Open GPU Kernel Modules"
+DeviceName="NVIDIA Experimental Display-Only Adapter"
+ServiceName="NVIDIA Experimental KMDOD"
+DiskName="NVIDIA Experimental Windows Driver Disk"

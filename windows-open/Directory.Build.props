@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <WindowsOpenRoot>$(MSBuildThisFileDirectory)</WindowsOpenRoot>
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(WindowsOpenRoot)..\'))</RepoRoot>
+    <NvidiaSdkInclude>$(RepoRoot)src\common\sdk\nvidia\inc</NvidiaSdkInclude>
+    <OutDir>$(WindowsOpenRoot)out\$(Platform)\$(Configuration)\$(MSBuildProjectName)\</OutDir>
+    <IntDir>$(WindowsOpenRoot)out\obj\$(Platform)\$(Configuration)\$(MSBuildProjectName)\</IntDir>
+    <TargetName>$(MSBuildProjectName)</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(NvidiaSdkInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ConformanceMode>true</ConformanceMode>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <WarningLevel>Level4</WarningLevel>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>

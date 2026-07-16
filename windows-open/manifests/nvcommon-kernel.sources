@@ -1,0 +1,2 @@
+# Paths are relative to the repository root.
+src/common/shared/nvstatus/nvstatus.c
