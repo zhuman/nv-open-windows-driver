@@ -53,6 +53,10 @@ The first RM OS-services library now exports `osReadRegistryDwordBase` with the
 upstream signature. It keeps `OBJGPU` opaque and translates Windows query
 results through a WDK-free `NV_STATUS` ABI, ready for the generated RM registry
 wrapper and its NBSI fallback.
+The RM OS library also exports wall-clock seconds/microseconds and Windows
+performance-counter timestamps with their decoding frequency. The latter uses
+`KeQueryPerformanceCounter`, matching the upstream requirement that RM and
+DirectX timestamps share a clock domain.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

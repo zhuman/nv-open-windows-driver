@@ -34,6 +34,7 @@
     <ClCompile Include="nvplatform_registry.cpp" />
     <ClCompile Include="nvplatform_sync.cpp" />
     <ClCompile Include="nvplatform_thread.cpp" />
+    <ClCompile Include="nvplatform_time_rm.cpp" />
     <ClInclude Include="nvplatform_common.h" />
     <ClInclude Include="nvplatform_mmio.h" />
     <ClInclude Include="nvplatform_pci.h" />
@@ -41,6 +42,7 @@
     <ClInclude Include="nvplatform_registry_rm.h" />
     <ClInclude Include="nvplatform_sync.h" />
     <ClInclude Include="nvplatform_thread.h" />
+    <ClInclude Include="nvplatform_time_rm.h" />
   </ItemGroup>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
     <ItemGroup>

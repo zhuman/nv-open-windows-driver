@@ -30,6 +30,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="nvrm_os_registry.c" />
+    <ClCompile Include="nvrm_os_time.c" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\platform\kernel\nvplatform-kernel.vcxproj">
