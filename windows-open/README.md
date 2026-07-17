@@ -74,6 +74,11 @@ The first RM core target compiles the upstream `locks.c`, `locks_common.c`, and
 NvPort profile, generated-header customization boundary, and required upstream
 include roots; warning exceptions are scoped to known generated/upstream C
 constructs.
+The RM core target now also owns the upstream system constructor, RM API cache
+and stub initialization, resource descriptors, event log, binary-data registry,
+and generated HAL registration path. The Windows `osRmInitRm` export registers
+those HALs and applies the upstream thread-state defaults; registry lifetime
+remains driver-global and is initialized before RM construction.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

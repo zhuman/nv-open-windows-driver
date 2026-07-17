@@ -21,9 +21,9 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <CompileAs>CompileAsC</CompileAs>
-      <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)rm\include;$(RepoRoot)src\common\inc\swref;$(RepoRoot)src\common\inc\swref\published;$(RepoRoot)src\common\nvlink\inband\interface;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc;$(RepoRoot)src\nvidia\inc;$(RepoRoot)src\nvidia\inc\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\generated;$(RepoRoot)src\nvidia\interface;$(RepoRoot)src\nvidia\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)rm\include;$(RepoRoot)src\common\inc\swref;$(RepoRoot)src\common\inc\swref\published;$(RepoRoot)src\common\nvlink\inband\interface;$(RepoRoot)src\common\shared\inc;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc;$(RepoRoot)src\nvidia\inc;$(RepoRoot)src\nvidia\inc\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\generated;$(RepoRoot)src\nvidia\interface;$(RepoRoot)src\nvidia\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
-      <AdditionalOptions>/clang:-Wno-gnu-folding-constant /clang:-Wno-missing-field-initializers /clang:-Wno-unused-parameter %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/clang:-Wno-gnu-folding-constant /clang:-Wno-missing-field-initializers /clang:-Wno-unused-but-set-variable /clang:-Wno-unused-parameter %(AdditionalOptions)</AdditionalOptions>
       <OmitDefaultLibName>true</OmitDefaultLibName>
       <PreprocessorDefinitions>_AMD64_=1;_KERNEL_MODE;NV_KERNEL_MODE;_LANGUAGE_C;__NO_CTYPE;NVRM;LOCK_VAL_ENABLED=0;PORT_ATOMIC_64_BIT_SUPPORTED=1;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=1;PORT_MODULE_core=1;PORT_MODULE_cpu=1;PORT_MODULE_crypto=1;PORT_MODULE_debug=1;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=1;PORT_MODULE_string=1;PORT_MODULE_sync=1;PORT_MODULE_thread=1;PORT_MODULE_time=1;PORT_MODULE_util=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
@@ -31,14 +31,41 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hal.c">
+      <Link>upstream\hal.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hals_all.c">
+      <Link>upstream\hals_all.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\locks.c">
       <Link>upstream\locks.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\locks_common.c">
       <Link>upstream\locks_common.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\bin_data.c">
+      <Link>upstream\bin_data.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\system.c">
+      <Link>upstream\system.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\thread_state.c">
       <Link>upstream\thread_state.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\op_event_log.c">
+      <Link>upstream\op_event_log.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi.c">
+      <Link>upstream\rmapi.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_cache.c">
+      <Link>upstream\rmapi_cache.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_stubs.c">
+      <Link>upstream\rmapi_stubs.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\resource_desc.c">
+      <Link>upstream\resource_desc.c</Link>
     </ClCompile>
   </ItemGroup>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
