@@ -69,6 +69,11 @@ RM thread-state initialization now has exact maximum-core, current-thread,
 current-process-flags, and scheduler-yield hooks. Kernel and terminating thread
 flags come from WDK thread state, and scheduling fails explicitly when the
 current IRQL cannot yield instead of silently continuing.
+The first RM core target compiles the upstream `locks.c`, `locks_common.c`, and
+`thread_state.c` sources unchanged with ClangCL. Windows supplies only the
+NvPort profile, generated-header customization boundary, and required upstream
+include roots; warning exceptions are scoped to known generated/upstream C
+constructs.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

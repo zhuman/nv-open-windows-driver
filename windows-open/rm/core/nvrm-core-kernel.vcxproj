@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{5B71846E-DBED-493B-B59F-DF739FA90A55}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>NvRmCoreKernel</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>ClangCL</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <CompileAs>CompileAsC</CompileAs>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)rm\include;$(RepoRoot)src\common\inc\swref;$(RepoRoot)src\common\inc\swref\published;$(RepoRoot)src\common\nvlink\inband\interface;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc;$(RepoRoot)src\nvidia\inc;$(RepoRoot)src\nvidia\inc\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\generated;$(RepoRoot)src\nvidia\interface;$(RepoRoot)src\nvidia\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <AdditionalOptions>/clang:-Wno-gnu-folding-constant /clang:-Wno-missing-field-initializers /clang:-Wno-unused-parameter %(AdditionalOptions)</AdditionalOptions>
+      <OmitDefaultLibName>true</OmitDefaultLibName>
+      <PreprocessorDefinitions>_AMD64_=1;_KERNEL_MODE;NV_KERNEL_MODE;_LANGUAGE_C;__NO_CTYPE;NVRM;LOCK_VAL_ENABLED=0;PORT_ATOMIC_64_BIT_SUPPORTED=1;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=1;PORT_MODULE_core=1;PORT_MODULE_cpu=1;PORT_MODULE_crypto=1;PORT_MODULE_debug=1;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=1;PORT_MODULE_string=1;PORT_MODULE_sync=1;PORT_MODULE_thread=1;PORT_MODULE_time=1;PORT_MODULE_util=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)' == 'Release'">MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\locks.c">
+      <Link>upstream\locks.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\locks_common.c">
+      <Link>upstream\locks_common.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\thread_state.c">
+      <Link>upstream\thread_state.c</Link>
+    </ClCompile>
+  </ItemGroup>
+  <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
+    <ItemGroup>
+      <DriverProjectAttributes Include="$(ProjectGuid)">
+        <DriverType>Library</DriverType>
+        <PlatformToolset>$(PlatformToolset)</PlatformToolset>
+        <IsKernelModeToolset>false</IsKernelModeToolset>
+        <IsUserModeToolset>false</IsUserModeToolset>
+        <ProjectPath>$(MSBuildProjectFullPath)</ProjectPath>
+      </DriverProjectAttributes>
+    </ItemGroup>
+  </Target>
+  <Target Name="GetPackageFiles" Returns="@(PackageFiles)" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
