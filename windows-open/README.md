@@ -57,6 +57,10 @@ The RM OS library also exports wall-clock seconds/microseconds and Windows
 performance-counter timestamps with their decoding frequency. The latter uses
 `KeQueryPerformanceCounter`, matching the upstream requirement that RM and
 DirectX timestamps share a clock domain.
+Monotonic and high-resolution counters are exposed in nanoseconds. Millisecond
+delays yield the thread when the current IRQL permits and otherwise use bounded
+processor stalls; microsecond and nanosecond delays stall directly. As on
+Linux, hard-interrupt waits longer than 20 ms are rejected.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
