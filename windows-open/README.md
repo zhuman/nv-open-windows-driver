@@ -46,7 +46,13 @@ cryptographic entropy source.
 The kernel platform layer retains the driver service registry key for the
 driver lifetime and provides typed DWORD reads from the root or a relative
 subkey. This gives global RM initialization one immutable settings source shared
-by every adapter.
+by every adapter. The RM-facing entry point accepts bounded ASCII parameter
+names and imports DWORD values from the service `Parameters` subkey; RM runtime
+writes remain in its own in-memory registry and do not modify service settings.
+The first RM OS-services library now exports `osReadRegistryDwordBase` with the
+upstream signature. It keeps `OBJGPU` opaque and translates Windows query
+results through a WDK-free `NV_STATUS` ABI, ready for the generated RM registry
+wrapper and its NBSI fallback.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

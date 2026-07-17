@@ -1,8 +1,47 @@
 #include "nvplatform_registry.h"
+#include "nvplatform_registry_rm.h"
 
 namespace {
 
 HANDLE registryKey;
+constexpr SIZE_T MaximumRmRegistryNameLength = 255;
+
+NTSTATUS ConvertAsciiName(
+    _In_ const char* source,
+    _Out_writes_(destinationCount) wchar_t* destination,
+    _In_ SIZE_T destinationCount) noexcept
+{
+    if (source == nullptr || destination == nullptr || destinationCount == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    SIZE_T index = 0;
+    while (source[index] != '\0')
+    {
+        const UCHAR character = static_cast<UCHAR>(source[index]);
+        if (character > 0x7f)
+        {
+            return STATUS_NO_UNICODE_TRANSLATION;
+        }
+
+        if (index + 1 >= destinationCount)
+        {
+            return STATUS_NAME_TOO_LONG;
+        }
+
+        destination[index] = static_cast<wchar_t>(character);
+        ++index;
+    }
+
+    if (index == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    destination[index] = L'\0';
+    return STATUS_SUCCESS;
+}
 
 NTSTATUS OpenRelativeKey(
     _In_ const wchar_t* relativeSubkey,
@@ -124,4 +163,41 @@ extern "C" NTSTATUS NvPlatformReadRegistryDword(
 
     RtlCopyMemory(value, information->Data, sizeof(*value));
     return STATUS_SUCCESS;
+}
+
+extern "C" NV_STATUS NvPlatformReadRmRegistryDword(
+    const char* valueName,
+    NvU32* value)
+{
+    PAGED_CODE();
+
+    wchar_t wideValueName[MaximumRmRegistryNameLength + 1]{};
+    NTSTATUS status = ConvertAsciiName(
+        valueName,
+        wideValueName,
+        RTL_NUMBER_OF(wideValueName));
+    if (!NT_SUCCESS(status))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    status = NvPlatformReadRegistryDword(L"Parameters", wideValueName, value);
+    if (NT_SUCCESS(status))
+    {
+        return NV_OK;
+    }
+
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND ||
+        status == STATUS_OBJECT_PATH_NOT_FOUND)
+    {
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+
+    if (status == STATUS_INVALID_PARAMETER ||
+        status == STATUS_OBJECT_TYPE_MISMATCH)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NV_ERR_OPERATING_SYSTEM;
 }
