@@ -9,8 +9,10 @@ extern "C" {
 
 NvU64 NvPlatformGetCurrentThreadId(void);
 NvU64 NvPlatformGetCurrentProcessId(void);
+NvU32 NvPlatformGetCurrentProcessFlags(void);
 NvBool NvPlatformIsThreadIdValid(NvU64 threadId);
 void NvPlatformYieldThread(void);
+NV_STATUS NvPlatformScheduleThread(void);
 
 typedef NvS32 (*NV_PLATFORM_THREAD_MAIN)(void* argument);
 

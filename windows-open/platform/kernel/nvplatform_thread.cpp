@@ -483,6 +483,25 @@ extern "C" NvU64 NvPlatformGetCurrentProcessId(void)
     return reinterpret_cast<NvU64>(PsGetCurrentProcessId());
 }
 
+extern "C" NvU32 NvPlatformGetCurrentProcessFlags(void)
+{
+    constexpr NvU32 KernelThread = 0x1;
+    constexpr NvU32 Exiting = 0x2;
+    NvU32 flags = 0;
+
+    if (PsIsSystemThread(PsGetCurrentThread()))
+    {
+        flags |= KernelThread;
+    }
+
+    if (PsIsThreadTerminating(PsGetCurrentThread()))
+    {
+        flags |= Exiting;
+    }
+
+    return flags;
+}
+
 extern "C" NvBool NvPlatformIsThreadIdValid(NvU64 threadId)
 {
     PETHREAD thread = nullptr;
@@ -517,10 +536,19 @@ extern "C" NvBool NvPlatformIsThreadIdValid(NvU64 threadId)
 
 extern "C" void NvPlatformYieldThread(void)
 {
+    (void)NvPlatformScheduleThread();
+}
+
+extern "C" NV_STATUS NvPlatformScheduleThread(void)
+{
     LARGE_INTEGER interval{};
+    interval.QuadPart = -1;
 
     if (KeGetCurrentIrql() <= APC_LEVEL)
     {
         (void)KeDelayExecutionThread(KernelMode, FALSE, &interval);
+        return NV_OK;
     }
+
+    return NV_ERR_INVALID_STATE;
 }
