@@ -31,11 +31,35 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_object_nvoc.c">
+      <Link>generated\g_object_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_os_nvoc.c">
+      <Link>generated\g_os_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_hal_mgr_nvoc.c">
+      <Link>generated\g_hal_mgr_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_hal_nvoc.c">
+      <Link>generated\g_hal_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_system_nvoc.c">
+      <Link>generated\g_system_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_traceable_nvoc.c">
+      <Link>generated\g_traceable_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvoc\src\runtime.c">
+      <Link>upstream\nvoc_runtime.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hal.c">
       <Link>upstream\hal.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hals_all.c">
       <Link>upstream\hals_all.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal_mgr.c">
+      <Link>upstream\hal_mgr.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\locks.c">
       <Link>upstream\locks.c</Link>

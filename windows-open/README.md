@@ -79,6 +79,10 @@ and stub initialization, resource descriptors, event log, binary-data registry,
 and generated HAL registration path. The Windows `osRmInitRm` export registers
 those HALs and applies the upstream thread-state defaults; registry lifetime
 remains driver-global and is initialized before RM construction.
+The first generated NVOC object graph now includes the upstream runtime,
+`Object`, `OBJTRACEABLE`, `OBJSYS`, `OBJHALMGR`, `OBJHAL`, and `OBJOS` class
+bodies. Windows constructs `OBJOS` with generated property defaults instead of
+inheriting Unix reset, ACPI-cache, or vblank policy.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
