@@ -61,6 +61,10 @@ Monotonic and high-resolution counters are exposed in nanoseconds. Millisecond
 delays yield the thread when the current IRQL permits and otherwise use bounded
 processor stalls; microsecond and nanosecond delays stall directly. As on
 Linux, hard-interrupt waits longer than 20 ms are rejected.
+RM CPU discovery now has exact CPUID, frequency, possible-processor-count, and
+current-processor hooks. Processor counts span every Windows processor group,
+and the current processor is flattened through preceding groups using maximum
+group sizes so RM thread-state indices remain stable.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

@@ -29,6 +29,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="nvplatform_common.cpp" />
+    <ClCompile Include="nvplatform_cpu_rm.cpp" />
     <ClCompile Include="nvplatform_mmio.cpp" />
     <ClCompile Include="nvplatform_pci.cpp" />
     <ClCompile Include="nvplatform_registry.cpp" />
@@ -36,6 +37,7 @@
     <ClCompile Include="nvplatform_thread.cpp" />
     <ClCompile Include="nvplatform_time_rm.cpp" />
     <ClInclude Include="nvplatform_common.h" />
+    <ClInclude Include="nvplatform_cpu_rm.h" />
     <ClInclude Include="nvplatform_mmio.h" />
     <ClInclude Include="nvplatform_pci.h" />
     <ClInclude Include="nvplatform_registry.h" />
