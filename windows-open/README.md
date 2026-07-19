@@ -121,6 +121,11 @@ The generated `GpuAccounting` class and common accounting implementation now
 compile unchanged as the next mandatory child. Construction initializes the
 per-GPU live and retired process stores through the existing intrusive map and
 list layer; sampling and timer activity remain deferred until GPU startup.
+`PlatformRequestHandler` now includes its generated class, common lifecycle,
+and control/sensor implementation. Both architectures compile the upstream
+sources unchanged; target-local forced inclusion supplies the Unix control
+parameter declarations exposed by the shared generated client-resource header,
+without importing Unix control behavior.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

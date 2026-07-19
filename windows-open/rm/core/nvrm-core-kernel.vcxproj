@@ -60,6 +60,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_acct_nvoc.c">
       <Link>generated\g_gpu_acct_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_platform_request_handler_nvoc.c">
+      <Link>generated\g_platform_request_handler_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_system_nvoc.c">
       <Link>generated\g_system_nvoc.c</Link>
     </ClCompile>
@@ -350,6 +353,14 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\chipset\chipset_info.c">
       <Link>upstream\platform\chipset_info.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\platform_request_handler.c">
+      <Link>upstream\platform\platform_request_handler.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\platform_request_handler_ctrl.c">
+      <Link>upstream\platform\platform_request_handler_ctrl.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hypervisor.c">
       <Link>upstream\hypervisor\hypervisor.c</Link>
