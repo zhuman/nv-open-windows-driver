@@ -166,6 +166,9 @@ Static system configuration queries Windows power capabilities and marks a
 system as a notebook when a system battery is present, matching one of the
 upstream notebook criteria. Confidential-compute flags remain clear until a
 Windows guest-isolation provider can report the active technology explicitly.
+The optional service `Parameters\BugCheckOnTimeout` DWORD controls RM's timeout
+bugcheck property. Missing, invalid, and zero values leave bugchecks disabled;
+any nonzero DWORD enables the existing RM timeout policy.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
