@@ -117,6 +117,10 @@ The already-present `OBJGPUMGR` is followed by `OBJGSYNCMGR`, whose generated
 class and common manager now compile unchanged. Construction initializes each
 slot with the common null provider; hardware-specific G-Sync providers remain
 deferred until GPU/device discovery requires them.
+The generated `GpuAccounting` class and common accounting implementation now
+compile unchanged as the next mandatory child. Construction initializes the
+per-GPU live and retired process stores through the existing intrusive map and
+list layer; sampling and timer activity remain deferred until GPU startup.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
