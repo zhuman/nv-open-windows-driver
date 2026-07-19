@@ -5,9 +5,13 @@
 _out/
 windows-open/out/
 windows-open/x64/
+windows-open/ARM64/
 windows-open/iddcx/x64/
+windows-open/iddcx/ARM64/
 windows-open/kmdod/x64/
+windows-open/kmdod/ARM64/
 windows-open/platform/kernel/x64/
+windows-open/platform/kernel/ARM64/
 *.user
 *.suo
 *.VC.db
