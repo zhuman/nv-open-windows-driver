@@ -149,6 +149,10 @@ Generated RM configuration predicates and the shared `OBJENGSTATE` and
 `IntrService` NVOC ancestors now compile unchanged. A direct `coreInitializeRm`
 link probe resolves those families and is being used to drive the remaining
 resource-catalog and GPU HAL closure without weakening the production path.
+The generated `GpuManagementApi` and complete `GSyncApi` resource layers now
+close their catalog entries. GSync notification traversal intentionally leaves
+Windows event delivery as an explicit OS-service boundary rather than using a
+placeholder notification implementation.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
