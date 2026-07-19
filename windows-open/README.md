@@ -153,6 +153,11 @@ The generated `GpuManagementApi` and complete `GSyncApi` resource layers now
 close their catalog entries. GSync notification traversal intentionally leaves
 Windows event delivery as an explicit OS-service boundary rather than using a
 placeholder notification implementation.
+That boundary now has a native provider: user event handles are type- and
+access-checked with `ObReferenceObjectByHandle`, held for the RM event lifetime,
+signaled with `KeSetEvent`, and released through the matching object-reference
+ABI. Kernel callbacks, index filtering, and subdevice filtering remain in the
+thin RM sidecar while WDK types stay in the platform layer.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
