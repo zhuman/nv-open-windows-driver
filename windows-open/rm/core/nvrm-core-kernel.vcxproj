@@ -64,6 +64,15 @@
       <Link>generated\g_client_resource_nvoc.c</Link>
       <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_io_vaspace_nvoc.c">
+      <Link>generated\g_io_vaspace_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_mem_mgr_nvoc.c">
+      <Link>generated\g_mem_mgr_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_virt_mem_mgr_nvoc.c">
+      <Link>generated\g_virt_mem_mgr_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_traceable_nvoc.c">
       <Link>generated\g_traceable_nvoc.c</Link>
     </ClCompile>
@@ -224,6 +233,33 @@
       <Link>upstream\memory\mem_desc.c</Link>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>$(IntDir)nvrm_version.h;$(RepoRoot)src\common\nvlink\interface\nvlink.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\heap.c">
+      <Link>upstream\memory\heap.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_mgr.c">
+      <Link>upstream\memory\mem_mgr.c</Link>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_utils.c">
+      <Link>upstream\memory\mem_utils.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\objheap.c">
+      <Link>upstream\memory\objheap.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\ctx_buf_pool.c">
+      <Link>upstream\memory\ctx_buf_pool.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\io_vaspace.c">
+      <Link>upstream\memory\io_vaspace.c</Link>
+      <AdditionalOptions>/clang:-Wno-unused-variable %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\video_mem.c">
+      <Link>upstream\memory\video_mem.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\virt_mem_mgr.c">
+      <Link>upstream\memory\virt_mem_mgr.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpcstructurecopy.c">
       <Link>upstream\rpcstructurecopy.c</Link>
