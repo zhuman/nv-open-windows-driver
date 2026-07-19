@@ -113,6 +113,10 @@ KMDOD.
 common chipset policy, PCIe topology/configuration implementation, and chipset
 information table compile unchanged for x64 and ARM64. The independent PCI PBI
 helper remains deferred until a caller enters the startup graph.
+The already-present `OBJGPUMGR` is followed by `OBJGSYNCMGR`, whose generated
+class and common manager now compile unchanged. Construction initializes each
+slot with the common null provider; hardware-specific G-Sync providers remain
+deferred until GPU/device discovery requires them.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
