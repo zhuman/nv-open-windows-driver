@@ -109,6 +109,10 @@ class and common Xen, KVM, Hyper-V, and VMware backends. x64 detection uses the
 Windows `osNv_cpuid` export; ARM64 retains the upstream `osGetSmbiosTable`
 dependency as an explicit OS-service boundary to close before RM is linked into
 KMDOD.
+`OBJCL` is the next compiled mandatory system child. Its generated class,
+common chipset policy, PCIe topology/configuration implementation, and chipset
+information table compile unchanged for x64 and ARM64. The independent PCI PBI
+helper remains deferred until a caller enters the startup graph.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
