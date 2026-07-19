@@ -25,3 +25,13 @@ NvU32 osGetCurrentProcessorNumber(void)
 {
     return NvPlatformGetRmCurrentProcessorNumber();
 }
+
+NvU32 osNv_rdcr4(void)
+{
+    return NvPlatformRmReadCr4();
+}
+
+NvU64 osNv_rdxcr0(void)
+{
+    return NvPlatformRmReadXcr0();
+}

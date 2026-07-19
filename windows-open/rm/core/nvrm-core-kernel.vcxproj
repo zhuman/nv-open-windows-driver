@@ -387,6 +387,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\platform.c">
       <Link>upstream\platform\platform.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\cpu.c">
+      <Link>upstream\platform\cpu.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\nbsi\nbsi_init.c">
       <Link>upstream\platform\nbsi_init.c</Link>
     </ClCompile>

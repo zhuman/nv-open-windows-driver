@@ -10,3 +10,11 @@ NV_STATUS osReadRegistryDwordBase(
     (void)gpu;
     return NvPlatformReadRmRegistryDword(valueName, value);
 }
+
+NV_STATUS osReadRegistryDword(
+    OBJGPU* gpu,
+    const char* valueName,
+    NvU32* value)
+{
+    return osReadRegistryDwordBase(gpu, valueName, value);
+}

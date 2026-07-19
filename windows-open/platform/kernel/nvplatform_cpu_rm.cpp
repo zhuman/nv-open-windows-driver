@@ -73,3 +73,21 @@ extern "C" NvU32 NvPlatformGetRmCurrentProcessorNumber(void)
 
     return number;
 }
+
+extern "C" NvU32 NvPlatformRmReadCr4(void)
+{
+#if defined(_M_AMD64) || defined(_M_IX86)
+    return static_cast<NvU32>(__readcr4());
+#else
+    return 0;
+#endif
+}
+
+extern "C" NvU64 NvPlatformRmReadXcr0(void)
+{
+#if defined(_M_AMD64) || defined(_M_IX86)
+    return static_cast<NvU64>(_xgetbv(0));
+#else
+    return 0;
+#endif
+}

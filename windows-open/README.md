@@ -65,10 +65,10 @@ subkey. This gives global RM initialization one immutable settings source shared
 by every adapter. The RM-facing entry point accepts bounded ASCII parameter
 names and imports DWORD values from the service `Parameters` subkey; RM runtime
 writes remain in its own in-memory registry and do not modify service settings.
-The first RM OS-services library now exports `osReadRegistryDwordBase` with the
-upstream signature. It keeps `OBJGPU` opaque and translates Windows query
-results through a WDK-free `NV_STATUS` ABI, ready for the generated RM registry
-wrapper and its NBSI fallback.
+The RM OS-services library exports both `osReadRegistryDwordBase` and the public
+`osReadRegistryDword` entry point with their upstream signatures. They keep
+`OBJGPU` opaque and translate Windows query results through a WDK-free
+`NV_STATUS` ABI.
 The RM OS library also exports wall-clock seconds/microseconds and Windows
 performance-counter timestamps with their decoding frequency. The latter uses
 `KeQueryPerformanceCounter`, matching the upstream requirement that RM and
@@ -158,6 +158,10 @@ access-checked with `ObReferenceObjectByHandle`, held for the RM event lifetime,
 signaled with `KeSetEvent`, and released through the matching object-reference
 ABI. Kernel callbacks, index filtering, and subdevice filtering remain in the
 thin RM sidecar while WDK types stay in the platform layer.
+Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
+ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
+guarded platform intrinsics, while the existing CPUID, frequency, and processor
+count services remain shared with the RM OS sidecar.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

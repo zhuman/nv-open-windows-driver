@@ -20,6 +20,10 @@ NvU32 NvPlatformGetRmCpuCount(void);
 
 NvU32 NvPlatformGetRmCurrentProcessorNumber(void);
 
+NvU32 NvPlatformRmReadCr4(void);
+
+NvU64 NvPlatformRmReadXcr0(void);
+
 #ifdef __cplusplus
 }
 #endif
