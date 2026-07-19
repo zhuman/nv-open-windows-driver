@@ -134,6 +134,10 @@ The data-only `OBJVMM` child was already present. `KernelVgpuMgr` now follows it
 with generated metadata, common profile helpers, the kernel manager, and its
 lazy embedded `OBJEHEAP` implementation. Construction initializes driver-global
 vGPU version ranges and list ownership without creating per-GPU state.
+`OBJGPUBOOSTMGR` now compiles with its generated manager class and the generated
+`SyncGpuBoost` RM resource that shares the common implementation unit. The
+driver-global manager starts empty and uses the existing btree layer to track
+GPU membership only when clients create boost groups.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

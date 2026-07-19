@@ -60,6 +60,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_acct_nvoc.c">
       <Link>generated\g_gpu_acct_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_boost_mgr_nvoc.c">
+      <Link>generated\g_gpu_boost_mgr_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_journal_nvoc.c">
       <Link>generated\g_journal_nvoc.c</Link>
     </ClCompile>
@@ -71,6 +74,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_system_nvoc.c">
       <Link>generated\g_system_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_syncgpuboost_nvoc.c">
+      <Link>generated\g_syncgpuboost_nvoc.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_rs_server_nvoc.c">
       <Link>generated\g_rs_server_nvoc.c</Link>
@@ -394,6 +400,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\external_device\gsync.c">
       <Link>upstream\gpu\external_device\gsync.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\power\gpu_boost_mgr.c">
+      <Link>upstream\power\gpu_boost_mgr.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\gpu_acct.c">
       <Link>upstream\diagnostics\gpu_acct.c</Link>
