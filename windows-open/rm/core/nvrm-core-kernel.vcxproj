@@ -85,6 +85,19 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\lib\base_utils.c">
       <Link>upstream\base_utils.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\lib\protobuf\prbenc.c">
+      <Link>upstream\protobuf\prbenc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\lib\protobuf\prbutil.c">
+      <Link>upstream\protobuf\prbutil.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\lib\ref_count.c">
+      <Link>upstream\ref_count.c</Link>
+      <AdditionalOptions>/clang:-Wno-sign-compare %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvbitvector\nvbitvector.c">
+      <Link>upstream\nvbitvector.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\utils\nvassert.c">
       <Link>upstream\nvassert.c</Link>
     </ClCompile>
@@ -139,6 +152,12 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\op_event_log.c">
       <Link>upstream\op_event_log.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\nvlog.c">
+      <Link>upstream\diagnostics\nvlog.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\nvlog_printf.c">
+      <Link>upstream\diagnostics\nvlog_printf.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi.c">
       <Link>upstream\rmapi.c</Link>
@@ -200,6 +219,11 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\resource_desc.c">
       <Link>upstream\resource_desc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_desc.c">
+      <Link>upstream\memory\mem_desc.c</Link>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(IntDir)nvrm_version.h;$(RepoRoot)src\common\nvlink\interface\nvlink.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpcstructurecopy.c">
       <Link>upstream\rpcstructurecopy.c</Link>
