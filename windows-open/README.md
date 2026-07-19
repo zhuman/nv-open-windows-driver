@@ -162,6 +162,10 @@ Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor
 count services remain shared with the RM OS sidecar.
+Static system configuration queries Windows power capabilities and marks a
+system as a notebook when a system battery is present, matching one of the
+upstream notebook criteria. Confidential-compute flags remain clear until a
+Windows guest-isolation provider can report the active technology explicitly.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
