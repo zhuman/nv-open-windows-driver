@@ -63,6 +63,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_journal_nvoc.c">
       <Link>generated\g_journal_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_kernel_vgpu_mgr_nvoc.c">
+      <Link>generated\g_kernel_vgpu_mgr_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_platform_request_handler_nvoc.c">
       <Link>generated\g_platform_request_handler_nvoc.c</Link>
     </ClCompile>
@@ -144,6 +147,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\list.c">
       <Link>upstream\containers\list.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\eheap\eheap_old.c">
+      <Link>upstream\containers\eheap_old.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\map.c">
       <Link>upstream\containers\map.c</Link>
@@ -379,6 +385,12 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\vmware\vmware.c">
       <Link>upstream\hypervisor\vmware.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\common_vgpu_mgr.c">
+      <Link>upstream\virtualization\common_vgpu_mgr.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\kernel_vgpu_mgr.c">
+      <Link>upstream\virtualization\kernel_vgpu_mgr.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\external_device\gsync.c">
       <Link>upstream\gpu\external_device\gsync.c</Link>
