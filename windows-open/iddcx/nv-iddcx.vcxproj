@@ -41,6 +41,7 @@
     </DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="adapter.cpp" />
     <ClCompile Include="common_services.cpp" />
     <ClCompile Include="device.cpp" />
     <ClCompile Include="driver.cpp" />
@@ -48,6 +49,7 @@
     <Inf Include="nv-iddcx.inf" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="adapter.hpp" />
     <ClInclude Include="common_services.hpp" />
     <ClInclude Include="device.hpp" />
     <ClInclude Include="hardware_services.hpp" />

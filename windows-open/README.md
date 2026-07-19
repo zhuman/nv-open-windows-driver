@@ -40,6 +40,14 @@ fails preparation as a missing device. Release and every failure path unwind
 interrupt, DMA, MMIO, and bus-interface state in reverse ownership order. The
 root-enumerated development device retains its resource-free software path.
 
+The first D0 entry creates one device-owned IddCx adapter asynchronously with
+conservative endpoint capabilities. Adapter completion and mode-commit
+callbacks resolve through an adapter-object context, while ordinary D0 exits
+only mark the adapter unpowered so a resume cannot create a duplicate WDDM
+adapter. Parent teardown clears the callback owner before deleting the adapter.
+No monitor is reported until RM/NVKMS provides a real connector and mode
+snapshot.
+
 KMDOD binds one driver-owned common host context to NvPort before registering
 with Dxgkrnl and unbinds it from the driver unload callback. Adapter start and
 stop only manage device-owned PCI, MMIO, interrupt, and display state, so

@@ -11,6 +11,8 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
 
     IDD_CX_CLIENT_CONFIG iddConfiguration;
     IDD_CX_CLIENT_CONFIG_INIT(&iddConfiguration);
+    iddConfiguration.EvtIddCxAdapterInitFinished = AdapterInitFinished;
+    iddConfiguration.EvtIddCxAdapterCommitModes = AdapterCommitModes;
 
     NTSTATUS status = IddCxDeviceInitConfig(deviceInit, &iddConfiguration);
     if (!NT_SUCCESS(status))
@@ -22,6 +24,8 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
     pnpCallbacks.EvtDevicePrepareHardware = PrepareHardware;
     pnpCallbacks.EvtDeviceReleaseHardware = ReleaseHardware;
+    pnpCallbacks.EvtDeviceD0Entry = EnterD0;
+    pnpCallbacks.EvtDeviceD0Exit = ExitD0;
     WdfDeviceInitSetPnpPowerEventCallbacks(deviceInit, &pnpCallbacks);
 
     WDF_OBJECT_ATTRIBUTES attributes;
@@ -54,6 +58,7 @@ _Use_decl_annotations_
 void DeviceCleanup(WDFOBJECT deviceObject)
 {
     DeviceContext* context = GetDeviceContext(deviceObject);
+    context->adapter.Reset();
     nvCommonHostShutdown(&context->commonHost);
     context->~DeviceContext();
 }
@@ -123,6 +128,21 @@ NTSTATUS ReleaseHardware(
     context->dmaEngine.Reset();
     context->registerAperture.Reset();
     context->configSpace.Reset();
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS EnterD0(WDFDEVICE device, WDF_POWER_DEVICE_STATE previousState)
+{
+    UNREFERENCED_PARAMETER(previousState);
+    return GetDeviceContext(device)->adapter.EnterD0(device);
+}
+
+_Use_decl_annotations_
+NTSTATUS ExitD0(WDFDEVICE device, WDF_POWER_DEVICE_STATE targetState)
+{
+    UNREFERENCED_PARAMETER(targetState);
+    GetDeviceContext(device)->adapter.ExitD0();
     return STATUS_SUCCESS;
 }
 
