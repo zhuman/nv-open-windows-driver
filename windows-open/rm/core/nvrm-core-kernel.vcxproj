@@ -73,6 +73,21 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_virt_mem_mgr_nvoc.c">
       <Link>generated\g_virt_mem_mgr_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_mgr_nvoc.c">
+      <Link>generated\g_gpu_mgr_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_halspec_nvoc.c">
+      <Link>generated\g_gpu_halspec_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_nvoc.c">
+      <Link>generated\g_gpu_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_device_nvoc.c">
+      <Link>generated\g_device_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_resource_nvoc.c">
+      <Link>generated\g_gpu_resource_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_traceable_nvoc.c">
       <Link>generated\g_traceable_nvoc.c</Link>
     </ClCompile>
@@ -237,6 +252,30 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\heap.c">
       <Link>upstream\memory\heap.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\device.c">
+      <Link>upstream\gpu\device.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu.c">
+      <Link>upstream\gpu\gpu.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_resource.c">
+      <Link>upstream\gpu\gpu_resource.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_db.c">
+      <Link>upstream\gpu_mgr\gpu_db.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_group.c">
+      <Link>upstream\gpu_mgr\gpu_group.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_mgmt_api.c">
+      <Link>upstream\gpu_mgr\gpu_mgmt_api.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_mgr.c">
+      <Link>upstream\gpu_mgr\gpu_mgr.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_mgr_sli.c">
+      <Link>upstream\gpu_mgr\gpu_mgr_sli.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_mgr.c">
       <Link>upstream\memory\mem_mgr.c</Link>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -269,6 +308,11 @@
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>$(IntDir)nvrm_version.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <AdditionalOptions>/clang:-Wno-unused-variable %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Update="$(RepoRoot)src\nvidia\src\kernel\gpu\device.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_resource.c;$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_db.c;$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_group.c;$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_mgmt_api.c;$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_mgr.c;$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_mgr_sli.c">
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(IntDir)nvrm_version.h;$(RepoRoot)src\common\nvlink\interface\nvlink.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <AdditionalOptions>/clang:-Wno-sign-compare %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemGroup>
   <Target Name="GenerateNvRmVersionHeader" BeforeTargets="ClCompile">
