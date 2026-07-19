@@ -128,8 +128,22 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
   .\nv-windows-drivers.slnx /t:Build /p:Configuration=Debug /p:Platform=x64 /m
 ```
 
-Both INFs use root-enumerated development hardware IDs. They deliberately do
-not match NVIDIA PCI devices yet.
+Both INFs retain root-enumerated development hardware IDs and also match every
+NVIDIA PCI device listed in the repository's top-level compatible-GPU table.
+Generic rows generate `PCI\VEN_10DE&DEV_xxxx` matches; subsystem-specific rows
+generate the more specific Windows `SUBSYS_<device><vendor>` form. Device
+Manager therefore displays the corresponding product name from that table.
+
+The generated model and string blocks are authoritative output. Regenerate
+both INFs after the compatible-GPU table changes instead of editing those
+blocks by hand:
+
+```powershell
+& .\Generate-SupportedDeviceInfs.ps1
+```
+
+KMDOD and IddCx are alternative function drivers for the same PCI function.
+Install only one package on a given GPU at a time.
 
 The next NvPort expansion should follow the first thread and allocator call
 sites reached while importing the selected RM core. Keep using sidecar Windows
