@@ -66,6 +66,12 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\multimap.c">
       <Link>upstream\containers\multimap.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\lib\base_utils.c">
+      <Link>upstream\base_utils.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\utils\nvassert.c">
+      <Link>upstream\nvassert.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hal.c">
       <Link>upstream\hal.c</Link>
     </ClCompile>
