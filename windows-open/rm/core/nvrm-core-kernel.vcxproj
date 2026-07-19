@@ -78,6 +78,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hals_all.c">
       <Link>upstream\hals_all.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hals_stub.c">
+      <Link>upstream\hals_stub.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal_mgr.c">
       <Link>upstream\hal_mgr.c</Link>
     </ClCompile>
@@ -110,6 +113,15 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\resource_desc.c">
       <Link>upstream\resource_desc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpcstructurecopy.c">
+      <Link>upstream\rpcstructurecopy.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpc.c">
+      <Link>upstream\rpc.c</Link>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(IntDir)nvrm_version.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <AdditionalOptions>/clang:-Wno-unused-variable %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemGroup>
   <Target Name="GenerateNvRmVersionHeader" BeforeTargets="ClCompile">
