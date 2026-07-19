@@ -64,6 +64,15 @@
       <Link>generated\g_client_resource_nvoc.c</Link>
       <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_resource_nvoc.c">
+      <Link>generated\g_resource_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_event_api_nvoc.c">
+      <Link>generated\g_event_api_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_vaspace_nvoc.c">
+      <Link>generated\g_vaspace_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_io_vaspace_nvoc.c">
       <Link>generated\g_io_vaspace_nvoc.c</Link>
     </ClCompile>
@@ -215,6 +224,13 @@
       <Link>upstream\rmapi\resource.c</Link>
       <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\event_api.c">
+      <Link>upstream\rmapi\event_api.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\event_notification.c">
+      <Link>upstream\rmapi\event_notification.c</Link>
+      <AdditionalOptions>/clang:-Wno-sign-compare %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_utils.c">
       <Link>upstream\rmapi\rmapi_utils.c</Link>
       <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
@@ -299,6 +315,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\virt_mem_mgr.c">
       <Link>upstream\memory\virt_mem_mgr.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\vaspace.c">
+      <Link>upstream\memory\vaspace.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpcstructurecopy.c">
       <Link>upstream\rpcstructurecopy.c</Link>
