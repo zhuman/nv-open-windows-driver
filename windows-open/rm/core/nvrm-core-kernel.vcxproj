@@ -97,11 +97,23 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_resource_nvoc.c">
       <Link>generated\g_gpu_resource_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_tmr_nvoc.c">
+      <Link>generated\g_tmr_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_objtmr_nvoc.c">
+      <Link>generated\g_objtmr_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_ref_count_nvoc.c">
+      <Link>generated\g_ref_count_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_traceable_nvoc.c">
       <Link>generated\g_traceable_nvoc.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvoc\src\runtime.c">
       <Link>upstream\nvoc_runtime.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\interface\rmapi\src\g_finn_rm_api.c">
+      <Link>upstream\rmapi\g_finn_rm_api.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\hashmap.c">
       <Link>upstream\containers\hashmap.c</Link>
@@ -286,6 +298,13 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_timeout.c">
       <Link>upstream\gpu\gpu_timeout.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\timer\timer.c">
+      <Link>upstream\gpu\timer.c</Link>
+      <AdditionalOptions>/clang:-Wno-cast-function-type-mismatch %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\timer\timer_ostimer.c">
+      <Link>upstream\gpu\timer_ostimer.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_db.c">
       <Link>upstream\gpu_mgr\gpu_db.c</Link>
