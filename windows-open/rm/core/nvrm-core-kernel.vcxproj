@@ -48,6 +48,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_hal_nvoc.c">
       <Link>generated\g_hal_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_hypervisor_nvoc.c">
+      <Link>generated\g_hypervisor_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_system_nvoc.c">
       <Link>generated\g_system_nvoc.c</Link>
     </ClCompile>
@@ -329,6 +332,21 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\nbsi\nbsi_init.c">
       <Link>upstream\platform\nbsi_init.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hypervisor.c">
+      <Link>upstream\hypervisor\hypervisor.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\xen\xen.c">
+      <Link>upstream\hypervisor\xen.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\kvm\kvm.c">
+      <Link>upstream\hypervisor\kvm.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hyperv\hyperv.c">
+      <Link>upstream\hypervisor\hyperv.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\vmware\vmware.c">
+      <Link>upstream\hypervisor\vmware.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_mgr.c">
       <Link>upstream\memory\mem_mgr.c</Link>

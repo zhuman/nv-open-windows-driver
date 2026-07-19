@@ -104,6 +104,11 @@ the next mandatory system child, `OBJPFM`. Its generated class, common platform
 implementation, and NBSI table owner compile unchanged, preserving per-system
 NBSI state and the later ACPI/VBIOS discovery path without introducing a
 Windows-only data-layout fork.
+The following mandatory child, `OBJHYPERVISOR`, also compiles from its generated
+class and common Xen, KVM, Hyper-V, and VMware backends. x64 detection uses the
+Windows `osNv_cpuid` export; ARM64 retains the upstream `osGetSmbiosTable`
+dependency as an explicit OS-service boundary to close before RM is linked into
+KMDOD.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
