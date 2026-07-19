@@ -158,6 +158,10 @@ access-checked with `ObReferenceObjectByHandle`, held for the RM event lifetime,
 signaled with `KeSetEvent`, and released through the matching object-reference
 ABI. Kernel callbacks, index filtering, and subdevice filtering remain in the
 thin RM sidecar while WDK types stay in the platform layer.
+The generated `MpsApi` resource and its upstream constructor/destructor now
+close the MPS catalog entry unchanged. The class adds no Windows OS boundary or
+hardware dependency; its policy remains in the existing resource-server access
+and parent-class checks.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor
