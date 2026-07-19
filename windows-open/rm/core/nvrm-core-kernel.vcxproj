@@ -84,6 +84,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_kernel_vgpu_mgr_nvoc.c">
       <Link>generated\g_kernel_vgpu_mgr_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_kernel_watchdog_nvoc.c">
+      <Link>generated\g_kernel_watchdog_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_platform_request_handler_nvoc.c">
       <Link>generated\g_platform_request_handler_nvoc.c</Link>
     </ClCompile>
@@ -361,6 +364,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_timeout.c">
       <Link>upstream\gpu\gpu_timeout.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gr\kernel_watchdog.c">
+      <Link>upstream\gpu\gr\kernel_watchdog.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\eng_state.c">
       <Link>upstream\gpu\eng_state.c</Link>

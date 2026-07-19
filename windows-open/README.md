@@ -162,6 +162,10 @@ The generated `MpsApi` resource and its upstream constructor/destructor now
 close the MPS catalog entry unchanged. The class adds no Windows OS boundary or
 hardware dependency; its policy remains in the existing resource-server access
 and parent-class checks.
+The generated `KernelWatchdog` resource and its upstream implementation also
+compile unchanged. Registry overrides use the existing Windows registry ABI;
+its remaining MIG predicate is shared with the wider pending MIG manager
+closure rather than introducing a new startup dependency.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor
