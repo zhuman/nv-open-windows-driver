@@ -8,6 +8,13 @@ namespace {
 constexpr USHORT BusInterfaceVersion = 1;
 constexpr USHORT NvidiaVendorId = 0x10DE;
 constexpr size_t MaximumDmaTransferLength = 0xFFFFFFFFull;
+constexpr ULONG PmcBoot0Offset = 0x00000000;
+constexpr ULONG PmcBoot42Offset = 0x00000A00;
+constexpr SIZE_T RequiredIdentityLength = PmcBoot42Offset + sizeof(ULONG);
+constexpr ULONG PciBarAddressMask = ~0x0Ful;
+constexpr ULONG PciBarMemoryTypeMask = 0x6;
+constexpr ULONG PciBarMemoryType64 = 0x4;
+constexpr ULONG InvalidRegisterValue = static_cast<ULONG>(-1);
 
 struct PciCommonHeader final
 {
@@ -78,6 +85,24 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
         return STATUS_NOT_SUPPORTED;
     }
 
+    if ((header.baseAddresses[0] & 0x1) != 0)
+    {
+        Reset();
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ULONGLONG registerBarAddress = header.baseAddresses[0] & PciBarAddressMask;
+    if ((header.baseAddresses[0] & PciBarMemoryTypeMask) == PciBarMemoryType64)
+    {
+        registerBarAddress |= static_cast<ULONGLONG>(header.baseAddresses[1]) << 32;
+    }
+
+    if (registerBarAddress == 0)
+    {
+        Reset();
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
     identity_.vendorId = header.vendorId;
     identity_.deviceId = header.deviceId;
     identity_.subsystemVendorId = header.subsystemVendorId;
@@ -86,6 +111,7 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
     identity_.programmingInterface = header.programmingInterface;
     identity_.subclass = header.subclass;
     identity_.baseClass = header.baseClass;
+    registerBarAddress_.QuadPart = registerBarAddress;
     identityValid_ = true;
 
     return STATUS_SUCCESS;
@@ -100,6 +126,7 @@ void ConfigSpace::Reset() noexcept
 
     RtlZeroMemory(&interface_, sizeof(interface_));
     RtlZeroMemory(&identity_, sizeof(identity_));
+    registerBarAddress_.QuadPart = 0;
     identityValid_ = false;
 }
 
@@ -149,6 +176,114 @@ bool ConfigSpace::IsAvailable() const noexcept
 const PciIdentity* ConfigSpace::Identity() const noexcept
 {
     return identityValid_ ? &identity_ : nullptr;
+}
+
+PHYSICAL_ADDRESS ConfigSpace::RegisterBarAddress() const noexcept
+{
+    return registerBarAddress_;
+}
+
+NTSTATUS RegisterAperture::Initialize(
+    _In_ WDFDEVICE device,
+    _In_ WDFCMRESLIST resourcesTranslated,
+    _In_ const ConfigSpace& configSpace) noexcept
+{
+    Reset();
+
+    const PHYSICAL_ADDRESS registerBarAddress = configSpace.RegisterBarAddress();
+    const ULONG resourceCount = WdfCmResourceListGetCount(resourcesTranslated);
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR registerRange = nullptr;
+    for (ULONG index = 0; index < resourceCount; ++index)
+    {
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR resource =
+            WdfCmResourceListGetDescriptor(resourcesTranslated, index);
+        if (resource != nullptr &&
+            resource->Type == CmResourceTypeMemory &&
+            resource->u.Memory.Start.QuadPart == registerBarAddress.QuadPart)
+        {
+            registerRange = resource;
+            break;
+        }
+    }
+
+    if (registerRange == nullptr || registerRange->u.Memory.Length < RequiredIdentityLength)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    NTSTATUS status = WdfDeviceMapIoSpace(
+        device,
+        registerRange->u.Memory.Start,
+        registerRange->u.Memory.Length,
+        MmNonCached,
+        &address_);
+    if (!NT_SUCCESS(status))
+    {
+        Reset();
+        return status;
+    }
+
+    device_ = device;
+    length_ = registerRange->u.Memory.Length;
+    status = Read32(PmcBoot0Offset, &identity_.boot0);
+    if (NT_SUCCESS(status))
+    {
+        status = Read32(PmcBoot42Offset, &identity_.boot42);
+    }
+
+    if (!NT_SUCCESS(status) ||
+        (identity_.boot0 == InvalidRegisterValue &&
+         identity_.boot42 == InvalidRegisterValue))
+    {
+        Reset();
+        return NT_SUCCESS(status) ? STATUS_DEVICE_DOES_NOT_EXIST : status;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+void RegisterAperture::Reset() noexcept
+{
+    if (device_ != nullptr && address_ != nullptr)
+    {
+        WdfDeviceUnmapIoSpace(device_, address_, length_);
+    }
+
+    device_ = nullptr;
+    address_ = nullptr;
+    length_ = 0;
+    RtlZeroMemory(&identity_, sizeof(identity_));
+}
+
+NTSTATUS RegisterAperture::Read32(
+    _In_ SIZE_T offset,
+    _Out_ ULONG* value) const noexcept
+{
+    if (!IsMapped() || value == nullptr ||
+        offset > length_ || sizeof(*value) > length_ - offset)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *value = WDF_READ_REGISTER_ULONG(
+        device_,
+        reinterpret_cast<PULONG>(static_cast<UCHAR*>(address_) + offset));
+    return STATUS_SUCCESS;
+}
+
+bool RegisterAperture::IsMapped() const noexcept
+{
+    return address_ != nullptr;
+}
+
+SIZE_T RegisterAperture::Length() const noexcept
+{
+    return length_;
+}
+
+const BootIdentity* RegisterAperture::Identity() const noexcept
+{
+    return IsMapped() ? &identity_ : nullptr;
 }
 
 NTSTATUS DmaEngine::Initialize(_In_ WDFDEVICE device) noexcept

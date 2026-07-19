@@ -78,9 +78,20 @@ NTSTATUS PrepareHardware(
         return status;
     }
 
+    status = context->registerAperture.Initialize(
+        device,
+        resourcesTranslated,
+        context->configSpace);
+    if (!NT_SUCCESS(status))
+    {
+        context->configSpace.Reset();
+        return status;
+    }
+
     status = context->dmaEngine.Initialize(device);
     if (!NT_SUCCESS(status))
     {
+        context->registerAperture.Reset();
         context->configSpace.Reset();
         return status;
     }
@@ -92,6 +103,7 @@ NTSTATUS PrepareHardware(
     if (!NT_SUCCESS(status))
     {
         context->dmaEngine.Reset();
+        context->registerAperture.Reset();
         context->configSpace.Reset();
         return status;
     }
@@ -109,6 +121,7 @@ NTSTATUS ReleaseHardware(
     DeviceContext* context = GetDeviceContext(device);
     context->interrupt.Reset();
     context->dmaEngine.Reset();
+    context->registerAperture.Reset();
     context->configSpace.Reset();
     return STATUS_SUCCESS;
 }

@@ -13,6 +13,7 @@ struct DeviceContext final
 {
     NV_COMMON_HOST_CONTEXT commonHost;
     ConfigSpace configSpace;
+    RegisterAperture registerAperture;
     DmaEngine dmaEngine;
     Interrupt interrupt;
 };

@@ -21,6 +21,12 @@ struct PciIdentity final
     UCHAR baseClass;
 };
 
+struct BootIdentity final
+{
+    ULONG boot0;
+    ULONG boot42;
+};
+
 class ConfigSpace final
 {
 public:
@@ -39,11 +45,36 @@ public:
 
     [[nodiscard]] bool IsAvailable() const noexcept;
     [[nodiscard]] const PciIdentity* Identity() const noexcept;
+    [[nodiscard]] PHYSICAL_ADDRESS RegisterBarAddress() const noexcept;
 
 private:
     BUS_INTERFACE_STANDARD interface_;
     PciIdentity identity_;
+    PHYSICAL_ADDRESS registerBarAddress_;
     bool identityValid_;
+};
+
+class RegisterAperture final
+{
+public:
+    NTSTATUS Initialize(
+        _In_ WDFDEVICE device,
+        _In_ WDFCMRESLIST resourcesTranslated,
+        _In_ const ConfigSpace& configSpace) noexcept;
+
+    void Reset() noexcept;
+
+    NTSTATUS Read32(_In_ SIZE_T offset, _Out_ ULONG* value) const noexcept;
+
+    [[nodiscard]] bool IsMapped() const noexcept;
+    [[nodiscard]] SIZE_T Length() const noexcept;
+    [[nodiscard]] const BootIdentity* Identity() const noexcept;
+
+private:
+    WDFDEVICE device_;
+    void* address_;
+    SIZE_T length_;
+    BootIdentity identity_;
 };
 
 class DmaEngine final

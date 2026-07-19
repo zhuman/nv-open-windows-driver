@@ -32,6 +32,14 @@ process-heap, user-mode time, and debugger callbacks. Each device owns its
 device-specific resources and tears them down with the adapter or WDF object
 lifecycle.
 
+For PCI-enumerated IddCx devices, hardware preparation validates NVIDIA PCI
+identity, decodes BAR0, matches it to the translated memory resource, and maps
+it noncached through UMDF before creating DMA and interrupt objects. Framework-
+mediated reads collect `PMC_BOOT_0` and `PMC_BOOT_42`; an all-ones response
+fails preparation as a missing device. Release and every failure path unwind
+interrupt, DMA, MMIO, and bus-interface state in reverse ownership order. The
+root-enumerated development device retains its resource-free software path.
+
 KMDOD binds one driver-owned common host context to NvPort before registering
 with Dxgkrnl and unbinds it from the driver unload callback. Adapter start and
 stop only manage device-owned PCI, MMIO, interrupt, and display state, so
