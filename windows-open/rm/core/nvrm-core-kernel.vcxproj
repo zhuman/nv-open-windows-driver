@@ -54,6 +54,18 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\nvoc\src\runtime.c">
       <Link>upstream\nvoc_runtime.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\hashmap.c">
+      <Link>upstream\containers\hashmap.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\list.c">
+      <Link>upstream\containers\list.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\map.c">
+      <Link>upstream\containers\map.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\multimap.c">
+      <Link>upstream\containers\multimap.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hal.c">
       <Link>upstream\hal.c</Link>
     </ClCompile>
