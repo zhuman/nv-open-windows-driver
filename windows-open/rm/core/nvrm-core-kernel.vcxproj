@@ -60,6 +60,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_acct_nvoc.c">
       <Link>generated\g_gpu_acct_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_journal_nvoc.c">
+      <Link>generated\g_journal_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_platform_request_handler_nvoc.c">
       <Link>generated\g_platform_request_handler_nvoc.c</Link>
     </ClCompile>
@@ -382,6 +385,10 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\gpu_acct.c">
       <Link>upstream\diagnostics\gpu_acct.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\journal.c">
+      <Link>upstream\diagnostics\journal.c</Link>
+      <ForcedIncludeFiles>$(IntDir)nvrm_version.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_mgr.c">
       <Link>upstream\memory\mem_mgr.c</Link>

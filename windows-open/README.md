@@ -126,6 +126,10 @@ and control/sensor implementation. Both architectures compile the upstream
 sources unchanged; target-local forced inclusion supplies the Unix control
 parameter declarations exposed by the shared generated client-resource header,
 without importing Unix control behavior.
+The generated `OBJRCDB` class and common robust-error journal now compile
+unchanged. Construction owns its journal, assertion, debugger, and diagnostic
+ring buffers; the project supplies the generated `NV_VERSION_STRING` header
+using the same target-local version metadata pattern as other RM sources.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
