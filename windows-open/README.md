@@ -145,6 +145,10 @@ probe behavior remain deferred until their startup callers are imported.
 The generated `GpuDb` class now closes the already-compiled common GPU database
 implementation. It constructs an empty driver-global GPU list protected by an
 NvPort mutex; per-GPU registration remains deferred to device startup.
+Generated RM configuration predicates and the shared `OBJENGSTATE` and
+`IntrService` NVOC ancestors now compile unchanged. A direct `coreInitializeRm`
+link probe resolves those families and is being used to drive the remaining
+resource-catalog and GPU HAL closure without weakening the production path.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

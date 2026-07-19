@@ -78,6 +78,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_platform_request_handler_nvoc.c">
       <Link>generated\g_platform_request_handler_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_rmconfig_util.c">
+      <Link>generated\g_rmconfig_util.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_system_nvoc.c">
       <Link>generated\g_system_nvoc.c</Link>
     </ClCompile>
@@ -112,6 +115,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_io_vaspace_nvoc.c">
       <Link>generated\g_io_vaspace_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_intr_service_nvoc.c">
+      <Link>generated\g_intr_service_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_mem_mgr_nvoc.c">
       <Link>generated\g_mem_mgr_nvoc.c</Link>
     </ClCompile>
@@ -129,6 +135,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_device_nvoc.c">
       <Link>generated\g_device_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_eng_state_nvoc.c">
+      <Link>generated\g_eng_state_nvoc.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_resource_nvoc.c">
       <Link>generated\g_gpu_resource_nvoc.c</Link>
@@ -340,6 +349,12 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_timeout.c">
       <Link>upstream\gpu\gpu_timeout.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\eng_state.c">
+      <Link>upstream\gpu\eng_state.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\intr\intr_service.c">
+      <Link>upstream\gpu\intr_service.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\timer\timer.c">
       <Link>upstream\gpu\timer.c</Link>
