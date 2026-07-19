@@ -106,6 +106,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\hashmap.c">
       <Link>upstream\containers\hashmap.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\btree\btree.c">
+      <Link>upstream\containers\btree.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\list.c">
       <Link>upstream\containers\list.c</Link>
     </ClCompile>
@@ -235,6 +238,10 @@
       <Link>upstream\rmapi\rmapi_utils.c</Link>
       <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_finn.c">
+      <Link>upstream\rmapi\rmapi_finn.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\mapping.c">
       <Link>upstream\rmapi\mapping.c</Link>
       <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
@@ -276,6 +283,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_resource.c">
       <Link>upstream\gpu\gpu_resource.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_timeout.c">
+      <Link>upstream\gpu\gpu_timeout.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_db.c">
       <Link>upstream\gpu_mgr\gpu_db.c</Link>
