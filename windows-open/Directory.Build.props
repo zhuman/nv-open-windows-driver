@@ -6,6 +6,8 @@
     <NvidiaSdkInclude>$(RepoRoot)src\common\sdk\nvidia\inc</NvidiaSdkInclude>
     <NvidiaCommonInclude>$(RepoRoot)src\common\inc</NvidiaCommonInclude>
     <NvWindowsCommonInclude>$(WindowsOpenRoot)common\include</NvWindowsCommonInclude>
+    <NvidiaVersionFile>$(RepoRoot)version.mk</NvidiaVersionFile>
+    <NvidiaVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(NvidiaVersionFile)')), '(?m)^NVIDIA_VERSION\s*=\s*([^\r\n]+)').Groups[1].Value.Trim())</NvidiaVersion>
     <NvArchitectureDefinitions Condition="'$(Platform)' == 'x64'">_AMD64_=1</NvArchitectureDefinitions>
     <NvArchitectureDefinitions Condition="'$(Platform)' == 'ARM64'">_ARM64_=1</NvArchitectureDefinitions>
     <OutDir>$(WindowsOpenRoot)out\$(Platform)\$(Configuration)\$(MSBuildProjectName)\</OutDir>

@@ -112,6 +112,12 @@
       <Link>upstream\resource_desc.c</Link>
     </ClCompile>
   </ItemGroup>
+  <Target Name="GenerateNvRmVersionHeader" BeforeTargets="ClCompile">
+    <WriteLinesToFile
+      File="$(IntDir)nvrm_version.h"
+      Lines="#ifndef NVRM_VERSION_H;#define NVRM_VERSION_H;#define NV_VERSION_STRING &quot;$(NvidiaVersion)&quot;;#endif"
+      Overwrite="true" />
+  </Target>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
     <ItemGroup>
       <DriverProjectAttributes Include="$(ProjectGuid)">
