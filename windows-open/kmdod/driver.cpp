@@ -4,6 +4,7 @@
 #include "nvcommon_host.h"
 #include "nvplatform_common.h"
 #include "nvplatform_registry.h"
+#include "nvplatform_system.h"
 #include "nvport_windows.h"
 
 namespace {
@@ -15,16 +16,25 @@ bool runtimeInitialized;
 
 namespace nv::kmdod {
 
-NTSTATUS InitializeDriverRuntime(_In_ const UNICODE_STRING* registryPath) noexcept
+NTSTATUS InitializeDriverRuntime(
+    _In_ PDRIVER_OBJECT driverObject,
+    _In_ const UNICODE_STRING* registryPath) noexcept
 {
     if (runtimeInitialized)
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
 
-    NTSTATUS ntStatus = NvPlatformRegistryInitialize(registryPath);
+    NTSTATUS ntStatus = NvPlatformSystemInitialize(driverObject);
     if (!NT_SUCCESS(ntStatus))
     {
+        return ntStatus;
+    }
+
+    ntStatus = NvPlatformRegistryInitialize(registryPath);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        NvPlatformSystemShutdown();
         return ntStatus;
     }
 
@@ -34,6 +44,7 @@ NTSTATUS InitializeDriverRuntime(_In_ const UNICODE_STRING* registryPath) noexce
     if (status != NV_OK)
     {
         NvPlatformRegistryShutdown();
+        NvPlatformSystemShutdown();
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
@@ -42,6 +53,7 @@ NTSTATUS InitializeDriverRuntime(_In_ const UNICODE_STRING* registryPath) noexce
     {
         nvCommonHostShutdown(&commonHost);
         NvPlatformRegistryShutdown();
+        NvPlatformSystemShutdown();
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
@@ -56,6 +68,7 @@ void ShutdownDriverRuntime() noexcept
         nvPortWindowsShutdown(&commonHost);
         nvCommonHostShutdown(&commonHost);
         NvPlatformRegistryShutdown();
+        NvPlatformSystemShutdown();
         runtimeInitialized = false;
     }
 }
@@ -69,7 +82,7 @@ extern "C" NTSTATUS DriverEntry(
     PDRIVER_OBJECT driverObject,
     PUNICODE_STRING registryPath)
 {
-    NTSTATUS status = nv::kmdod::InitializeDriverRuntime(registryPath);
+    NTSTATUS status = nv::kmdod::InitializeDriverRuntime(driverObject, registryPath);
     if (!NT_SUCCESS(status))
     {
         return status;

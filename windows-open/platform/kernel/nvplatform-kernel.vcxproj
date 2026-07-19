@@ -48,6 +48,7 @@
     <ClInclude Include="nvplatform_registry.h" />
     <ClInclude Include="nvplatform_registry_rm.h" />
     <ClInclude Include="nvplatform_sync.h" />
+    <ClInclude Include="nvplatform_system.h" />
     <ClInclude Include="nvplatform_system_rm.h" />
     <ClInclude Include="nvplatform_thread.h" />
     <ClInclude Include="nvplatform_time_rm.h" />

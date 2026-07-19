@@ -169,6 +169,11 @@ Windows guest-isolation provider can report the active technology explicitly.
 The optional service `Parameters\BugCheckOnTimeout` DWORD controls RM's timeout
 bugcheck property. Missing, invalid, and zero values leave bugchecks disabled;
 any nonzero DWORD enables the existing RM timeout policy.
+RM system callbacks use driver-object-owned `IO_WORKITEM` storage and execute on
+the delayed system worker queue. Rundown protection rejects new callbacks once
+RM teardown starts and makes `osSyncWithRmDestroy` wait for every accepted
+callback before global state is released. Work storage is nonpaged and retains
+the platform's zero-initialization policy.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

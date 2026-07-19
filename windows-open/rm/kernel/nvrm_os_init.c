@@ -1,9 +1,16 @@
 #include "core/thread_state.h"
 #include "g_hal_register.h"
+#include "nvplatform_system_rm.h"
 
 NV_STATUS osRmInitRm(void)
 {
     NV_STATUS status = REGISTER_ALL_HALS();
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = NvPlatformRmSystemWorkInitialize();
     if (status != NV_OK)
     {
         return status;

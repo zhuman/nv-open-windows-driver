@@ -23,3 +23,15 @@ NvBool osBugCheckOnTimeoutEnabled(void)
         ? NV_TRUE
         : NV_FALSE;
 }
+
+NV_STATUS osQueueSystemWorkItem(
+    void (*function)(void*),
+    void* context)
+{
+    return NvPlatformRmQueueSystemWork(function, context);
+}
+
+void osSyncWithRmDestroy(void)
+{
+    NvPlatformRmDrainSystemWork();
+}
