@@ -26,6 +26,16 @@ NvU32 osGetCurrentProcessFlags(void)
     return NvPlatformGetCurrentProcessFlags();
 }
 
+NvU32 osGetCurrentProcess(void)
+{
+    return (NvU32)NvPlatformGetCurrentProcessId();
+}
+
+void osGetCurrentProcessName(char* processName, NvU32 length)
+{
+    NvPlatformGetCurrentProcessName(processName, length);
+}
+
 NV_STATUS osSchedule(void)
 {
     return NvPlatformScheduleThread();

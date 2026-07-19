@@ -9,6 +9,7 @@ extern "C" {
 
 NvU64 NvPlatformGetCurrentThreadId(void);
 NvU64 NvPlatformGetCurrentProcessId(void);
+void NvPlatformGetCurrentProcessName(char* processName, NvU32 length);
 NvU32 NvPlatformGetCurrentProcessFlags(void);
 NvBool NvPlatformIsThreadIdValid(NvU64 threadId);
 void NvPlatformYieldThread(void);

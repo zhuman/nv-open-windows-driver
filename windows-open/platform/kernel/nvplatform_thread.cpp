@@ -483,6 +483,50 @@ extern "C" NvU64 NvPlatformGetCurrentProcessId(void)
     return reinterpret_cast<NvU64>(PsGetCurrentProcessId());
 }
 
+extern "C" void NvPlatformGetCurrentProcessName(
+    char* processName,
+    NvU32 length)
+{
+    if (processName == nullptr || length == 0)
+    {
+        return;
+    }
+
+    processName[0] = '\0';
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return;
+    }
+
+    PUNICODE_STRING imageName = nullptr;
+    if (!NT_SUCCESS(SeLocateProcessImageName(
+            PsGetCurrentProcess(),
+            &imageName)) || imageName == nullptr)
+    {
+        return;
+    }
+
+    const NvU32 characterCount = imageName->Length / sizeof(WCHAR);
+    NvU32 basename = characterCount;
+    while (basename > 0 &&
+           imageName->Buffer[basename - 1] != L'\\' &&
+           imageName->Buffer[basename - 1] != L'/')
+    {
+        --basename;
+    }
+
+    NvU32 index = 0;
+    while (index + 1 < length && basename + index < characterCount)
+    {
+        const WCHAR character = imageName->Buffer[basename + index];
+        processName[index] = character <= 0x7f ?
+            static_cast<char>(character) : '?';
+        ++index;
+    }
+    processName[index] = '\0';
+    ExFreePool(imageName);
+}
+
 extern "C" NvU32 NvPlatformGetCurrentProcessFlags(void)
 {
     constexpr NvU32 KernelThread = 0x1;

@@ -7,6 +7,7 @@ extern "C" {
 #endif
 
 const NV_COMMON_HOST_SERVICES* NvPlatformGetCommonHostServices(void);
+NvU64 NvPlatformGetPageSize(void);
 
 void NvPlatformDebugPrintf(
 	NvU32 level,

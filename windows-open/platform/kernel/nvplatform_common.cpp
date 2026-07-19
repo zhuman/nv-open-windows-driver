@@ -86,6 +86,11 @@ extern "C" const NV_COMMON_HOST_SERVICES* NvPlatformGetCommonHostServices(void)
     return &Services;
 }
 
+extern "C" NvU64 NvPlatformGetPageSize(void)
+{
+    return PAGE_SIZE;
+}
+
 extern "C" void NvPlatformDebugPrintf(
     NvU32 level,
     const char* format,
