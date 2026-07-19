@@ -60,6 +60,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_acct_nvoc.c">
       <Link>generated\g_gpu_acct_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_fabric_nvoc.c">
+      <Link>generated\g_fabric_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_boost_mgr_nvoc.c">
       <Link>generated\g_gpu_boost_mgr_nvoc.c</Link>
     </ClCompile>
@@ -230,6 +233,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\thread_state.c">
       <Link>upstream\thread_state.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\compute\fabric.c">
+      <Link>upstream\compute\fabric.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\op_event_log.c">
       <Link>upstream\op_event_log.c</Link>
