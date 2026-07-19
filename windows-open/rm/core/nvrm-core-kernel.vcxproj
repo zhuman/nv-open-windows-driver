@@ -60,6 +60,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_acct_nvoc.c">
       <Link>generated\g_gpu_acct_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_db_nvoc.c">
+      <Link>generated\g_gpu_db_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_fabric_nvoc.c">
       <Link>generated\g_fabric_nvoc.c</Link>
     </ClCompile>

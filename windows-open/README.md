@@ -142,6 +142,9 @@ The generated `Fabric` system class and common fabric cache implementation now
 compile unchanged. Construction initializes driver-global event/cache containers
 and NvPort RW locks with an invalid node ID; fabric memory resources and GPU
 probe behavior remain deferred until their startup callers are imported.
+The generated `GpuDb` class now closes the already-compiled common GPU database
+implementation. It constructs an empty driver-global GPU list protected by an
+NvPort mutex; per-GPU registration remains deferred to device startup.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and
