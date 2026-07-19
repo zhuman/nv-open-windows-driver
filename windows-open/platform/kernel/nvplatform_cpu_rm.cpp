@@ -19,6 +19,7 @@ extern "C" int NvPlatformRmCpuId(
         return 0;
     }
 
+#if defined(_M_AMD64) || defined(_M_IX86)
     int registers[4]{};
     __cpuidex(registers, operation, suboperation);
     *eax = static_cast<NvU32>(registers[0]);
@@ -26,10 +27,20 @@ extern "C" int NvPlatformRmCpuId(
     *ecx = static_cast<NvU32>(registers[2]);
     *edx = static_cast<NvU32>(registers[3]);
     return 1;
+#else
+    UNREFERENCED_PARAMETER(operation);
+    UNREFERENCED_PARAMETER(suboperation);
+    *eax = 0;
+    *ebx = 0;
+    *ecx = 0;
+    *edx = 0;
+    return 0;
+#endif
 }
 
 extern "C" NvU32 NvPlatformGetRmCpuFrequencyMhz(void)
 {
+#if defined(_M_AMD64) || defined(_M_IX86)
     int registers[4]{};
     __cpuidex(registers, 0, 0);
     if (registers[0] < 0x16)
@@ -39,6 +50,9 @@ extern "C" NvU32 NvPlatformGetRmCpuFrequencyMhz(void)
 
     __cpuidex(registers, 0x16, 0);
     return static_cast<NvU32>(registers[0]) & 0xffffU;
+#else
+    return 0;
+#endif
 }
 
 extern "C" NvU32 NvPlatformGetRmCpuCount(void)

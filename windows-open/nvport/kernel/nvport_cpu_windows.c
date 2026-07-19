@@ -40,6 +40,7 @@ NV_STATUS portCpuExCpuId(
     NvU32 functionId,
     NvU32 subfunctionId)
 {
+#if NVCPU_IS_X86 || NVCPU_IS_X86_64
     int registers[4];
 
     if (cpuInfo == NULL)
@@ -53,6 +54,18 @@ NV_STATUS portCpuExCpuId(
     cpuInfo[2] = (NvU32)registers[2];
     cpuInfo[3] = (NvU32)registers[3];
     return NV_OK;
+#else
+    (void)functionId;
+    (void)subfunctionId;
+
+    if (cpuInfo == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    portMemSet(cpuInfo, 0, sizeof(NvU32) * 4);
+    return NV_ERR_NOT_SUPPORTED;
+#endif
 }
 
 NvS64 portCpuExQueryPerformanceCounter(NvS64* frequency)

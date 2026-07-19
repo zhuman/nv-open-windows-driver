@@ -9,9 +9,12 @@ DriverVer=07/15/2026,0.1.0.0
 PnpLockDown=1
 
 [Manufacturer]
-%ProviderName%=Models,NTamd64.10.0...22000
+%ProviderName%=Models,NTamd64.10.0...22000,NTarm64.10.0...22000
 
 [Models.NTamd64.10.0...22000]
+%DeviceName%=NvIddCx_Install,Root\NvWindowsIddCx
+
+[Models.NTarm64.10.0...22000]
 %DeviceName%=NvIddCx_Install,Root\NvWindowsIddCx
 
 [SourceDisksNames]
