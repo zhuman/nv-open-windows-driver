@@ -99,6 +99,11 @@ The first generated NVOC object graph now includes the upstream runtime,
 `Object`, `OBJTRACEABLE`, `OBJSYS`, `OBJHALMGR`, `OBJHAL`, and `OBJOS` class
 bodies. Windows constructs `OBJOS` with generated property defaults instead of
 inheriting Unix reset, ACPI-cache, or vblank policy.
+The generated resource, GPU, memory, and FINN foundations are now followed by
+the next mandatory system child, `OBJPFM`. Its generated class, common platform
+implementation, and NBSI table owner compile unchanged, preserving per-system
+NBSI state and the later ACPI/VBIOS discovery path without introducing a
+Windows-only data-layout fork.
 Its raw allocation header retains the pool type needed by the host free callback;
 kernel allocations remain zero-initialized through the default `ExAllocatePool2`
 behavior. Upstream counter-only memory tracking reports aggregate and

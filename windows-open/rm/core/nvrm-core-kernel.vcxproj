@@ -39,6 +39,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_os_nvoc.c">
       <Link>generated\g_os_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_platform_nvoc.c">
+      <Link>generated\g_platform_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_hal_mgr_nvoc.c">
       <Link>generated\g_hal_mgr_nvoc.c</Link>
     </ClCompile>
@@ -320,6 +323,12 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu_mgr\gpu_mgr_sli.c">
       <Link>upstream\gpu_mgr\gpu_mgr_sli.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\platform.c">
+      <Link>upstream\platform\platform.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\nbsi\nbsi_init.c">
+      <Link>upstream\platform\nbsi_init.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_mgr.c">
       <Link>upstream\memory\mem_mgr.c</Link>
