@@ -48,6 +48,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_system_nvoc.c">
       <Link>generated\g_system_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_rs_server_nvoc.c">
+      <Link>generated\g_rs_server_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_traceable_nvoc.c">
       <Link>generated\g_traceable_nvoc.c</Link>
     </ClCompile>
@@ -71,6 +74,28 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\utils\nvassert.c">
       <Link>upstream\nvassert.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\resserv\src\rs_access_map.c">
+      <Link>upstream\resserv\rs_access_map.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\resserv\src\rs_access_rights.c">
+      <Link>upstream\resserv\rs_access_rights.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\resserv\src\rs_client.c">
+      <Link>upstream\resserv\rs_client.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\resserv\src\rs_domain.c">
+      <Link>upstream\resserv\rs_domain.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\resserv\src\rs_resource.c">
+      <Link>upstream\resserv\rs_resource.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\resserv\src\rs_server.c">
+      <Link>upstream\resserv\rs_server.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\tls\tls.c">
+      <Link>upstream\tls.c</Link>
+      <PreprocessorDefinitions>NVOC=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\core\hal\hal.c">
       <Link>upstream\hal.c</Link>
@@ -104,6 +129,30 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi.c">
       <Link>upstream\rmapi.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\alloc_free.c">
+      <Link>upstream\rmapi\alloc_free.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\control.c">
+      <Link>upstream\rmapi\control.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\mapping.c">
+      <Link>upstream\rmapi\mapping.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\mapping_cpu.c">
+      <Link>upstream\rmapi\mapping_cpu.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\sharing.c">
+      <Link>upstream\rmapi\sharing.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rs_utils.c">
+      <Link>upstream\rmapi\rs_utils.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_cache.c">
       <Link>upstream\rmapi_cache.c</Link>
