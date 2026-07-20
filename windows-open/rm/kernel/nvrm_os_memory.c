@@ -5,6 +5,23 @@
 #include "g_mem_desc_nvoc.h"
 #include "kernel/os/nv_memory_type.h"
 
+void osInternalReserveAllocCallback(
+    NvU64 offset,
+    NvU64 size,
+    NvU32 gpuId)
+{
+    // Windows has no external observer for RM-internal framebuffer ranges.
+    (void)offset;
+    (void)size;
+    (void)gpuId;
+}
+
+void osInternalReserveFreeCallback(NvU64 offset, NvU32 gpuId)
+{
+    (void)offset;
+    (void)gpuId;
+}
+
 NV_STATUS osAllocPagesInternal(MEMORY_DESCRIPTOR* pMemDesc)
 {
     NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType;

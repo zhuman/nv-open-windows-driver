@@ -4,6 +4,11 @@
 
 typedef struct OBJGPU OBJGPU;
 
+void osQADbgRegistryInit(void)
+{
+    // Windows has no separate QA registry source to merge before normal reads.
+}
+
 NV_STATUS osReadRegistryDwordBase(
     OBJGPU* gpu,
     const char* valueName,
