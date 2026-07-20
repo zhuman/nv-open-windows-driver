@@ -3,6 +3,8 @@
 
 #include "hardware_services.hpp"
 
+#include <devpkey.h>
+
 namespace {
 
 constexpr USHORT BusInterfaceVersion = 1;
@@ -14,6 +16,14 @@ constexpr SIZE_T RequiredIdentityLength = PmcBoot42Offset + sizeof(ULONG);
 constexpr ULONG PciBarAddressMask = ~0x0Ful;
 constexpr ULONG PciBarMemoryTypeMask = 0x6;
 constexpr ULONG PciBarMemoryType64 = 0x4;
+constexpr ULONG PciBusNumberMask = 0x000000FF;
+constexpr ULONG PciSegmentNumberMask = 0x00FFFF00;
+constexpr ULONG PciSegmentNumberShift = 8;
+constexpr ULONG PciSegmentBusReservedMask = 0xFF000000;
+constexpr ULONG PciDeviceNumberMask = 0x0000001F;
+constexpr ULONG PciFunctionNumberMask = 0x000000E0;
+constexpr ULONG PciFunctionNumberShift = 5;
+constexpr ULONG PciSlotReservedMask = 0xFFFFFF00;
 constexpr ULONG InvalidRegisterValue = static_cast<ULONG>(-1);
 
 struct PciCommonHeader final
@@ -38,6 +48,33 @@ struct PciCommonHeader final
 
 static_assert(sizeof(PciCommonHeader) == 0x30);
 
+NTSTATUS QueryUint32Property(
+    _In_ WDFDEVICE device,
+    _In_ const DEVPROPKEY& propertyKey,
+    _Out_ ULONG* value) noexcept
+{
+    WDF_DEVICE_PROPERTY_DATA propertyData;
+    WDF_DEVICE_PROPERTY_DATA_INIT(&propertyData, &propertyKey);
+
+    ULONG requiredSize = 0;
+    DEVPROPTYPE propertyType = DEVPROP_TYPE_EMPTY;
+    const NTSTATUS status = WdfDeviceQueryPropertyEx(
+        device,
+        &propertyData,
+        sizeof(*value),
+        value,
+        &requiredSize,
+        &propertyType);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    return requiredSize == sizeof(*value) && propertyType == DEVPROP_TYPE_UINT32
+        ? STATUS_SUCCESS
+        : STATUS_DEVICE_CONFIGURATION_ERROR;
+}
+
 } // namespace
 
 namespace nv::iddcx {
@@ -46,7 +83,29 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
 {
     Reset();
 
-    NTSTATUS status = WdfFdoQueryForInterface(
+    ULONG segmentBus = 0;
+    NTSTATUS status = QueryUint32Property(
+        device,
+        DEVPKEY_Device_BusNumber,
+        &segmentBus);
+    if (!NT_SUCCESS(status) || (segmentBus & PciSegmentBusReservedMask) != 0)
+    {
+        Reset();
+        return NT_SUCCESS(status) ? STATUS_DEVICE_CONFIGURATION_ERROR : status;
+    }
+
+    ULONG slot = 0;
+    status = QueryUint32Property(
+        device,
+        DEVPKEY_Device_Address,
+        &slot);
+    if (!NT_SUCCESS(status) || (slot & PciSlotReservedMask) != 0)
+    {
+        Reset();
+        return NT_SUCCESS(status) ? STATUS_DEVICE_CONFIGURATION_ERROR : status;
+    }
+
+    status = WdfFdoQueryForInterface(
         device,
         &GUID_BUS_INTERFACE_STANDARD,
         reinterpret_cast<PINTERFACE>(&interface_),
@@ -85,19 +144,38 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
         return STATUS_NOT_SUPPORTED;
     }
 
-    if ((header.baseAddresses[0] & 0x1) != 0)
+    PHYSICAL_ADDRESS memoryBarAddresses[MaximumMemoryBarCount] = {};
+    ULONG memoryBarCount = 0;
+    for (ULONG barIndex = 0;
+         barIndex < ARRAYSIZE(header.baseAddresses) &&
+         memoryBarCount < MaximumMemoryBarCount;
+         ++barIndex)
     {
-        Reset();
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
+        const ULONG barLow = header.baseAddresses[barIndex];
+        if (barLow == 0 || (barLow & 0x1) != 0)
+        {
+            continue;
+        }
+
+        ULONGLONG barAddress = barLow & PciBarAddressMask;
+        if ((barLow & PciBarMemoryTypeMask) == PciBarMemoryType64)
+        {
+            if (++barIndex == ARRAYSIZE(header.baseAddresses))
+            {
+                Reset();
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            }
+            barAddress |= static_cast<ULONGLONG>(
+                header.baseAddresses[barIndex]) << 32;
+        }
+
+        if (barAddress != 0)
+        {
+            memoryBarAddresses[memoryBarCount++].QuadPart = barAddress;
+        }
     }
 
-    ULONGLONG registerBarAddress = header.baseAddresses[0] & PciBarAddressMask;
-    if ((header.baseAddresses[0] & PciBarMemoryTypeMask) == PciBarMemoryType64)
-    {
-        registerBarAddress |= static_cast<ULONGLONG>(header.baseAddresses[1]) << 32;
-    }
-
-    if (registerBarAddress == 0)
+    if (memoryBarCount == 0)
     {
         Reset();
         return STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -107,11 +185,21 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
     identity_.deviceId = header.deviceId;
     identity_.subsystemVendorId = header.subsystemVendorId;
     identity_.subsystemId = header.subsystemId;
+    identity_.domain = static_cast<USHORT>(
+        (segmentBus & PciSegmentNumberMask) >> PciSegmentNumberShift);
+    identity_.bus = static_cast<UCHAR>(segmentBus & PciBusNumberMask);
+    identity_.device = static_cast<UCHAR>(slot & PciDeviceNumberMask);
+    identity_.function = static_cast<UCHAR>(
+        (slot & PciFunctionNumberMask) >> PciFunctionNumberShift);
     identity_.revisionId = header.revisionId;
     identity_.programmingInterface = header.programmingInterface;
     identity_.subclass = header.subclass;
     identity_.baseClass = header.baseClass;
-    registerBarAddress_.QuadPart = registerBarAddress;
+    RtlCopyMemory(
+        memoryBarAddresses_,
+        memoryBarAddresses,
+        sizeof(memoryBarAddresses));
+    memoryBarCount_ = memoryBarCount;
     identityValid_ = true;
 
     return STATUS_SUCCESS;
@@ -126,7 +214,8 @@ void ConfigSpace::Reset() noexcept
 
     RtlZeroMemory(&interface_, sizeof(interface_));
     RtlZeroMemory(&identity_, sizeof(identity_));
-    registerBarAddress_.QuadPart = 0;
+    RtlZeroMemory(memoryBarAddresses_, sizeof(memoryBarAddresses_));
+    memoryBarCount_ = 0;
     identityValid_ = false;
 }
 
@@ -178,9 +267,20 @@ const PciIdentity* ConfigSpace::Identity() const noexcept
     return identityValid_ ? &identity_ : nullptr;
 }
 
+ULONG ConfigSpace::MemoryBarCount() const noexcept
+{
+    return memoryBarCount_;
+}
+
+PHYSICAL_ADDRESS ConfigSpace::MemoryBarAddress(_In_ ULONG index) const noexcept
+{
+    PHYSICAL_ADDRESS address = {};
+    return index < memoryBarCount_ ? memoryBarAddresses_[index] : address;
+}
+
 PHYSICAL_ADDRESS ConfigSpace::RegisterBarAddress() const noexcept
 {
-    return registerBarAddress_;
+    return MemoryBarAddress(0);
 }
 
 NTSTATUS RegisterAperture::Initialize(

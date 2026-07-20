@@ -11,10 +11,14 @@ namespace nv::iddcx {
 
 struct PciIdentity final
 {
+    USHORT domain;
     USHORT vendorId;
     USHORT deviceId;
     USHORT subsystemVendorId;
     USHORT subsystemId;
+    UCHAR bus;
+    UCHAR device;
+    UCHAR function;
     UCHAR revisionId;
     UCHAR programmingInterface;
     UCHAR subclass;
@@ -30,6 +34,8 @@ struct BootIdentity final
 class ConfigSpace final
 {
 public:
+    static constexpr ULONG MaximumMemoryBarCount = 3;
+
     NTSTATUS Initialize(_In_ WDFDEVICE device) noexcept;
     void Reset() noexcept;
 
@@ -45,12 +51,15 @@ public:
 
     [[nodiscard]] bool IsAvailable() const noexcept;
     [[nodiscard]] const PciIdentity* Identity() const noexcept;
+    [[nodiscard]] ULONG MemoryBarCount() const noexcept;
+    [[nodiscard]] PHYSICAL_ADDRESS MemoryBarAddress(_In_ ULONG index) const noexcept;
     [[nodiscard]] PHYSICAL_ADDRESS RegisterBarAddress() const noexcept;
 
 private:
     BUS_INTERFACE_STANDARD interface_;
     PciIdentity identity_;
-    PHYSICAL_ADDRESS registerBarAddress_;
+    PHYSICAL_ADDRESS memoryBarAddresses_[MaximumMemoryBarCount];
+    ULONG memoryBarCount_;
     bool identityValid_;
 };
 

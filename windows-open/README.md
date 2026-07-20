@@ -32,13 +32,16 @@ process-heap, user-mode time, and debugger callbacks. Each device owns its
 device-specific resources and tears them down with the adapter or WDF object
 lifecycle.
 
-For PCI-enumerated IddCx devices, hardware preparation validates NVIDIA PCI
-identity, decodes BAR0, matches it to the translated memory resource, and maps
-it noncached through UMDF before creating DMA and interrupt objects. Framework-
-mediated reads collect `PMC_BOOT_0` and `PMC_BOOT_42`; an all-ones response
-fails preparation as a missing device. Release and every failure path unwind
-interrupt, DMA, MMIO, and bus-interface state in reverse ownership order. The
-root-enumerated development device retains its resource-free software path.
+For PCI-enumerated IddCx devices, hardware preparation retains authoritative
+segment, bus, device, and function properties, validates NVIDIA PCI identity,
+and catalogs the first three valid memory BARs in the same register,
+framebuffer, and instance-memory order as KMDOD and upstream. It matches the
+register BAR to the translated memory resource and maps it noncached through
+UMDF before creating DMA and interrupt objects. Framework-mediated reads
+collect `PMC_BOOT_0` and `PMC_BOOT_42`; an all-ones response fails preparation
+as a missing device. Release and every failure path unwind interrupt, DMA,
+MMIO, and bus-interface state in reverse ownership order. The root-enumerated
+development device retains its resource-free software path.
 
 The first D0 entry creates one device-owned IddCx adapter asynchronously with
 conservative endpoint capabilities. Adapter completion and mode-commit
