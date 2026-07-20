@@ -1,4 +1,5 @@
 #include "gpu/gpu.h"
+#include "gpu/gpu_timeout.h"
 #include "gpu/timer/objtmr.h"
 #include "gpu_mgr/gpu_mgr.h"
 #include "core/thread_state.h"
@@ -128,4 +129,21 @@ NV_STATUS osDestroyNanoTimer(OS_GPU_INFO* pOsGpuInfo, void* timer)
 {
     (void)pOsGpuInfo;
     return NvPlatformRmNanoTimerDestroy(timer);
+}
+
+void osGetTimeoutParams(
+    OBJGPU* pGpu,
+    NvU32* timeoutUs,
+    NvU32* scale,
+    NvU32* flags)
+{
+    (void)pGpu;
+    if (timeoutUs == NULL || scale == NULL || flags == NULL)
+    {
+        return;
+    }
+
+    *timeoutUs = 1800000;
+    *scale = 1;
+    *flags = GPU_TIMEOUT_FLAGS_OSTIMER;
 }
