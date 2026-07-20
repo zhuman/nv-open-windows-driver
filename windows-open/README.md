@@ -199,6 +199,11 @@ IRQLs through the Windows kernel. Spin polling uses the architecture's processor
 pause primitive, write-combined register ordering uses `KeFlushWriteBuffer`,
 and whole-cache invalidation reports unsupported where the WDK has no portable
 ARM64 operation instead of silently claiming completion.
+Cross-process unmapping now references the target `EPROCESS`, retains a
+nonpaged `KAPC_STATE` for the synchronous attach, and releases both in reverse
+order after unmapping. Direct RM parameter buffers are classified with
+overflow-safe `MmSystemRangeStart` bounds rather than probing arbitrary kernel
+addresses or treating user pointers as trusted.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor
