@@ -1,4 +1,5 @@
 #include "core/core.h"
+#include "g_os_nvoc.h"
 #include "nvplatform_pci_rm.h"
 
 void* osPciInitHandle(
@@ -70,4 +71,41 @@ void osPciWriteWord(void* pHandle, NvU32 offset, NvU16 value)
 void osPciWriteDword(void* pHandle, NvU32 offset, NvU32 value)
 {
     (void)NvPlatformRmWritePciConfig(pHandle, offset, &value, sizeof(value));
+}
+
+NvBool osTestPcieExtendedConfigAccess(void* handle, NvU32 offset)
+{
+    NvU32 value;
+    return NvPlatformRmReadPciConfig(
+        handle,
+        offset,
+        &value,
+        sizeof(value)) == NV_OK;
+}
+
+NV_STATUS osConfigurePcieReqAtomics(
+    OS_GPU_INFO* osGpuInfo,
+    NvU32* mask)
+{
+    (void)osGpuInfo;
+
+    if (mask == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    *mask = 0;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osDoFunctionLevelReset(OBJGPU* gpu)
+{
+    (void)gpu;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osDoCxlReset(OBJGPU* gpu)
+{
+    (void)gpu;
+    return NV_ERR_NOT_SUPPORTED;
 }

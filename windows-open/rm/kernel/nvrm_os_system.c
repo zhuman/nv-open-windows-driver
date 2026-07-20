@@ -107,6 +107,20 @@ void os_iommu_sva_unbind(void* handle)
     (void)handle;
 }
 
+NvU32 osApiLockAcquireConfigureFlags(NvU32 flags)
+{
+    return flags;
+}
+
+NV_STATUS osGpuLocksQueueRelease(
+    OBJGPU* gpu,
+    NvU32 releaseMode)
+{
+    (void)gpu;
+    (void)releaseMode;
+    return NV_SEMA_RELEASE_FAILED;
+}
+
 void osBugCheck(NvU32 bugCode)
 {
     NvPlatformRmBugCheck(

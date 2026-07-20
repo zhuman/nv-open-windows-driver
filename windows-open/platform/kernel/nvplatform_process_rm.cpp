@@ -85,3 +85,97 @@ extern "C" NV_STATUS NvPlatformRmValidateKernelBuffer(
 
     return NV_OK;
 }
+
+extern "C" void* NvPlatformRmReferenceCurrentProcess(void)
+{
+    PEPROCESS process = PsGetCurrentProcess();
+    ObReferenceObject(process);
+    return process;
+}
+
+extern "C" void NvPlatformRmDereferenceProcess(void* process)
+{
+    if (process != nullptr)
+    {
+        ObDereferenceObject(process);
+    }
+}
+
+extern "C" NV_STATUS NvPlatformRmGetProcessId(
+    void* process,
+    NvU32* processId)
+{
+    if (process == nullptr || processId == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    const ULONG_PTR id = reinterpret_cast<ULONG_PTR>(
+        PsGetProcessId(static_cast<PEPROCESS>(process)));
+    if (id > MAXULONG)
+    {
+        return NV_ERR_INVALID_LIMIT;
+    }
+
+    *processId = static_cast<NvU32>(id);
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformRmGetCurrentProcessId(NvU32* processId)
+{
+    return NvPlatformRmGetProcessId(PsGetCurrentProcess(), processId);
+}
+
+extern "C" NV_STATUS NvPlatformRmGetCurrentUserSid(
+    NvU8* sid,
+    NvU32* sidLength)
+{
+    if (sidLength == nullptr || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    PACCESS_TOKEN token = PsReferencePrimaryToken(PsGetCurrentProcess());
+    PTOKEN_USER tokenUser = nullptr;
+    const NTSTATUS status = SeQueryInformationToken(
+        token,
+        TokenUser,
+        reinterpret_cast<void**>(&tokenUser));
+    PsDereferencePrimaryToken(token);
+    if (!NT_SUCCESS(status))
+    {
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+
+    const ULONG requiredLength = RtlLengthSid(tokenUser->User.Sid);
+    NV_STATUS nvStatus = NV_OK;
+    if (sid == nullptr || *sidLength < requiredLength)
+    {
+        *sidLength = requiredLength;
+        nvStatus = NV_ERR_BUFFER_TOO_SMALL;
+    }
+    else
+    {
+        RtlCopyMemory(sid, tokenUser->User.Sid, requiredLength);
+        *sidLength = requiredLength;
+    }
+
+    ExFreePool(tokenUser);
+    return nvStatus;
+}
+
+extern "C" NvBool NvPlatformRmHasSystemProfilePrivilege(void)
+{
+    const LUID privilege = RtlConvertLongToLuid(SE_SYSTEM_PROFILE_PRIVILEGE);
+    return SeSinglePrivilegeCheck(privilege, UserMode)
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
+extern "C" NvBool NvPlatformRmHasIncreaseBasePriorityPrivilege(void)
+{
+    const LUID privilege = RtlConvertLongToLuid(SE_INC_BASE_PRIORITY_PRIVILEGE);
+    return SeSinglePrivilegeCheck(privilege, UserMode)
+        ? NV_TRUE
+        : NV_FALSE;
+}
