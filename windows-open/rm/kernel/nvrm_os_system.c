@@ -166,6 +166,22 @@ NvBool osDmabufIsSupported(void)
     return NV_FALSE;
 }
 
+NvBool osImexChannelIsSupported(void)
+{
+    return NV_FALSE;
+}
+
+NvS32 osImexChannelCount(void)
+{
+    return 0;
+}
+
+NvS32 osImexChannelGet(NvU64 descriptor)
+{
+    (void)descriptor;
+    return -1;
+}
+
 NvBool hypervisorIsVgxHyper_IMPL(void)
 {
     return NV_FALSE;
