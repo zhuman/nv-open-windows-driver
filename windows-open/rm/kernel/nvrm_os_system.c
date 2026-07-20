@@ -268,6 +268,24 @@ NV_STATUS osTegraiGpuPerfBoost(
     return NV_ERR_NOT_SUPPORTED;
 }
 
+NvBool osGpuIsCxlDevice(OBJGPU* pGpu)
+{
+    (void)pGpu;
+    return NV_FALSE;
+}
+
+void osCxlSetCaching(OBJGPU* pGpu, NvBool enableCache)
+{
+    (void)pGpu;
+    (void)enableCache;
+}
+
+NvBool osGpuSupportsAts(OBJGPU* pGpu)
+{
+    (void)pGpu;
+    return NV_FALSE;
+}
+
 NV_STATUS osSimEscapeWrite(
     OBJGPU* pGpu,
     const char* path,
