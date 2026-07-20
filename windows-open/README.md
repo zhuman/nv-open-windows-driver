@@ -178,6 +178,10 @@ PCI configuration access now has an allocation-free platform registry keyed by
 the complete domain, bus, device, and function tuple. Stable handles retain the
 owning adapter's configuration callbacks, while a WDK-free sidecar supplies
 RM's byte, word, and dword PCI ABI without introducing global-adapter policy.
+Kernel PCI mappings now preserve RM's requested cache and protection modes
+through `MmMapIoSpaceEx`. Nonpaged platform metadata retains each aligned
+Windows mapping so both generic kernel-space and PCI-specific RM unmaps release
+the exact region even when the physical address begins within a page.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor

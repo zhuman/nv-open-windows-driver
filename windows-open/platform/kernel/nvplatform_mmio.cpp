@@ -1,6 +1,21 @@
 #include "nvplatform_mmio.h"
+#include "nvplatform_mmio_rm.h"
+
+#include "kernel/os/nv_memory_type.h"
 
 namespace {
+
+constexpr ULONG RmMappingPoolTag = 'mRvN';
+
+struct RmPhysicalMapping
+{
+    LIST_ENTRY listEntry;
+    NV_PLATFORM_MMIO_MAPPING mapping;
+};
+
+EX_PUSH_LOCK rmMappingLock;
+LIST_ENTRY rmMappings;
+bool mmioInitialized;
 
 bool IsValidRegisterAccess(
     _In_ const NV_PLATFORM_MMIO_MAPPING* mapping,
@@ -13,11 +28,10 @@ bool IsValidRegisterAccess(
         mapping->length - offset >= sizeof(ULONG);
 }
 
-} // namespace
-
-extern "C" NTSTATUS NvPlatformMapMmio(
+NTSTATUS MapMmioWithProtection(
     _In_ PHYSICAL_ADDRESS physicalAddress,
     _In_ SIZE_T length,
+    _In_ ULONG pageProtection,
     _Out_ NV_PLATFORM_MMIO_MAPPING* mapping) noexcept
 {
     if (mapping == nullptr || length == 0 || physicalAddress.QuadPart < 0)
@@ -48,7 +62,7 @@ extern "C" NTSTATUS NvPlatformMapMmio(
     void* mappingBase = MmMapIoSpaceEx(
         alignedAddress,
         mappingLength,
-        PAGE_READWRITE | PAGE_NOCACHE);
+        pageProtection);
     if (mappingBase == nullptr)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -59,6 +73,97 @@ extern "C" NTSTATUS NvPlatformMapMmio(
     mapping->mappingLength = mappingLength;
     mapping->length = length;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS GetPageProtection(
+    _In_ NvU32 protect,
+    _In_ NvU32 cacheType,
+    _Out_ ULONG* pageProtection) noexcept
+{
+    if (pageProtection == nullptr ||
+        (protect & ~NV_PROTECT_READ_WRITE) != 0 || protect == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ULONG value = protect == NV_PROTECT_READABLE
+        ? PAGE_READONLY
+        : PAGE_READWRITE;
+    switch (cacheType)
+    {
+    case NV_MEMORY_CACHED:
+    case NV_MEMORY_WRITEBACK:
+        break;
+    case NV_MEMORY_UNCACHED:
+    case NV_MEMORY_DEFAULT:
+    case NV_MEMORY_UNCACHED_WEAK:
+        value |= PAGE_NOCACHE;
+        break;
+    case NV_MEMORY_WRITECOMBINED:
+        value |= PAGE_WRITECOMBINE;
+        break;
+    default:
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *pageProtection = value;
+    return STATUS_SUCCESS;
+}
+
+} // namespace
+
+extern "C" NTSTATUS NvPlatformMmioInitialize(void) noexcept
+{
+    if (mmioInitialized)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    ExInitializePushLock(&rmMappingLock);
+    InitializeListHead(&rmMappings);
+    mmioInitialized = true;
+    return STATUS_SUCCESS;
+}
+
+extern "C" void NvPlatformMmioShutdown(void) noexcept
+{
+    if (!mmioInitialized)
+    {
+        return;
+    }
+
+    for (;;)
+    {
+        ExAcquirePushLockExclusive(&rmMappingLock);
+        if (IsListEmpty(&rmMappings))
+        {
+            mmioInitialized = false;
+            ExReleasePushLockExclusive(&rmMappingLock);
+            break;
+        }
+
+        PLIST_ENTRY entry = RemoveHeadList(&rmMappings);
+        ExReleasePushLockExclusive(&rmMappingLock);
+
+        auto* rmMapping = CONTAINING_RECORD(
+            entry,
+            RmPhysicalMapping,
+            listEntry);
+        NvPlatformUnmapMmio(&rmMapping->mapping);
+        ExFreePoolWithTag(rmMapping, RmMappingPoolTag);
+    }
+}
+
+extern "C" NTSTATUS NvPlatformMapMmio(
+    _In_ PHYSICAL_ADDRESS physicalAddress,
+    _In_ SIZE_T length,
+    _Out_ NV_PLATFORM_MMIO_MAPPING* mapping) noexcept
+{
+    return MapMmioWithProtection(
+        physicalAddress,
+        length,
+        PAGE_READWRITE | PAGE_NOCACHE,
+        mapping);
 }
 
 extern "C" void NvPlatformUnmapMmio(
@@ -106,4 +211,98 @@ extern "C" NTSTATUS NvPlatformWriteMmio32(
         reinterpret_cast<volatile ULONG*>(mapping->address + offset),
         value);
     return STATUS_SUCCESS;
+}
+
+extern "C" NV_STATUS NvPlatformRmMapPhysical(
+    NvU64 physicalAddress,
+    NvU64 length,
+    NvU32 protect,
+    NvU32 cacheType,
+    void** virtualAddress)
+{
+    if (!mmioInitialized || virtualAddress == nullptr ||
+        length == 0 || length > MAXSIZE_T || physicalAddress > MAXLONGLONG)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    *virtualAddress = nullptr;
+    ULONG pageProtection = 0;
+    if (!NT_SUCCESS(GetPageProtection(protect, cacheType, &pageProtection)))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    auto* rmMapping = static_cast<RmPhysicalMapping*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(RmPhysicalMapping),
+        RmMappingPoolTag));
+    if (rmMapping == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    RtlZeroMemory(rmMapping, sizeof(*rmMapping));
+    PHYSICAL_ADDRESS address = {};
+    address.QuadPart = static_cast<LONGLONG>(physicalAddress);
+    const NTSTATUS status = MapMmioWithProtection(
+        address,
+        static_cast<SIZE_T>(length),
+        pageProtection,
+        &rmMapping->mapping);
+    if (!NT_SUCCESS(status))
+    {
+        ExFreePoolWithTag(rmMapping, RmMappingPoolTag);
+        return status == STATUS_INSUFFICIENT_RESOURCES
+            ? NV_ERR_NO_MEMORY
+            : NV_ERR_GENERIC;
+    }
+
+    ExAcquirePushLockExclusive(&rmMappingLock);
+    if (!mmioInitialized)
+    {
+        ExReleasePushLockExclusive(&rmMappingLock);
+        NvPlatformUnmapMmio(&rmMapping->mapping);
+        ExFreePoolWithTag(rmMapping, RmMappingPoolTag);
+        return NV_ERR_INVALID_STATE;
+    }
+    InsertTailList(&rmMappings, &rmMapping->listEntry);
+    ExReleasePushLockExclusive(&rmMappingLock);
+
+    *virtualAddress = const_cast<UCHAR*>(rmMapping->mapping.address);
+    return NV_OK;
+}
+
+extern "C" void NvPlatformRmUnmapPhysical(void* virtualAddress)
+{
+    if (!mmioInitialized || virtualAddress == nullptr)
+    {
+        return;
+    }
+
+    RmPhysicalMapping* found = nullptr;
+    ExAcquirePushLockExclusive(&rmMappingLock);
+    for (PLIST_ENTRY entry = rmMappings.Flink;
+         entry != &rmMappings;
+         entry = entry->Flink)
+    {
+        auto* rmMapping = CONTAINING_RECORD(
+            entry,
+            RmPhysicalMapping,
+            listEntry);
+        if (rmMapping->mapping.address == virtualAddress)
+        {
+            RemoveEntryList(entry);
+            found = rmMapping;
+            break;
+        }
+    }
+    ExReleasePushLockExclusive(&rmMappingLock);
+
+    NT_ASSERT(found != nullptr);
+    if (found != nullptr)
+    {
+        NvPlatformUnmapMmio(&found->mapping);
+        ExFreePoolWithTag(found, RmMappingPoolTag);
+    }
 }

@@ -1,5 +1,6 @@
 #include "nvplatform_system.h"
 #include "nvplatform_system_rm.h"
+#include "nvplatform_mmio.h"
 #include "nvplatform_pci.h"
 
 extern "C" {
@@ -57,9 +58,19 @@ NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
         return STATUS_INVALID_DEVICE_STATE;
     }
 
+    const NTSTATUS mmioStatus = NvPlatformMmioInitialize();
+    if (!NT_SUCCESS(mmioStatus))
+    {
+        InterlockedExchangePointer(
+            reinterpret_cast<void* volatile*>(&systemWorkDriverObject),
+            nullptr);
+        return mmioStatus;
+    }
+
     const NTSTATUS pciStatus = NvPlatformPciInitialize();
     if (!NT_SUCCESS(pciStatus))
     {
+        NvPlatformMmioShutdown();
         InterlockedExchangePointer(
             reinterpret_cast<void* volatile*>(&systemWorkDriverObject),
             nullptr);
@@ -74,6 +85,7 @@ void NvPlatformSystemShutdown(void) noexcept
 {
     NvPlatformRmDrainSystemWork();
     NvPlatformPciShutdown();
+    NvPlatformMmioShutdown();
     InterlockedExchangePointer(
         reinterpret_cast<void* volatile*>(&systemWorkDriverObject),
         nullptr);

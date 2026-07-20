@@ -17,6 +17,9 @@ typedef struct NV_PLATFORM_MMIO_MAPPING
     SIZE_T length;
 } NV_PLATFORM_MMIO_MAPPING;
 
+NTSTATUS NvPlatformMmioInitialize(void) NV_PLATFORM_NOEXCEPT;
+void NvPlatformMmioShutdown(void) NV_PLATFORM_NOEXCEPT;
+
 NTSTATUS NvPlatformMapMmio(
     _In_ PHYSICAL_ADDRESS physicalAddress,
     _In_ SIZE_T length,
