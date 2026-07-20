@@ -44,6 +44,24 @@ void osDpcDetachGpu(OBJGPU* pGpu)
     }
 }
 
+NvBool osIsGpuAccessible(OBJGPU* pGpu)
+{
+    void* publishedGpu = NULL;
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext;
+
+    if (pGpu == NULL || pGpu->pOsGpuInfo == NULL)
+    {
+        return NV_FALSE;
+    }
+
+    gpuContext = (NV_PLATFORM_RM_GPU_CONTEXT*)pGpu->pOsGpuInfo;
+    return NvPlatformRmGpuGetPublishedRmGpu(gpuContext, &publishedGpu) == NV_OK &&
+        publishedGpu == pGpu &&
+        !NvPlatformRmGpuIsLost(gpuContext)
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
 NV_STATUS osHandleGpuLost(OBJGPU* pGpu, NvBool bEmitXid)
 {
     if (pGpu == NULL)
