@@ -43,6 +43,7 @@ __declspec(noreturn) void NvPlatformRmBugCheck(NvU32 bugCode);
 
 typedef void NvPlatformRmSystemWorkFunction(void* context);
 
+// Owns the WDK work-item queue used by RM callbacks and drains it at unload.
 NV_STATUS NvPlatformRmSystemWorkInitialize(void);
 
 NV_STATUS NvPlatformRmSemaAcquire(void);
@@ -58,6 +59,17 @@ NV_STATUS NvPlatformRmQueueSystemWork(
 NvBool NvPlatformRmSystemWorkIsActive(void);
 
 void NvPlatformRmDrainSystemWork(void);
+
+// Prevents queued GPU callbacks from resolving an OBJGPU while RM deletes it.
+// RM locks must be acquired before entering this gate; GPU destroy already
+// holds the API lock when it closes and drains the gate.
+NvBool NvPlatformRmGpuWorkAcquire(void);
+
+void NvPlatformRmGpuWorkRelease(void);
+
+void NvPlatformRmGpuDestroyBegin(void);
+
+void NvPlatformRmGpuDestroyEnd(void);
 
 #ifdef __cplusplus
 }

@@ -31,15 +31,22 @@ static void executeRmWorkItem(void* context)
             &releaseLocks,
             &gpuMask) == NV_OK)
     {
-        OBJGPU* pGpu = gpumgrGetGpu(workItem->gpuInstance);
-        if (pGpu != NULL &&
-            !(workItem->flags.bDropOnUnloadQueueFlush &&
-              !NvPlatformRmSystemWorkIsActive()))
+        // Enter rundown only after acquiring RM locks. GPU destruction holds
+        // the API lock while draining this gate, so the reverse order would
+        // deadlock queued work that requested that lock.
+        if (NvPlatformRmGpuWorkAcquire())
         {
-            NvU32 previousGpuInstance =
-                gpumgrSetCurrentGpuInstance(workItem->gpuInstance);
-            workItem->function(workItem->gpuInstance, workItem->parameters);
-            gpumgrSetCurrentGpuInstance(previousGpuInstance);
+            OBJGPU* pGpu = gpumgrGetGpu(workItem->gpuInstance);
+            if (pGpu != NULL &&
+                !(workItem->flags.bDropOnUnloadQueueFlush &&
+                  !NvPlatformRmSystemWorkIsActive()))
+            {
+                NvU32 previousGpuInstance =
+                    gpumgrSetCurrentGpuInstance(workItem->gpuInstance);
+                workItem->function(workItem->gpuInstance, workItem->parameters);
+                gpumgrSetCurrentGpuInstance(previousGpuInstance);
+            }
+            NvPlatformRmGpuWorkRelease();
         }
     }
 
@@ -115,6 +122,18 @@ NV_STATUS osQueueWorkItem(
 void osSyncWithRmDestroy(void)
 {
     NvPlatformRmDrainSystemWork();
+}
+
+void osSyncWithGpuDestroy(NvBool bEntry)
+{
+    if (bEntry)
+    {
+        NvPlatformRmGpuDestroyBegin();
+    }
+    else
+    {
+        NvPlatformRmGpuDestroyEnd();
+    }
 }
 
 NV_STATUS osAcquireRmSema(void* pSema)

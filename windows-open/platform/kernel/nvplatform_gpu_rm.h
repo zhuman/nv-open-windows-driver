@@ -42,6 +42,7 @@ NV_STATUS NvPlatformRmGpuReserve(
 NV_STATUS NvPlatformRmGpuPublish(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     void* rmGpu);
+// Resolves OBJGPU only after the WDDM adapter context has completed RM attach.
 NV_STATUS NvPlatformRmGpuGetPublishedRmGpu(
     const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     void** rmGpu);

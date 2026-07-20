@@ -50,6 +50,7 @@ const GUID crashLogGuid =
     {0x4f6f38b7, 0x2e7d, 0x4a61, {0xa8, 0x5f, 0x1b, 0x56, 0xea, 0xe5, 0x33, 0x70}};
 
 EX_RUNDOWN_REF systemWorkRundown;
+EX_RUNDOWN_REF gpuWorkRundown;
 volatile LONG systemWorkState = SystemWorkStateNeverInitialized;
 PDRIVER_OBJECT systemWorkDriverObject;
 KSEMAPHORE rmSema;
@@ -165,6 +166,7 @@ NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
     }
 
     KeInitializeSemaphore(&rmSema, 1, 1);
+    ExInitializeRundownProtection(&gpuWorkRundown);
     InitializeListHead(&crashLogRecords);
     KeInitializeSpinLock(&crashLogLock);
     return STATUS_SUCCESS;
@@ -648,6 +650,30 @@ extern "C" void NvPlatformRmDrainSystemWork(void)
     {
         ExWaitForRundownProtectionRelease(&systemWorkRundown);
     }
+}
+
+extern "C" NvBool NvPlatformRmGpuWorkAcquire(void)
+{
+    return ExAcquireRundownProtection(&gpuWorkRundown)
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
+extern "C" void NvPlatformRmGpuWorkRelease(void)
+{
+    ExReleaseRundownProtection(&gpuWorkRundown);
+}
+
+extern "C" void NvPlatformRmGpuDestroyBegin(void)
+{
+    // Unlike IO_REMOVE_LOCK, this gate is reopened because RM can destroy one
+    // GPU while retaining others. Callers hold RM's API lock before draining.
+    ExWaitForRundownProtectionRelease(&gpuWorkRundown);
+}
+
+extern "C" void NvPlatformRmGpuDestroyEnd(void)
+{
+    ExReInitializeRundownProtection(&gpuWorkRundown);
 }
 
 extern "C" NvBool NvPlatformRmIsCurrentSubjectAdministrator(void)

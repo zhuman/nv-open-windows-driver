@@ -27,6 +27,8 @@ typedef void NvPlatformRmNanoTimerFunction(
     void* gpu,
     void* timerEvent);
 
+// The WDK provider fires at DPC level; the callback bridge must defer RM timer
+// service to a passive-level GPU work item. Cancel and destroy are synchronous.
 NV_STATUS NvPlatformRmNanoTimerCreate(
     NvPlatformRmNanoTimerFunction* function,
     void* gpu,
