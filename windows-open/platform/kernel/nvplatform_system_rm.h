@@ -8,7 +8,18 @@ extern "C" {
 #endif
 
 NvBool NvPlatformRmIsNotebook(void);
+NvBool NvPlatformRmIsDebuggerPresent(void);
 NvBool NvPlatformRmIsCurrentSubjectAdministrator(void);
+NV_STATUS NvPlatformRmGetFirmwareVariable(
+	const char* name,
+	const void* vendorGuid,
+	NvU8* data,
+	NvU32* dataLength);
+NV_STATUS NvPlatformRmGetAcpiTable(
+	NvU32 tableSignature,
+	void* table,
+	NvU32 tableSize,
+	NvU32* returnSize);
 void NvPlatformRmCaptureAssertion(void);
 __declspec(noreturn) void NvPlatformRmBugCheck(NvU32 bugCode);
 

@@ -1,6 +1,7 @@
 extern "C" {
 #include <ntifs.h>
 #include <ntpoapi.h>
+#include <aux_klib.h>
 }
 
 #include "nvplatform_system.h"
@@ -17,6 +18,7 @@ constexpr LONG SystemWorkStateStopped = 2;
 constexpr ULONG RmBugCheckCode = 0xE2;
 constexpr ULONG_PTR RmBugCheckSignature = 'MRVN';
 constexpr ULONG MaximumAssertionFrames = 16;
+constexpr USHORT MaximumFirmwareVariableNameLength = 255;
 
 struct SystemWorkItem
 {
@@ -81,6 +83,17 @@ NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
         return pciStatus;
     }
 
+    const NTSTATUS auxKlibStatus = AuxKlibInitialize();
+    if (!NT_SUCCESS(auxKlibStatus))
+    {
+        NvPlatformPciShutdown();
+        NvPlatformMmioShutdown();
+        InterlockedExchangePointer(
+            reinterpret_cast<void* volatile*>(&systemWorkDriverObject),
+            nullptr);
+        return auxKlibStatus;
+    }
+
     KeInitializeSemaphore(&rmSema, 1, 1);
     return STATUS_SUCCESS;
 }
@@ -108,6 +121,106 @@ extern "C" NvBool NvPlatformRmIsNotebook(void)
     return NT_SUCCESS(status) && capabilities.SystemBatteriesPresent
         ? NV_TRUE
         : NV_FALSE;
+}
+
+extern "C" NvBool NvPlatformRmIsDebuggerPresent(void)
+{
+    return KD_DEBUGGER_ENABLED && !KD_DEBUGGER_NOT_PRESENT
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
+extern "C" NV_STATUS NvPlatformRmGetFirmwareVariable(
+    const char* name,
+    const void* vendorGuid,
+    NvU8* data,
+    NvU32* dataLength)
+{
+    if (name == nullptr || vendorGuid == nullptr || dataLength == nullptr ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    ANSI_STRING ansiName{};
+    RtlInitAnsiString(&ansiName, name);
+    if (ansiName.Length > MaximumFirmwareVariableNameLength)
+    {
+        return NV_ERR_INVALID_LIMIT;
+    }
+
+    wchar_t wideName[MaximumFirmwareVariableNameLength + 1]{};
+    UNICODE_STRING unicodeName{};
+    unicodeName.Buffer = wideName;
+    unicodeName.MaximumLength = sizeof(wideName);
+    NTSTATUS status = RtlAnsiStringToUnicodeString(
+        &unicodeName,
+        &ansiName,
+        FALSE);
+    if (!NT_SUCCESS(status))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    ULONG length = *dataLength;
+    status = ExGetFirmwareEnvironmentVariable(
+        &unicodeName,
+        const_cast<LPGUID>(static_cast<const GUID*>(vendorGuid)),
+        data,
+        &length,
+        nullptr);
+    *dataLength = length;
+    if (NT_SUCCESS(status))
+    {
+        return NV_OK;
+    }
+    if (status == STATUS_VARIABLE_NOT_FOUND)
+    {
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+    if (status == STATUS_BUFFER_TOO_SMALL || status == STATUS_BUFFER_OVERFLOW)
+    {
+        return NV_ERR_BUFFER_TOO_SMALL;
+    }
+    if (status == STATUS_NOT_IMPLEMENTED || status == STATUS_NOT_SUPPORTED)
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+    return NV_ERR_OPERATING_SYSTEM;
+}
+
+extern "C" NV_STATUS NvPlatformRmGetAcpiTable(
+    NvU32 tableSignature,
+    void* table,
+    NvU32 tableSize,
+    NvU32* returnSize)
+{
+    if (returnSize == nullptr || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    ULONG length = 0;
+    const NTSTATUS status = AuxKlibGetSystemFirmwareTable(
+        'ACPI',
+        tableSignature,
+        table,
+        tableSize,
+        &length);
+    *returnSize = length;
+    if (NT_SUCCESS(status))
+    {
+        return NV_OK;
+    }
+    if (status == STATUS_BUFFER_TOO_SMALL || status == STATUS_BUFFER_OVERFLOW)
+    {
+        return NV_ERR_BUFFER_TOO_SMALL;
+    }
+    if (status == STATUS_NOT_FOUND || status == STATUS_OBJECT_NAME_NOT_FOUND)
+    {
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+    return NV_ERR_OPERATING_SYSTEM;
 }
 
 extern "C" NV_STATUS NvPlatformRmSystemWorkInitialize(void)

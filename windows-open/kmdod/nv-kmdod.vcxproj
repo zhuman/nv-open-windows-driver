@@ -42,7 +42,7 @@
       <LanguageStandard>stdcpp23</LanguageStandard>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>displib.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>displib.lib;Aux_Klib.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EntryPointSymbol>DriverEntry</EntryPointSymbol>
     </Link>
     <DriverSign>

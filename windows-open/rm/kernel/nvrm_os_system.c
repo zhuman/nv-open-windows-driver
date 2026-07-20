@@ -1,5 +1,6 @@
 #include "g_system_nvoc.h"
 #include "g_os_nvoc.h"
+#include "nvplatform_file_rm.h"
 #include "nvplatform_registry_rm.h"
 #include "nvplatform_system_rm.h"
 
@@ -121,10 +122,79 @@ NV_STATUS osGpuLocksQueueRelease(
     return NV_SEMA_RELEASE_FAILED;
 }
 
+NV_STATUS osGetUefiVariable(
+    const char* name,
+    LPGUID vendorGuid,
+    NvU8* data,
+    NvU32* dataLength)
+{
+    return NvPlatformRmGetFirmwareVariable(
+        name,
+        vendorGuid,
+        data,
+        dataLength);
+}
+
+NV_STATUS osInitGetAcpiTable(void)
+{
+    return NV_OK;
+}
+
+NV_STATUS osGetAcpiTable(
+    NvU32 tableSignature,
+    void** ppTable,
+    NvU32 tableSize,
+    NvU32* retSize)
+{
+    return NvPlatformRmGetAcpiTable(
+        tableSignature,
+        ppTable != NULL ? *ppTable : NULL,
+        tableSize,
+        retSize);
+}
+
 void osBugCheck(NvU32 bugCode)
 {
     NvPlatformRmBugCheck(
         bugCode <= OS_BUG_CHECK_BUGCODE_LAST
             ? bugCode
             : OS_BUG_CHECK_BUGCODE_UNKNOWN);
+}
+
+NvBool osDbgBreakpointEnabled(void)
+{
+    return NvPlatformRmIsDebuggerPresent();
+}
+
+void osDbgBugCheckOnAssert(void)
+{
+    NvPlatformRmBugCheck(OS_BUG_CHECK_BUGCODE_BSOD_ON_ASSERT);
+}
+
+NV_STATUS osOpenTemporaryFile(void** ppFile)
+{
+    return NvPlatformRmOpenTemporaryFile(ppFile);
+}
+
+void osCloseFile(void* pFile)
+{
+    NvPlatformRmCloseFile(pFile);
+}
+
+NV_STATUS osWriteToFile(
+    void* pFile,
+    NvU8* buffer,
+    NvU64 size,
+    NvU64 offset)
+{
+    return NvPlatformRmWriteFile(pFile, buffer, size, offset);
+}
+
+NV_STATUS osReadFromFile(
+    void* pFile,
+    NvU8* buffer,
+    NvU64 size,
+    NvU64 offset)
+{
+    return NvPlatformRmReadFile(pFile, buffer, size, offset);
 }

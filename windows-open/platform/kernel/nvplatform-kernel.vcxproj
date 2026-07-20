@@ -33,6 +33,7 @@
     <ClCompile Include="nvplatform_common.cpp" />
     <ClCompile Include="nvplatform_cpu_rm.cpp" />
     <ClCompile Include="nvplatform_event.cpp" />
+    <ClCompile Include="nvplatform_file_rm.cpp" />
     <ClCompile Include="nvplatform_gpu_rm.cpp" />
     <ClCompile Include="nvplatform_memory_rm.cpp" />
     <ClCompile Include="nvplatform_mmio.cpp">
@@ -51,6 +52,7 @@
     <ClInclude Include="nvplatform_crypto_rm.h" />
     <ClInclude Include="nvplatform_cpu_rm.h" />
     <ClInclude Include="nvplatform_event.h" />
+    <ClInclude Include="nvplatform_file_rm.h" />
     <ClInclude Include="nvplatform_gpu_rm.h" />
     <ClInclude Include="nvplatform_memory_rm.h" />
     <ClInclude Include="nvplatform_mmio.h" />
