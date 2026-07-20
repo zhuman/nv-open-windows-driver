@@ -65,6 +65,53 @@ void osFreePagesInternal(MEMORY_DESCRIPTOR* pMemDesc)
     }
 }
 
+NV_STATUS osReserveCpuAddressSpaceUpperBound(
+    void** ppSectionHandle,
+    NvU64 maxSectionSize)
+{
+    return NvPlatformRmCreateSection(maxSectionSize, ppSectionHandle);
+}
+
+void osReleaseCpuAddressSpaceUpperBound(void* pSectionHandle)
+{
+    NvPlatformRmDestroySection(pSectionHandle);
+}
+
+NV_STATUS osMapViewToSection(
+    OS_GPU_INFO* pOsGpuInfo,
+    void* pSectionHandle,
+    void** ppAddress,
+    NvU64 actualSize,
+    NvU64 sectionOffset,
+    NvBool bIommuEnabled)
+{
+    (void)pOsGpuInfo;
+    if (bIommuEnabled)
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    return NvPlatformRmMapSectionView(
+        pSectionHandle,
+        sectionOffset,
+        actualSize,
+        ppAddress);
+}
+
+NV_STATUS osUnmapViewFromSection(
+    OS_GPU_INFO* pOsGpuInfo,
+    void* pAddress,
+    NvBool bIommuEnabled)
+{
+    (void)pOsGpuInfo;
+    if (bIommuEnabled)
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    return NvPlatformRmUnmapSectionView(pAddress);
+}
+
 NV_STATUS osLockMem(MEMORY_DESCRIPTOR* pMemDesc)
 {
     if (pMemDesc == NULL)

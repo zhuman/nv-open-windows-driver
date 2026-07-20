@@ -1,10 +1,13 @@
 #include "nvplatform_memory_rm.h"
+#include "nvplatform_file_rm.h"
 
 #include <ntifs.h>
 
 namespace {
 
 constexpr ULONG MemoryAllocationTag = 'mRvN';
+constexpr ULONG SectionAllocationTag = 'sRvN';
+constexpr NvU64 SectionViewAlignment = 64 * 1024;
 
 struct RmPageAllocation
 {
@@ -21,6 +24,13 @@ struct RmPageMapping
     PMDL mdl;
     void* baseAddress;
     PEPROCESS process;
+};
+
+struct RmSection
+{
+    void* file;
+    void* sectionObject;
+    NvU64 maximumSize;
 };
 
 MEMORY_CACHING_TYPE ConvertCacheType(
@@ -519,4 +529,145 @@ extern "C" void NvPlatformRmUnmapPages(
     }
     IoFreeMdl(pageMapping->mdl);
     ExFreePoolWithTag(pageMapping, MemoryAllocationTag);
+}
+
+extern "C" NV_STATUS NvPlatformRmCreateSection(
+    NvU64 maximumSize,
+    void** section)
+{
+    if (maximumSize == 0 || maximumSize > MAXLONGLONG || section == nullptr ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    *section = nullptr;
+    auto* rmSection = static_cast<RmSection*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(RmSection),
+        SectionAllocationTag));
+    if (rmSection == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+    RtlZeroMemory(rmSection, sizeof(*rmSection));
+
+    NV_STATUS rmStatus = NvPlatformRmOpenTemporaryFile(&rmSection->file);
+    if (rmStatus != NV_OK)
+    {
+        ExFreePoolWithTag(rmSection, SectionAllocationTag);
+        return rmStatus;
+    }
+
+    IO_STATUS_BLOCK ioStatus{};
+    FILE_END_OF_FILE_INFORMATION endOfFile{};
+    endOfFile.EndOfFile.QuadPart = static_cast<LONGLONG>(maximumSize);
+    NTSTATUS status = ZwSetInformationFile(
+        static_cast<HANDLE>(rmSection->file),
+        &ioStatus,
+        &endOfFile,
+        sizeof(endOfFile),
+        FileEndOfFileInformation);
+
+    HANDLE sectionHandle = nullptr;
+    if (NT_SUCCESS(status))
+    {
+        OBJECT_ATTRIBUTES attributes{};
+        InitializeObjectAttributes(
+            &attributes,
+            nullptr,
+            OBJ_KERNEL_HANDLE,
+            nullptr,
+            nullptr);
+        LARGE_INTEGER sectionSize{};
+        sectionSize.QuadPart = static_cast<LONGLONG>(maximumSize);
+        status = ZwCreateSection(
+            &sectionHandle,
+            SECTION_MAP_READ | SECTION_MAP_WRITE | SECTION_QUERY,
+            &attributes,
+            &sectionSize,
+            PAGE_READWRITE,
+            SEC_COMMIT,
+            static_cast<HANDLE>(rmSection->file));
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = ObReferenceObjectByHandle(
+            sectionHandle,
+            SECTION_MAP_READ | SECTION_MAP_WRITE,
+            nullptr,
+            KernelMode,
+            &rmSection->sectionObject,
+            nullptr);
+    }
+    if (sectionHandle != nullptr)
+    {
+        ZwClose(sectionHandle);
+    }
+    if (!NT_SUCCESS(status))
+    {
+        NvPlatformRmCloseFile(rmSection->file);
+        ExFreePoolWithTag(rmSection, SectionAllocationTag);
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+
+    rmSection->maximumSize = maximumSize;
+    *section = rmSection;
+    return NV_OK;
+}
+
+extern "C" void NvPlatformRmDestroySection(void* section)
+{
+    auto* rmSection = static_cast<RmSection*>(section);
+    if (rmSection == nullptr)
+    {
+        return;
+    }
+
+    ObDereferenceObject(rmSection->sectionObject);
+    NvPlatformRmCloseFile(rmSection->file);
+    ExFreePoolWithTag(rmSection, SectionAllocationTag);
+}
+
+extern "C" NV_STATUS NvPlatformRmMapSectionView(
+    void* section,
+    NvU64 offset,
+    NvU64 length,
+    void** address)
+{
+    auto* rmSection = static_cast<RmSection*>(section);
+    if (rmSection == nullptr || address == nullptr || length == 0 ||
+        length > MAXSIZE_T || offset > MAXLONGLONG ||
+        (offset & (SectionViewAlignment - 1)) != 0 ||
+        offset > rmSection->maximumSize ||
+        length > rmSection->maximumSize - offset ||
+        KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    *address = nullptr;
+    SIZE_T viewSize = static_cast<SIZE_T>(length);
+    LARGE_INTEGER sectionOffset{};
+    sectionOffset.QuadPart = static_cast<LONGLONG>(offset);
+    return NT_SUCCESS(MmMapViewInSystemSpaceEx(
+        rmSection->sectionObject,
+        address,
+        &viewSize,
+        &sectionOffset,
+        0))
+        ? NV_OK
+        : NV_ERR_INSUFFICIENT_RESOURCES;
+}
+
+extern "C" NV_STATUS NvPlatformRmUnmapSectionView(void* address)
+{
+    if (address == nullptr || KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NT_SUCCESS(MmUnmapViewInSystemSpace(address))
+        ? NV_OK
+        : NV_ERR_OPERATING_SYSTEM;
 }

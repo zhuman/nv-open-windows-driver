@@ -71,6 +71,23 @@ void NvPlatformRmUnmapPages(
     NvBool kernelMapping,
     void* mapping);
 
+// FBSR uses a delete-on-close file section so its maximum framebuffer-sized
+// extent does not consume equivalent pagefile commit. Views live in system
+// space because suspend callbacks are not tied to a stable process context.
+NV_STATUS NvPlatformRmCreateSection(
+    NvU64 maximumSize,
+    void** section);
+
+void NvPlatformRmDestroySection(void* section);
+
+NV_STATUS NvPlatformRmMapSectionView(
+    void* section,
+    NvU64 offset,
+    NvU64 length,
+    void** address);
+
+NV_STATUS NvPlatformRmUnmapSectionView(void* address);
+
 #ifdef __cplusplus
 }
 #endif
