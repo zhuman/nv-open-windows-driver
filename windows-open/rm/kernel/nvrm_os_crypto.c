@@ -2583,6 +2583,50 @@ NvBool libspdm_x509_get_extended_basic_constraints(
         basicConstraintsLength);
 }
 
+NvBool libspdm_x509_verify_cert_chain(
+    const NvU8* rootCertificate,
+    size_t rootCertificateLength,
+    const NvU8* certificateChain,
+    size_t certificateChainLength)
+{
+    if (rootCertificate == NULL || rootCertificateLength == 0 ||
+        certificateChain == NULL || certificateChainLength == 0)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* issuer = rootCertificate;
+    size_t issuerLength = rootCertificateLength;
+    const NvU8* current = certificateChain;
+    const NvU8* end = certificateChain + certificateChainLength;
+    NvBool verifiedAny = NV_FALSE;
+    while (current < end)
+    {
+        NvU8* mutableCurrent = (NvU8*)current;
+        size_t currentLength;
+        if (!libspdm_asn1_get_tag(
+                &mutableCurrent,
+                end,
+                &currentLength,
+                0x30) ||
+            currentLength == 0 ||
+            !libspdm_x509_verify_cert(
+                current,
+                currentLength,
+                issuer,
+                issuerLength))
+        {
+            return NV_FALSE;
+        }
+
+        verifiedAny = NV_TRUE;
+        issuer = current;
+        issuerLength = currentLength;
+        current += currentLength;
+    }
+    return verifiedAny && current == end;
+}
+
 NvBool libspdm_x509_get_cert_from_cert_chain(
     const NvU8* certificateChain,
     size_t certificateChainLength,
