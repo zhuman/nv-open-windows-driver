@@ -868,6 +868,53 @@ extern "C" NvBool NvPlatformRmVerifyRsaPss(
         : NV_FALSE;
 }
 
+extern "C" NvBool NvPlatformRmVerifyRsaPkcs1(
+    void* rsaContext,
+    NvU32 hashNid,
+    const NvU8* hash,
+    NvU32 hashLength,
+    const NvU8* signature,
+    NvU32 signatureLength)
+{
+    auto* context = static_cast<RsaContext*>(rsaContext);
+    PCWSTR algorithmName;
+    NvU32 requiredHashLength;
+    switch (hashNid)
+    {
+        case 0x0001:
+            algorithmName = BCRYPT_SHA256_ALGORITHM;
+            requiredHashLength = 32;
+            break;
+        case 0x0002:
+            algorithmName = BCRYPT_SHA384_ALGORITHM;
+            requiredHashLength = 48;
+            break;
+        default:
+            return NV_FALSE;
+    }
+
+    if (context == nullptr || hash == nullptr || signature == nullptr ||
+        hashLength != requiredHashLength ||
+        signatureLength != context->modulusLength ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return NV_FALSE;
+    }
+
+    BCRYPT_PKCS1_PADDING_INFO paddingInfo{};
+    paddingInfo.pszAlgId = algorithmName;
+    return NT_SUCCESS(BCryptVerifySignature(
+        context->key,
+        &paddingInfo,
+        const_cast<PUCHAR>(hash),
+        hashLength,
+        const_cast<PUCHAR>(signature),
+        signatureLength,
+        BCRYPT_PAD_PKCS1))
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
 extern "C" void* libspdm_sha256_new(void)
 {
     return CreateHashContext(BCRYPT_SHA256_ALGORITHM, 32);

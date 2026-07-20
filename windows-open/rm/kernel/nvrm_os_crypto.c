@@ -2195,6 +2195,362 @@ NvBool libspdm_rsa_pss_verify(
         (NvU32)signatureLength);
 }
 
+typedef enum WINDOWS_RM_CERT_SIGNATURE_ALGORITHM
+{
+    WINDOWS_RM_CERT_SIGNATURE_RSA_SHA256,
+    WINDOWS_RM_CERT_SIGNATURE_RSA_SHA384,
+    WINDOWS_RM_CERT_SIGNATURE_ECDSA_SHA256,
+    WINDOWS_RM_CERT_SIGNATURE_ECDSA_SHA384
+} WINDOWS_RM_CERT_SIGNATURE_ALGORITHM;
+
+static NvBool getCertificateSignatureData(
+    const NvU8* certificate,
+    size_t certificateLength,
+    const NvU8** tbsCertificate,
+    size_t* tbsCertificateLength,
+    WINDOWS_RM_CERT_SIGNATURE_ALGORITHM* algorithm,
+    const NvU8** signature,
+    size_t* signatureLength)
+{
+    static const NvU8 rsaSha256Oid[] = {
+        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b
+    };
+    static const NvU8 rsaSha384Oid[] = {
+        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c
+    };
+    static const NvU8 ecdsaSha256Oid[] = {
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02
+    };
+    static const NvU8 ecdsaSha384Oid[] = {
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03
+    };
+    if (certificate == NULL || tbsCertificate == NULL ||
+        tbsCertificateLength == NULL || algorithm == NULL ||
+        signature == NULL || signatureLength == NULL)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* certificateEnd = certificate + certificateLength;
+    const NvU8* certificateContent;
+    size_t certificateContentLength;
+    size_t certificateElementLength;
+    if (!getDerElement(
+            certificate,
+            certificateEnd,
+            0x30,
+            &certificateContent,
+            &certificateContentLength,
+            &certificateElementLength) ||
+        certificateElementLength != certificateLength)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* tbsContent;
+    size_t tbsContentLength;
+    if (!getDerElement(
+            certificateContent,
+            certificateEnd,
+            0x30,
+            &tbsContent,
+            &tbsContentLength,
+            tbsCertificateLength))
+    {
+        return NV_FALSE;
+    }
+    *tbsCertificate = certificateContent;
+
+    const NvU8* outerAlgorithm = certificateContent + *tbsCertificateLength;
+    const NvU8* outerAlgorithmContent;
+    size_t outerAlgorithmContentLength;
+    size_t outerAlgorithmLength;
+    if (!getDerElement(
+            outerAlgorithm,
+            certificateEnd,
+            0x30,
+            &outerAlgorithmContent,
+            &outerAlgorithmContentLength,
+            &outerAlgorithmLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* oid;
+    size_t oidLength;
+    size_t ignoredLength;
+    if (!getAlgorithmIdentifierOid(
+            outerAlgorithm,
+            certificateEnd,
+            &oid,
+            &oidLength,
+            &ignoredLength))
+    {
+        return NV_FALSE;
+    }
+
+    NvBool isRsa = NV_FALSE;
+    if (oidEquals(oid, oidLength, rsaSha256Oid, sizeof(rsaSha256Oid)))
+    {
+        *algorithm = WINDOWS_RM_CERT_SIGNATURE_RSA_SHA256;
+        isRsa = NV_TRUE;
+    }
+    else if (oidEquals(oid, oidLength, rsaSha384Oid, sizeof(rsaSha384Oid)))
+    {
+        *algorithm = WINDOWS_RM_CERT_SIGNATURE_RSA_SHA384;
+        isRsa = NV_TRUE;
+    }
+    else if (oidEquals(
+                 oid,
+                 oidLength,
+                 ecdsaSha256Oid,
+                 sizeof(ecdsaSha256Oid)))
+    {
+        *algorithm = WINDOWS_RM_CERT_SIGNATURE_ECDSA_SHA256;
+    }
+    else if (oidEquals(
+                 oid,
+                 oidLength,
+                 ecdsaSha384Oid,
+                 sizeof(ecdsaSha384Oid)))
+    {
+        *algorithm = WINDOWS_RM_CERT_SIGNATURE_ECDSA_SHA384;
+    }
+    else
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* ignoredOid;
+    size_t ignoredOidLength;
+    size_t oidElementLength;
+    if (!getDerElement(
+            outerAlgorithmContent,
+            outerAlgorithmContent + outerAlgorithmContentLength,
+            0x06,
+            &ignoredOid,
+            &ignoredOidLength,
+            &oidElementLength) ||
+        (isRsa &&
+         (outerAlgorithmContentLength != oidElementLength + 2 ||
+          outerAlgorithmContent[oidElementLength] != 0x05 ||
+          outerAlgorithmContent[oidElementLength + 1] != 0)) ||
+        (!isRsa && outerAlgorithmContentLength != oidElementLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* field = tbsContent;
+    const NvU8* tbsEnd = tbsContent + tbsContentLength;
+    if (*field == 0xa0 && !skipTbsField(&field, tbsEnd, 0xa0))
+    {
+        return NV_FALSE;
+    }
+    if (!skipTbsField(&field, tbsEnd, 0x02))
+    {
+        return NV_FALSE;
+    }
+    const NvU8* innerAlgorithmContent;
+    size_t innerAlgorithmContentLength;
+    size_t innerAlgorithmLength;
+    if (!getDerElement(
+            field,
+            tbsEnd,
+            0x30,
+            &innerAlgorithmContent,
+            &innerAlgorithmContentLength,
+            &innerAlgorithmLength) ||
+        innerAlgorithmLength != outerAlgorithmLength)
+    {
+        return NV_FALSE;
+    }
+    for (size_t index = 0; index < innerAlgorithmLength; ++index)
+    {
+        if (field[index] != outerAlgorithm[index])
+        {
+            return NV_FALSE;
+        }
+    }
+
+    const NvU8* signatureBits;
+    size_t signatureBitsLength;
+    size_t signatureElementLength;
+    const NvU8* encodedSignature = outerAlgorithm + outerAlgorithmLength;
+    if (!getDerElement(
+            encodedSignature,
+            certificateEnd,
+            0x03,
+            &signatureBits,
+            &signatureBitsLength,
+            &signatureElementLength) ||
+        encodedSignature + signatureElementLength != certificateEnd ||
+        signatureBitsLength < 2 || signatureBits[0] != 0)
+    {
+        return NV_FALSE;
+    }
+    *signature = signatureBits + 1;
+    *signatureLength = signatureBitsLength - 1;
+    return NV_TRUE;
+}
+
+static NvBool decodeEcdsaCertificateSignature(
+    const NvU8* encodedSignature,
+    size_t encodedSignatureLength,
+    NvU8* signature,
+    size_t coordinateLength)
+{
+    const NvU8* sequence;
+    size_t sequenceLength;
+    size_t sequenceElementLength;
+    if (!getDerElement(
+            encodedSignature,
+            encodedSignature + encodedSignatureLength,
+            0x30,
+            &sequence,
+            &sequenceLength,
+            &sequenceElementLength) ||
+        sequenceElementLength != encodedSignatureLength)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* sequenceEnd = sequence + sequenceLength;
+    for (size_t component = 0; component < 2; ++component)
+    {
+        const NvU8* integer;
+        size_t integerLength;
+        size_t integerElementLength;
+        if (!getDerElement(
+                sequence,
+                sequenceEnd,
+                0x02,
+                &integer,
+                &integerLength,
+                &integerElementLength) ||
+            integerLength == 0 || (integer[0] & 0x80) != 0)
+        {
+            return NV_FALSE;
+        }
+        if (integerLength > 1 && integer[0] == 0)
+        {
+            if ((integer[1] & 0x80) == 0)
+            {
+                return NV_FALSE;
+            }
+            ++integer;
+            --integerLength;
+        }
+        if (integerLength > coordinateLength)
+        {
+            return NV_FALSE;
+        }
+        NvU8* componentOutput = signature + component * coordinateLength;
+        for (size_t index = 0; index < coordinateLength - integerLength; ++index)
+        {
+            componentOutput[index] = 0;
+        }
+        for (size_t index = 0; index < integerLength; ++index)
+        {
+            componentOutput[coordinateLength - integerLength + index] = integer[index];
+        }
+        sequence += integerElementLength;
+    }
+    return sequence == sequenceEnd;
+}
+
+NvBool libspdm_x509_verify_cert(
+    const NvU8* certificate,
+    size_t certificateLength,
+    const NvU8* caCertificate,
+    size_t caCertificateLength)
+{
+    const NvU8* tbsCertificate;
+    size_t tbsCertificateLength;
+    WINDOWS_RM_CERT_SIGNATURE_ALGORITHM algorithm;
+    const NvU8* encodedSignature;
+    size_t encodedSignatureLength;
+    if (caCertificate == NULL ||
+        !getCertificateSignatureData(
+            certificate,
+            certificateLength,
+            &tbsCertificate,
+            &tbsCertificateLength,
+            &algorithm,
+            &encodedSignature,
+            &encodedSignatureLength))
+    {
+        return NV_FALSE;
+    }
+
+    NvU8 hash[48];
+    const NvBool usesSha256 =
+        algorithm == WINDOWS_RM_CERT_SIGNATURE_RSA_SHA256 ||
+        algorithm == WINDOWS_RM_CERT_SIGNATURE_ECDSA_SHA256;
+    const size_t hashNid = usesSha256 ? 0x0001 : 0x0002;
+    const size_t hashLength = usesSha256 ? 32 : 48;
+    if ((usesSha256 &&
+         !libspdm_sha256_hash_all(
+             tbsCertificate,
+             tbsCertificateLength,
+             hash)) ||
+        (!usesSha256 &&
+         !libspdm_sha384_hash_all(
+             tbsCertificate,
+             tbsCertificateLength,
+             hash)))
+    {
+        return NV_FALSE;
+    }
+
+    if (algorithm == WINDOWS_RM_CERT_SIGNATURE_RSA_SHA256 ||
+        algorithm == WINDOWS_RM_CERT_SIGNATURE_RSA_SHA384)
+    {
+        void* rsaContext = NULL;
+        const NvBool imported = libspdm_rsa_get_public_key_from_x509(
+            caCertificate,
+            caCertificateLength,
+            &rsaContext);
+        const NvBool verified = imported &&
+            hashNid <= NV_U32_MAX && hashLength <= NV_U32_MAX &&
+            encodedSignatureLength <= NV_U32_MAX &&
+            NvPlatformRmVerifyRsaPkcs1(
+                rsaContext,
+                (NvU32)hashNid,
+                hash,
+                (NvU32)hashLength,
+                encodedSignature,
+                (NvU32)encodedSignatureLength);
+        libspdm_rsa_free(rsaContext);
+        return verified;
+    }
+
+    void* ecContext = NULL;
+    if (!libspdm_ec_get_public_key_from_x509(
+            caCertificate,
+            caCertificateLength,
+            &ecContext))
+    {
+        return NV_FALSE;
+    }
+    const size_t coordinateLength =
+        algorithm == WINDOWS_RM_CERT_SIGNATURE_ECDSA_SHA256 ? 32 : 48;
+    NvU8 signature[96];
+    const NvBool verified = decodeEcdsaCertificateSignature(
+            encodedSignature,
+            encodedSignatureLength,
+            signature,
+            coordinateLength) &&
+        libspdm_ecdsa_verify(
+            ecContext,
+            hashNid,
+            hash,
+            hashLength,
+            signature,
+            2 * coordinateLength);
+    libspdm_ec_free(ecContext);
+    return verified;
+}
+
 NvBool libspdm_x509_get_extended_key_usage(
     const NvU8* certificate,
     size_t certificateLength,
