@@ -158,6 +158,22 @@ remaining generated units share their upstream control, GSP metadata, CrashCat,
 and NVLink declaration headers. This makes every registered class contract
 visible to the standalone probe so missing implementation owners cannot remain
 hidden behind absent class definitions.
+The matching portable implementation catalog is now complete for the upstream
+GPU, memory manager, RMAPI, diagnostics, core, compute, display, platform,
+Hyper-V virtualization, vGPU, NVLink, libspdm, CrashCat, CPER, MMU, and support
+library families. Recursive project items preserve unique object paths and
+exclude files already carrying per-source build metadata. Unix, DCE-only,
+NvSwitch, Xen, KVM, and VMware policy implementations remain excluded. With
+portable owners and the NVLink OS adapter present, the standalone probe has no
+remaining active portable implementation symbol; its remaining 282 unique
+contracts are Windows OS and cryptographic providers or deliberately excluded
+platform controls.
+Windows NVPort user-buffer copies validate arguments and delegate to guarded
+WDK `ProbeForRead`/`ProbeForWrite` operations in the platform layer, returning
+an address error on access exceptions. Test-only IOMMU SVA allocation reports
+unsupported without publishing a handle or PASID, and Windows identifies
+itself as neither a VGX hypervisor nor a provider of guest-MSI injection. These
+are explicit capability boundaries rather than successful placeholder paths.
 The generated `GpuManagementApi` and complete `GSyncApi` resource layers now
 close their catalog entries. GSync notification traversal intentionally leaves
 Windows event delivery as an explicit OS-service boundary rather than using a

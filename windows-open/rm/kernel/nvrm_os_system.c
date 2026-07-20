@@ -62,9 +62,49 @@ NvBool osIsAdministrator(void)
     return NvPlatformRmIsCurrentSubjectAdministrator();
 }
 
+NvBool hypervisorIsVgxHyper_IMPL(void)
+{
+    return NV_FALSE;
+}
+
+NV_STATUS hypervisorInjectInterrupt_IMPL(
+    void* pHypervisor,
+    void* pVgpuNsIntr)
+{
+    (void)pHypervisor;
+    (void)pVgpuNsIntr;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 void osAssertFailed(void)
 {
     NvPlatformRmCaptureAssertion();
+}
+
+void os_dump_stack(void)
+{
+    NvPlatformRmCaptureAssertion();
+}
+
+NV_STATUS os_iommu_sva_bind(void* arg, void** handle, NvU32* pasid)
+{
+    (void)arg;
+
+    if (handle != NULL)
+    {
+        *handle = NULL;
+    }
+    if (pasid != NULL)
+    {
+        *pasid = 0;
+    }
+
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+void os_iommu_sva_unbind(void* handle)
+{
+    (void)handle;
 }
 
 void osBugCheck(NvU32 bugCode)

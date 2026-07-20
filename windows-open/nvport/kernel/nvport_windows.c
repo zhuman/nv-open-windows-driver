@@ -1,6 +1,7 @@
 #include "nvport_windows.h"
 
 #include "nvport/nvport.h"
+#include "nvplatform_memory_rm.h"
 #include "nvplatform_thread.h"
 
 #include <stddef.h>
@@ -192,6 +193,44 @@ void* portMemCopyAligned(
     NvLength sourceSize)
 {
     return portMemCopy(destination, destinationSize, source, sourceSize);
+}
+
+NV_STATUS portMemExCopyFromUser(
+    const NvP64 pUser,
+    void* pKernel,
+    NvLength lengthBytes)
+{
+    const void* userAddress = NvP64_VALUE(pUser);
+
+    if (pKernel == NULL || userAddress == NULL)
+    {
+        return NV_ERR_INVALID_POINTER;
+    }
+    if (lengthBytes == 0)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NvPlatformCopyFromUser(userAddress, pKernel, lengthBytes);
+}
+
+NV_STATUS portMemExCopyToUser(
+    const void* pKernel,
+    NvP64 pUser,
+    NvLength lengthBytes)
+{
+    void* userAddress = NvP64_VALUE(pUser);
+
+    if (pKernel == NULL || userAddress == NULL)
+    {
+        return NV_ERR_INVALID_POINTER;
+    }
+    if (lengthBytes == 0)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NvPlatformCopyToUser(pKernel, userAddress, lengthBytes);
 }
 
 void* portMemMove(
