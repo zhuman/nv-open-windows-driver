@@ -1,0 +1,974 @@
+#include <ntddk.h>
+#include <bcrypt.h>
+
+#include "nvplatform_crypto_rm.h"
+
+#pragma comment(lib, "cng.lib")
+
+namespace {
+
+constexpr ULONG CryptoPoolTag = 'rCvN';
+
+struct HashContext
+{
+    BCRYPT_ALG_HANDLE algorithm;
+    BCRYPT_HASH_HANDLE hash;
+    PUCHAR object;
+    ULONG objectLength;
+    ULONG digestLength;
+};
+
+struct AesGcmContext
+{
+    BCRYPT_ALG_HANDLE algorithm;
+};
+
+void DestroyHashContext(HashContext* context) noexcept
+{
+    if (context == nullptr)
+    {
+        return;
+    }
+
+    if (context->hash != nullptr)
+    {
+        BCryptDestroyHash(context->hash);
+    }
+    if (context->algorithm != nullptr)
+    {
+        BCryptCloseAlgorithmProvider(context->algorithm, 0);
+    }
+    if (context->object != nullptr)
+    {
+        ExFreePoolWithTag(context->object, CryptoPoolTag);
+    }
+    ExFreePoolWithTag(context, CryptoPoolTag);
+}
+
+bool CreateHashHandle(
+    HashContext* context,
+    const NvU8* key = nullptr,
+    ULONG keyLength = 0) noexcept
+{
+    return NT_SUCCESS(BCryptCreateHash(
+        context->algorithm,
+        &context->hash,
+        context->object,
+        context->objectLength,
+        const_cast<PUCHAR>(key),
+        keyLength,
+        0));
+}
+
+HashContext* CreateHashContext(
+    PCWSTR algorithmName,
+    ULONG digestLength,
+    ULONG flags = 0) noexcept
+{
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return nullptr;
+    }
+
+    auto* context = static_cast<HashContext*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(HashContext),
+        CryptoPoolTag));
+    if (context == nullptr)
+    {
+        return nullptr;
+    }
+    RtlZeroMemory(context, sizeof(*context));
+    context->digestLength = digestLength;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &context->algorithm,
+        algorithmName,
+        nullptr,
+        flags);
+    ULONG resultLength = 0;
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptGetProperty(
+            context->algorithm,
+            BCRYPT_OBJECT_LENGTH,
+            reinterpret_cast<PUCHAR>(&context->objectLength),
+            sizeof(context->objectLength),
+            &resultLength,
+            0);
+    }
+    if (NT_SUCCESS(status))
+    {
+        context->object = static_cast<PUCHAR>(ExAllocatePool2(
+            POOL_FLAG_NON_PAGED,
+            context->objectLength,
+            CryptoPoolTag));
+        if (context->object == nullptr)
+        {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+    if (!NT_SUCCESS(status) || !CreateHashHandle(context))
+    {
+        DestroyHashContext(context);
+        return nullptr;
+    }
+
+    return context;
+}
+
+bool ResetHashContext(HashContext* context) noexcept
+{
+    if (context == nullptr || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return false;
+    }
+
+    if (context->hash != nullptr)
+    {
+        BCryptDestroyHash(context->hash);
+        context->hash = nullptr;
+    }
+    return CreateHashHandle(context);
+}
+
+bool DuplicateHashContext(
+    const HashContext* source,
+    HashContext* destination) noexcept
+{
+    if (source == nullptr || destination == nullptr ||
+        source->digestLength != destination->digestLength ||
+        source->objectLength != destination->objectLength ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return false;
+    }
+
+    if (destination->hash != nullptr)
+    {
+        BCryptDestroyHash(destination->hash);
+        destination->hash = nullptr;
+    }
+
+    return NT_SUCCESS(BCryptDuplicateHash(
+        source->hash,
+        &destination->hash,
+        destination->object,
+        destination->objectLength,
+        0));
+}
+
+bool UpdateHashContext(
+    HashContext* context,
+    const void* data,
+    size_t dataLength) noexcept
+{
+    if (context == nullptr || (data == nullptr && dataLength != 0) ||
+        dataLength > MAXULONG || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return false;
+    }
+
+    return NT_SUCCESS(BCryptHashData(
+        context->hash,
+        static_cast<PUCHAR>(const_cast<void*>(data)),
+        static_cast<ULONG>(dataLength),
+        0));
+}
+
+bool FinishHashContext(HashContext* context, NvU8* digest) noexcept
+{
+    return context != nullptr && digest != nullptr &&
+        KeGetCurrentIrql() == PASSIVE_LEVEL &&
+        NT_SUCCESS(BCryptFinishHash(
+            context->hash,
+            digest,
+            context->digestLength,
+            0));
+}
+
+bool SetHmacKey(
+    HashContext* context,
+    const NvU8* key,
+    size_t keyLength) noexcept
+{
+    if (context == nullptr || (key == nullptr && keyLength != 0) ||
+        keyLength > MAXULONG || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return false;
+    }
+
+    if (context->hash != nullptr)
+    {
+        BCryptDestroyHash(context->hash);
+        context->hash = nullptr;
+    }
+
+    return CreateHashHandle(context, key, static_cast<ULONG>(keyLength));
+}
+
+bool HashAll(
+    PCWSTR algorithmName,
+    ULONG digestLength,
+    const void* data,
+    size_t dataLength,
+    NvU8* digest) noexcept
+{
+    if (digest == nullptr || (data == nullptr && dataLength != 0) ||
+        dataLength > MAXULONG)
+    {
+        return false;
+    }
+
+    HashContext* context = CreateHashContext(algorithmName, digestLength);
+    if (context == nullptr)
+    {
+        return false;
+    }
+
+    const bool result = UpdateHashContext(context, data, dataLength) &&
+        FinishHashContext(context, digest);
+    DestroyHashContext(context);
+    return result;
+}
+
+bool HmacAll(
+    PCWSTR algorithmName,
+    ULONG digestLength,
+    const void* data,
+    size_t dataLength,
+    const NvU8* key,
+    size_t keyLength,
+    NvU8* digest) noexcept
+{
+    if (digest == nullptr || (data == nullptr && dataLength != 0) ||
+        (key == nullptr && keyLength != 0) || dataLength > MAXULONG ||
+        keyLength > MAXULONG)
+    {
+        return false;
+    }
+
+    HashContext* context = CreateHashContext(
+        algorithmName,
+        digestLength,
+        BCRYPT_ALG_HANDLE_HMAC_FLAG);
+    if (context == nullptr)
+    {
+        return false;
+    }
+
+    const bool result = SetHmacKey(context, key, keyLength) &&
+        UpdateHashContext(context, data, dataLength) &&
+        FinishHashContext(context, digest);
+    DestroyHashContext(context);
+    return result;
+}
+
+bool HkdfExpand(
+    PCWSTR algorithmName,
+    ULONG digestLength,
+    const NvU8* prk,
+    size_t prkLength,
+    const NvU8* info,
+    size_t infoLength,
+    NvU8* output,
+    size_t outputLength) noexcept
+{
+    if (prk == nullptr || info == nullptr || output == nullptr ||
+        prkLength != digestLength || infoLength > MAXULONG ||
+        outputLength > static_cast<size_t>(digestLength) * 255)
+    {
+        return false;
+    }
+
+    HashContext* context = CreateHashContext(
+        algorithmName,
+        digestLength,
+        BCRYPT_ALG_HANDLE_HMAC_FLAG);
+    if (context == nullptr)
+    {
+        return false;
+    }
+
+    NvU8 previous[48]{};
+    size_t produced = 0;
+    NvU8 counter = 1;
+    bool result = true;
+    while (produced < outputLength)
+    {
+        result = SetHmacKey(context, prk, prkLength);
+        if (result && produced != 0)
+        {
+            result = UpdateHashContext(context, previous, digestLength);
+        }
+        if (result && infoLength != 0)
+        {
+            result = UpdateHashContext(context, info, infoLength);
+        }
+        if (result)
+        {
+            result = UpdateHashContext(context, &counter, sizeof(counter)) &&
+                FinishHashContext(context, previous);
+        }
+        if (!result)
+        {
+            break;
+        }
+
+        const size_t remaining = outputLength - produced;
+        const size_t copyLength = remaining < digestLength
+            ? remaining
+            : digestLength;
+        RtlCopyMemory(output + produced, previous, copyLength);
+        produced += copyLength;
+        ++counter;
+    }
+
+    RtlSecureZeroMemory(previous, sizeof(previous));
+    DestroyHashContext(context);
+    return result;
+}
+
+AesGcmContext* CreateAesGcmContext() noexcept
+{
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return nullptr;
+    }
+
+    auto* context = static_cast<AesGcmContext*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(AesGcmContext),
+        CryptoPoolTag));
+    if (context == nullptr)
+    {
+        return nullptr;
+    }
+    context->algorithm = nullptr;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &context->algorithm,
+        BCRYPT_AES_ALGORITHM,
+        nullptr,
+        0);
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptSetProperty(
+            context->algorithm,
+            BCRYPT_CHAINING_MODE,
+            reinterpret_cast<PUCHAR>(const_cast<PWSTR>(BCRYPT_CHAIN_MODE_GCM)),
+            sizeof(BCRYPT_CHAIN_MODE_GCM),
+            0);
+    }
+    if (!NT_SUCCESS(status))
+    {
+        if (context->algorithm != nullptr)
+        {
+            BCryptCloseAlgorithmProvider(context->algorithm, 0);
+        }
+        ExFreePoolWithTag(context, CryptoPoolTag);
+        return nullptr;
+    }
+
+    return context;
+}
+
+void DestroyAesGcmContext(AesGcmContext* context) noexcept
+{
+    if (context != nullptr)
+    {
+        if (context->algorithm != nullptr)
+        {
+            BCryptCloseAlgorithmProvider(context->algorithm, 0);
+        }
+        ExFreePoolWithTag(context, CryptoPoolTag);
+    }
+}
+
+bool AesGcmCrypt(
+    AesGcmContext* context,
+    const NvU8* key,
+    size_t keyLength,
+    const NvU8* iv,
+    size_t ivLength,
+    const NvU8* additionalData,
+    size_t additionalDataLength,
+    const NvU8* input,
+    size_t inputLength,
+    NvU8* tag,
+    size_t tagLength,
+    NvU8* output,
+    size_t* outputLength,
+    bool encrypt) noexcept
+{
+    if (context == nullptr || key == nullptr || iv == nullptr ||
+        (additionalData == nullptr && additionalDataLength != 0) ||
+        (input == nullptr && inputLength != 0) || tag == nullptr ||
+        output == nullptr || outputLength == nullptr || ivLength != 12 ||
+        (keyLength != 16 && keyLength != 24 && keyLength != 32) ||
+        tagLength < 12 || tagLength > 16 || inputLength > MAXULONG ||
+        additionalDataLength > MAXULONG || *outputLength < inputLength ||
+        *outputLength > MAXULONG || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return false;
+    }
+
+    ULONG keyObjectLength = 0;
+    ULONG resultLength = 0;
+    NTSTATUS status = BCryptGetProperty(
+        context->algorithm,
+        BCRYPT_OBJECT_LENGTH,
+        reinterpret_cast<PUCHAR>(&keyObjectLength),
+        sizeof(keyObjectLength),
+        &resultLength,
+        0);
+    PUCHAR keyObject = nullptr;
+    BCRYPT_KEY_HANDLE keyHandle = nullptr;
+    if (NT_SUCCESS(status))
+    {
+        keyObject = static_cast<PUCHAR>(ExAllocatePool2(
+            POOL_FLAG_NON_PAGED,
+            keyObjectLength,
+            CryptoPoolTag));
+        if (keyObject == nullptr)
+        {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptGenerateSymmetricKey(
+            context->algorithm,
+            &keyHandle,
+            keyObject,
+            keyObjectLength,
+            const_cast<PUCHAR>(key),
+            static_cast<ULONG>(keyLength),
+            0);
+    }
+
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
+    BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
+    authInfo.pbNonce = const_cast<PUCHAR>(iv);
+    authInfo.cbNonce = static_cast<ULONG>(ivLength);
+    authInfo.pbAuthData = const_cast<PUCHAR>(additionalData);
+    authInfo.cbAuthData = static_cast<ULONG>(additionalDataLength);
+    authInfo.pbTag = tag;
+    authInfo.cbTag = static_cast<ULONG>(tagLength);
+
+    ULONG produced = 0;
+    if (NT_SUCCESS(status))
+    {
+        status = encrypt
+            ? BCryptEncrypt(
+                keyHandle,
+                const_cast<PUCHAR>(input),
+                static_cast<ULONG>(inputLength),
+                &authInfo,
+                nullptr,
+                0,
+                output,
+                static_cast<ULONG>(*outputLength),
+                &produced,
+                0)
+            : BCryptDecrypt(
+                keyHandle,
+                const_cast<PUCHAR>(input),
+                static_cast<ULONG>(inputLength),
+                &authInfo,
+                nullptr,
+                0,
+                output,
+                static_cast<ULONG>(*outputLength),
+                &produced,
+                0);
+    }
+
+    if (keyHandle != nullptr)
+    {
+        BCryptDestroyKey(keyHandle);
+    }
+    if (keyObject != nullptr)
+    {
+        RtlSecureZeroMemory(keyObject, keyObjectLength);
+        ExFreePoolWithTag(keyObject, CryptoPoolTag);
+    }
+
+    if (!NT_SUCCESS(status) || produced != inputLength)
+    {
+        return false;
+    }
+
+    *outputLength = produced;
+    return true;
+}
+
+} // namespace
+
+extern "C" NV_STATUS NvPlatformRmGetRandomBytes(
+    NvU8* bytes,
+    NvU32 byteCount)
+{
+    if ((bytes == nullptr && byteCount != 0) ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (byteCount == 0)
+    {
+        return NV_OK;
+    }
+
+    return NT_SUCCESS(BCryptGenRandom(
+        nullptr,
+        bytes,
+        byteCount,
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG))
+        ? NV_OK
+        : NV_ERR_OPERATING_SYSTEM;
+}
+
+extern "C" void* libspdm_sha256_new(void)
+{
+    return CreateHashContext(BCRYPT_SHA256_ALGORITHM, 32);
+}
+
+extern "C" void libspdm_sha256_free(void* context)
+{
+    DestroyHashContext(static_cast<HashContext*>(context));
+}
+
+extern "C" bool libspdm_sha256_init(void* context)
+{
+    return ResetHashContext(static_cast<HashContext*>(context));
+}
+
+extern "C" bool libspdm_sha256_duplicate(
+    const void* source,
+    void* destination)
+{
+    return DuplicateHashContext(
+        static_cast<const HashContext*>(source),
+        static_cast<HashContext*>(destination));
+}
+
+extern "C" bool libspdm_sha256_update(
+    void* context,
+    const void* data,
+    size_t dataLength)
+{
+    return UpdateHashContext(
+        static_cast<HashContext*>(context),
+        data,
+        dataLength);
+}
+
+extern "C" bool libspdm_sha256_final(void* context, NvU8* digest)
+{
+    return FinishHashContext(static_cast<HashContext*>(context), digest);
+}
+
+extern "C" bool libspdm_sha256_hash_all(
+    const void* data,
+    size_t dataLength,
+    NvU8* digest)
+{
+    return HashAll(BCRYPT_SHA256_ALGORITHM, 32, data, dataLength, digest);
+}
+
+extern "C" void* libspdm_sha384_new(void)
+{
+    return CreateHashContext(BCRYPT_SHA384_ALGORITHM, 48);
+}
+
+extern "C" void libspdm_sha384_free(void* context)
+{
+    DestroyHashContext(static_cast<HashContext*>(context));
+}
+
+extern "C" bool libspdm_sha384_init(void* context)
+{
+    return ResetHashContext(static_cast<HashContext*>(context));
+}
+
+extern "C" bool libspdm_sha384_duplicate(
+    const void* source,
+    void* destination)
+{
+    return DuplicateHashContext(
+        static_cast<const HashContext*>(source),
+        static_cast<HashContext*>(destination));
+}
+
+extern "C" bool libspdm_sha384_update(
+    void* context,
+    const void* data,
+    size_t dataLength)
+{
+    return UpdateHashContext(
+        static_cast<HashContext*>(context),
+        data,
+        dataLength);
+}
+
+extern "C" bool libspdm_sha384_final(void* context, NvU8* digest)
+{
+    return FinishHashContext(static_cast<HashContext*>(context), digest);
+}
+
+extern "C" bool libspdm_sha384_hash_all(
+    const void* data,
+    size_t dataLength,
+    NvU8* digest)
+{
+    return HashAll(BCRYPT_SHA384_ALGORITHM, 48, data, dataLength, digest);
+}
+
+extern "C" void* libspdm_hmac_sha256_new(void)
+{
+    return CreateHashContext(
+        BCRYPT_SHA256_ALGORITHM,
+        32,
+        BCRYPT_ALG_HANDLE_HMAC_FLAG);
+}
+
+extern "C" void libspdm_hmac_sha256_free(void* context)
+{
+    DestroyHashContext(static_cast<HashContext*>(context));
+}
+
+extern "C" bool libspdm_hmac_sha256_set_key(
+    void* context,
+    const NvU8* key,
+    size_t keyLength)
+{
+    return SetHmacKey(static_cast<HashContext*>(context), key, keyLength);
+}
+
+extern "C" bool libspdm_hmac_sha256_duplicate(
+    const void* source,
+    void* destination)
+{
+    return DuplicateHashContext(
+        static_cast<const HashContext*>(source),
+        static_cast<HashContext*>(destination));
+}
+
+extern "C" bool libspdm_hmac_sha256_update(
+    void* context,
+    const void* data,
+    size_t dataLength)
+{
+    return UpdateHashContext(
+        static_cast<HashContext*>(context),
+        data,
+        dataLength);
+}
+
+extern "C" bool libspdm_hmac_sha256_final(void* context, NvU8* digest)
+{
+    return FinishHashContext(static_cast<HashContext*>(context), digest);
+}
+
+extern "C" bool libspdm_hmac_sha256_all(
+    const void* data,
+    size_t dataLength,
+    const NvU8* key,
+    size_t keyLength,
+    NvU8* digest)
+{
+    return HmacAll(
+        BCRYPT_SHA256_ALGORITHM,
+        32,
+        data,
+        dataLength,
+        key,
+        keyLength,
+        digest);
+}
+
+extern "C" void* libspdm_hmac_sha384_new(void)
+{
+    return CreateHashContext(
+        BCRYPT_SHA384_ALGORITHM,
+        48,
+        BCRYPT_ALG_HANDLE_HMAC_FLAG);
+}
+
+extern "C" void libspdm_hmac_sha384_free(void* context)
+{
+    DestroyHashContext(static_cast<HashContext*>(context));
+}
+
+extern "C" bool libspdm_hmac_sha384_set_key(
+    void* context,
+    const NvU8* key,
+    size_t keyLength)
+{
+    return SetHmacKey(static_cast<HashContext*>(context), key, keyLength);
+}
+
+extern "C" bool libspdm_hmac_sha384_duplicate(
+    const void* source,
+    void* destination)
+{
+    return DuplicateHashContext(
+        static_cast<const HashContext*>(source),
+        static_cast<HashContext*>(destination));
+}
+
+extern "C" bool libspdm_hmac_sha384_update(
+    void* context,
+    const void* data,
+    size_t dataLength)
+{
+    return UpdateHashContext(
+        static_cast<HashContext*>(context),
+        data,
+        dataLength);
+}
+
+extern "C" bool libspdm_hmac_sha384_final(void* context, NvU8* digest)
+{
+    return FinishHashContext(static_cast<HashContext*>(context), digest);
+}
+
+extern "C" bool libspdm_hmac_sha384_all(
+    const void* data,
+    size_t dataLength,
+    const NvU8* key,
+    size_t keyLength,
+    NvU8* digest)
+{
+    return HmacAll(
+        BCRYPT_SHA384_ALGORITHM,
+        48,
+        data,
+        dataLength,
+        key,
+        keyLength,
+        digest);
+}
+
+extern "C" bool libspdm_hkdf_sha256_extract(
+    const NvU8* key,
+    size_t keyLength,
+    const NvU8* salt,
+    size_t saltLength,
+    NvU8* prk,
+    size_t prkLength)
+{
+    return prkLength == 32 && HmacAll(
+        BCRYPT_SHA256_ALGORITHM,
+        32,
+        key,
+        keyLength,
+        salt,
+        saltLength,
+        prk);
+}
+
+extern "C" bool libspdm_hkdf_sha256_expand(
+    const NvU8* prk,
+    size_t prkLength,
+    const NvU8* info,
+    size_t infoLength,
+    NvU8* output,
+    size_t outputLength)
+{
+    return HkdfExpand(
+        BCRYPT_SHA256_ALGORITHM,
+        32,
+        prk,
+        prkLength,
+        info,
+        infoLength,
+        output,
+        outputLength);
+}
+
+extern "C" bool libspdm_hkdf_sha384_extract(
+    const NvU8* key,
+    size_t keyLength,
+    const NvU8* salt,
+    size_t saltLength,
+    NvU8* prk,
+    size_t prkLength)
+{
+    return prkLength == 48 && HmacAll(
+        BCRYPT_SHA384_ALGORITHM,
+        48,
+        key,
+        keyLength,
+        salt,
+        saltLength,
+        prk);
+}
+
+extern "C" bool libspdm_hkdf_sha384_expand(
+    const NvU8* prk,
+    size_t prkLength,
+    const NvU8* info,
+    size_t infoLength,
+    NvU8* output,
+    size_t outputLength)
+{
+    return HkdfExpand(
+        BCRYPT_SHA384_ALGORITHM,
+        48,
+        prk,
+        prkLength,
+        info,
+        infoLength,
+        output,
+        outputLength);
+}
+
+extern "C" bool libspdm_aead_gcm_prealloc(void** context)
+{
+    if (context == nullptr)
+    {
+        return false;
+    }
+
+    *context = CreateAesGcmContext();
+    return *context != nullptr;
+}
+
+extern "C" void libspdm_aead_free(void* context)
+{
+    DestroyAesGcmContext(static_cast<AesGcmContext*>(context));
+}
+
+extern "C" bool libspdm_aead_aes_gcm_encrypt_prealloc(
+    void* context,
+    const NvU8* key,
+    size_t keyLength,
+    const NvU8* iv,
+    size_t ivLength,
+    const NvU8* additionalData,
+    size_t additionalDataLength,
+    const NvU8* input,
+    size_t inputLength,
+    NvU8* tag,
+    size_t tagLength,
+    NvU8* output,
+    size_t* outputLength)
+{
+    return AesGcmCrypt(
+        static_cast<AesGcmContext*>(context),
+        key,
+        keyLength,
+        iv,
+        ivLength,
+        additionalData,
+        additionalDataLength,
+        input,
+        inputLength,
+        tag,
+        tagLength,
+        output,
+        outputLength,
+        true);
+}
+
+extern "C" bool libspdm_aead_aes_gcm_decrypt_prealloc(
+    void* context,
+    const NvU8* key,
+    size_t keyLength,
+    const NvU8* iv,
+    size_t ivLength,
+    const NvU8* additionalData,
+    size_t additionalDataLength,
+    const NvU8* input,
+    size_t inputLength,
+    const NvU8* tag,
+    size_t tagLength,
+    NvU8* output,
+    size_t* outputLength)
+{
+    return AesGcmCrypt(
+        static_cast<AesGcmContext*>(context),
+        key,
+        keyLength,
+        iv,
+        ivLength,
+        additionalData,
+        additionalDataLength,
+        input,
+        inputLength,
+        const_cast<NvU8*>(tag),
+        tagLength,
+        output,
+        outputLength,
+        false);
+}
+
+extern "C" bool libspdm_aead_aes_gcm_encrypt(
+    const NvU8* key,
+    size_t keyLength,
+    const NvU8* iv,
+    size_t ivLength,
+    const NvU8* additionalData,
+    size_t additionalDataLength,
+    const NvU8* input,
+    size_t inputLength,
+    NvU8* tag,
+    size_t tagLength,
+    NvU8* output,
+    size_t* outputLength)
+{
+    AesGcmContext* context = CreateAesGcmContext();
+    const bool result = AesGcmCrypt(
+        context,
+        key,
+        keyLength,
+        iv,
+        ivLength,
+        additionalData,
+        additionalDataLength,
+        input,
+        inputLength,
+        tag,
+        tagLength,
+        output,
+        outputLength,
+        true);
+    DestroyAesGcmContext(context);
+    return result;
+}
+
+extern "C" bool libspdm_aead_aes_gcm_decrypt(
+    const NvU8* key,
+    size_t keyLength,
+    const NvU8* iv,
+    size_t ivLength,
+    const NvU8* additionalData,
+    size_t additionalDataLength,
+    const NvU8* input,
+    size_t inputLength,
+    const NvU8* tag,
+    size_t tagLength,
+    NvU8* output,
+    size_t* outputLength)
+{
+    AesGcmContext* context = CreateAesGcmContext();
+    const bool result = AesGcmCrypt(
+        context,
+        key,
+        keyLength,
+        iv,
+        ivLength,
+        additionalData,
+        additionalDataLength,
+        input,
+        inputLength,
+        const_cast<NvU8*>(tag),
+        tagLength,
+        output,
+        outputLength,
+        false);
+    DestroyAesGcmContext(context);
+    return result;
+}
