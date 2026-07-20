@@ -3,6 +3,37 @@
 
 #include <stddef.h>
 
+typedef struct WINDOWS_RM_X509_DATE_TIME
+{
+    NvU64 sortableValue;
+} WINDOWS_RM_X509_DATE_TIME;
+
+static NvBool parseDateTimeField(
+    const char* text,
+    NvU32 offset,
+    NvU32 length,
+    NvU32* value)
+{
+    NvU32 result = 0;
+    for (NvU32 index = 0; index < length; ++index)
+    {
+        const char character = text[offset + index];
+        if (character < '0' || character > '9')
+        {
+            return NV_FALSE;
+        }
+        result = result * 10 + (NvU32)(character - '0');
+    }
+
+    *value = result;
+    return NV_TRUE;
+}
+
+static NvBool isLeapYear(NvU32 year)
+{
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
 NV_STATUS osGetRandomBytes(NvU8* bytes, NvU16 byteCount)
 {
     return NvPlatformRmGetRandomBytes(bytes, byteCount);
@@ -21,6 +52,92 @@ NvBool libspdm_random_bytes(NvU8* output, size_t size)
 NvBool libspdm_check_crypto_backend(void)
 {
     return NV_TRUE;
+}
+
+NvBool libspdm_x509_set_date_time(
+    const char* dateTimeString,
+    void* dateTime,
+    size_t* dateTimeSize)
+{
+    static const NvU8 daysPerMonth[] = {
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+    };
+    const size_t requiredSize = sizeof(WINDOWS_RM_X509_DATE_TIME);
+    NvU32 year;
+    NvU32 month;
+    NvU32 day;
+    NvU32 hour;
+    NvU32 minute;
+    NvU32 second;
+
+    if (dateTimeString == NULL || dateTimeSize == NULL)
+    {
+        return NV_FALSE;
+    }
+    for (NvU32 index = 0; index < 15; ++index)
+    {
+        if (dateTimeString[index] == '\0')
+        {
+            return NV_FALSE;
+        }
+    }
+    if (dateTimeString[14] != 'Z' || dateTimeString[15] != '\0' ||
+        !parseDateTimeField(dateTimeString, 0, 4, &year) ||
+        !parseDateTimeField(dateTimeString, 4, 2, &month) ||
+        !parseDateTimeField(dateTimeString, 6, 2, &day) ||
+        !parseDateTimeField(dateTimeString, 8, 2, &hour) ||
+        !parseDateTimeField(dateTimeString, 10, 2, &minute) ||
+        !parseDateTimeField(dateTimeString, 12, 2, &second))
+    {
+        return NV_FALSE;
+    }
+
+    NvU32 maximumDay = month >= 1 && month <= 12
+        ? daysPerMonth[month - 1]
+        : 0;
+    if (month == 2 && isLeapYear(year))
+    {
+        ++maximumDay;
+    }
+    if (year == 0 || day == 0 || day > maximumDay ||
+        hour > 23 || minute > 59 || second > 59)
+    {
+        return NV_FALSE;
+    }
+
+    if (dateTime == NULL || *dateTimeSize < requiredSize)
+    {
+        *dateTimeSize = requiredSize;
+        return NV_FALSE;
+    }
+
+    WINDOWS_RM_X509_DATE_TIME* value = dateTime;
+    value->sortableValue = year;
+    value->sortableValue = value->sortableValue * 100 + month;
+    value->sortableValue = value->sortableValue * 100 + day;
+    value->sortableValue = value->sortableValue * 100 + hour;
+    value->sortableValue = value->sortableValue * 100 + minute;
+    value->sortableValue = value->sortableValue * 100 + second;
+    *dateTimeSize = requiredSize;
+    return NV_TRUE;
+}
+
+NvS32 libspdm_x509_compare_date_time(
+    const void* firstDateTime,
+    const void* secondDateTime)
+{
+    if (firstDateTime == NULL || secondDateTime == NULL)
+    {
+        return -2;
+    }
+
+    const WINDOWS_RM_X509_DATE_TIME* first = firstDateTime;
+    const WINDOWS_RM_X509_DATE_TIME* second = secondDateTime;
+    if (first->sortableValue == second->sortableValue)
+    {
+        return 0;
+    }
+    return first->sortableValue > second->sortableValue ? 1 : -1;
 }
 
 void libspdm_sleep(NvU64 microseconds)
