@@ -266,6 +266,35 @@ extern "C" NvU64 NvPlatformGetCurrentExecutionLevel(void)
     return KeGetCurrentIrql();
 }
 
+extern "C" NvBool NvPlatformIsRaisedExecutionLevel(void)
+{
+    return KeGetCurrentIrql() > APC_LEVEL ? NV_TRUE : NV_FALSE;
+}
+
+extern "C" NvBool NvPlatformIsInterruptExecutionLevel(void)
+{
+    return KeGetCurrentIrql() > DISPATCH_LEVEL ? NV_TRUE : NV_FALSE;
+}
+
+extern "C" void NvPlatformProcessorPause(void)
+{
+    YieldProcessor();
+}
+
+extern "C" NvBool NvPlatformFlushCpuCaches(void)
+{
+#if defined(_ARM64_)
+    return NV_FALSE;
+#else
+    return KeInvalidateAllCaches() ? NV_TRUE : NV_FALSE;
+#endif
+}
+
+extern "C" void NvPlatformFlushWriteBuffer(void)
+{
+    KeFlushWriteBuffer();
+}
+
 extern "C" void NvPlatformDelayMilliseconds(NvU32 milliseconds)
 {
     LARGE_INTEGER interval{};

@@ -186,6 +186,11 @@ The unchanged upstream GPU mapping and OS register owners now select BAR0 from
 `OBJGPU`, retain vGPU PCI-mirror routing, and perform bounded Windows
 `READ_REGISTER_*`/`WRITE_REGISTER_*` accesses. Complete upstream NBSI and FNV
 owners preserve firmware-backed registry override lookup on this path.
+RM execution-context queries now distinguish wait-safe, DPC, and interrupt
+IRQLs through the Windows kernel. Spin polling uses the architecture's processor
+pause primitive, write-combined register ordering uses `KeFlushWriteBuffer`,
+and whole-cache invalidation reports unsupported where the WDK has no portable
+ARM64 operation instead of silently claiming completion.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor
