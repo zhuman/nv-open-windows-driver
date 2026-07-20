@@ -1225,6 +1225,473 @@ NvBool libspdm_x509_get_signature_algorithm(
     return NV_TRUE;
 }
 
+static NvBool validateOid(
+    const NvU8* oid,
+    size_t oidLength)
+{
+    if (oid == NULL || oidLength == 0)
+    {
+        return NV_FALSE;
+    }
+
+    for (size_t index = 0; index < oidLength;)
+    {
+        if (oid[index] == 0x80)
+        {
+            return NV_FALSE;
+        }
+        do
+        {
+            if (index >= oidLength)
+            {
+                return NV_FALSE;
+            }
+        } while ((oid[index++] & 0x80) != 0);
+    }
+    return NV_TRUE;
+}
+
+static NvBool oidEquals(
+    const NvU8* first,
+    size_t firstLength,
+    const NvU8* second,
+    size_t secondLength)
+{
+    if (firstLength != secondLength)
+    {
+        return NV_FALSE;
+    }
+    for (size_t index = 0; index < firstLength; ++index)
+    {
+        if (first[index] != second[index])
+        {
+            return NV_FALSE;
+        }
+    }
+    return NV_TRUE;
+}
+
+static NvBool skipTbsField(
+    const NvU8** field,
+    const NvU8* fieldsEnd,
+    NvU8 tag)
+{
+    const NvU8* content;
+    size_t contentLength;
+    size_t fieldLength;
+    if (field == NULL || *field == NULL ||
+        !getDerElement(
+            *field,
+            fieldsEnd,
+            tag,
+            &content,
+            &contentLength,
+            &fieldLength))
+    {
+        return NV_FALSE;
+    }
+    *field += fieldLength;
+    return NV_TRUE;
+}
+
+static NvBool validateSubjectPublicKeyInfo(
+    const NvU8* field,
+    const NvU8* fieldsEnd,
+    size_t* fieldLength)
+{
+    const NvU8* content;
+    size_t contentLength;
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x30,
+        &content,
+        &contentLength,
+        fieldLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* oid;
+    size_t oidLength;
+    size_t algorithmLength;
+    const NvU8* contentEnd = content + contentLength;
+    if (!getAlgorithmIdentifierOid(
+        content,
+        contentEnd,
+        &oid,
+        &oidLength,
+        &algorithmLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* keyContent;
+    size_t keyContentLength;
+    size_t keyLength;
+    const NvU8* key = content + algorithmLength;
+    if (!getDerElement(
+               key,
+               contentEnd,
+               0x03,
+               &keyContent,
+               &keyContentLength,
+               &keyLength) ||
+        keyContentLength == 0 || keyContent[0] > 7 ||
+        key + keyLength != contentEnd)
+    {
+        return NV_FALSE;
+    }
+    return keyContent[0] == 0 ||
+        (keyContentLength > 1 &&
+         (keyContent[keyContentLength - 1] &
+          ((1u << keyContent[0]) - 1)) == 0);
+}
+
+NvBool libspdm_x509_get_extension_data(
+    const NvU8* certificate,
+    size_t certificateLength,
+    const NvU8* requestedOid,
+    size_t requestedOidLength,
+    NvU8* extensionData,
+    size_t* extensionDataLength)
+{
+    if (extensionDataLength == NULL)
+    {
+        return NV_FALSE;
+    }
+    const size_t extensionDataCapacity = *extensionDataLength;
+    *extensionDataLength = 0;
+    if (!validateOid(requestedOid, requestedOidLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* field;
+    const NvU8* fieldsEnd;
+    size_t version;
+    if (!getCertificateTbsFields(
+            certificate,
+            certificateLength,
+            &field,
+            &fieldsEnd) ||
+        !libspdm_x509_get_version(
+            certificate,
+            certificateLength,
+            &version) || version > 2)
+    {
+        return NV_FALSE;
+    }
+
+    if (*field == 0xa0 && !skipTbsField(&field, fieldsEnd, 0xa0))
+    {
+        return NV_FALSE;
+    }
+    size_t serialNumberLength = 0;
+    if (!libspdm_x509_get_serial_number(
+            certificate,
+            certificateLength,
+            NULL,
+            &serialNumberLength) && serialNumberLength == 0)
+    {
+        return NV_FALSE;
+    }
+    if (!skipTbsField(&field, fieldsEnd, 0x02) ||
+        !skipTbsField(&field, fieldsEnd, 0x30))
+    {
+        return NV_FALSE;
+    }
+    size_t signatureOidLength = 0;
+    if (!libspdm_x509_get_signature_algorithm(
+            certificate,
+            certificateLength,
+            NULL,
+            &signatureOidLength) && signatureOidLength == 0)
+    {
+        return NV_FALSE;
+    }
+
+    size_t nameLength = 0;
+    if (!libspdm_x509_get_issuer_name(
+            certificate,
+            certificateLength,
+            NULL,
+            &nameLength) && nameLength == 0)
+    {
+        return NV_FALSE;
+    }
+    if (!skipTbsField(&field, fieldsEnd, 0x30))
+    {
+        return NV_FALSE;
+    }
+
+    NvU8 dateTime[sizeof(WINDOWS_RM_X509_DATE_TIME)];
+    size_t notBeforeLength = sizeof(dateTime);
+    size_t notAfterLength = sizeof(dateTime);
+    if (!libspdm_x509_get_validity(
+            certificate,
+            certificateLength,
+            dateTime,
+            &notBeforeLength,
+            dateTime,
+            &notAfterLength) ||
+        !skipTbsField(&field, fieldsEnd, 0x30))
+    {
+        return NV_FALSE;
+    }
+
+    nameLength = 0;
+    if ((!libspdm_x509_get_subject_name(
+             certificate,
+             certificateLength,
+             NULL,
+             &nameLength) && nameLength == 0) ||
+        !skipTbsField(&field, fieldsEnd, 0x30))
+    {
+        return NV_FALSE;
+    }
+
+    size_t subjectPublicKeyInfoLength;
+    if (!validateSubjectPublicKeyInfo(
+        field,
+        fieldsEnd,
+        &subjectPublicKeyInfoLength))
+    {
+        return NV_FALSE;
+    }
+    field += subjectPublicKeyInfoLength;
+
+    if (field < fieldsEnd && *field == 0x81)
+    {
+        const NvU8* uniqueId;
+        size_t uniqueIdLength;
+        size_t uniqueIdElementLength;
+        if (version == 0 || !getDerElement(
+            field,
+            fieldsEnd,
+            0x81,
+            &uniqueId,
+            &uniqueIdLength,
+            &uniqueIdElementLength) ||
+                uniqueIdLength == 0 || uniqueId[0] > 7 ||
+                (uniqueId[0] != 0 &&
+                 (uniqueIdLength == 1 ||
+                  (uniqueId[uniqueIdLength - 1] &
+                    ((1u << uniqueId[0]) - 1)) != 0)))
+        {
+            return NV_FALSE;
+        }
+        field += uniqueIdElementLength;
+    }
+    if (field < fieldsEnd && *field == 0x82)
+    {
+        const NvU8* uniqueId;
+        size_t uniqueIdLength;
+        size_t uniqueIdElementLength;
+        if (version == 0 || !getDerElement(
+            field,
+            fieldsEnd,
+            0x82,
+            &uniqueId,
+            &uniqueIdLength,
+            &uniqueIdElementLength) ||
+                uniqueIdLength == 0 || uniqueId[0] > 7 ||
+                (uniqueId[0] != 0 &&
+                 (uniqueIdLength == 1 ||
+                  (uniqueId[uniqueIdLength - 1] &
+                    ((1u << uniqueId[0]) - 1)) != 0)))
+        {
+            return NV_FALSE;
+        }
+        field += uniqueIdElementLength;
+    }
+
+    if (field == fieldsEnd)
+    {
+        return NV_TRUE;
+    }
+    if (version != 2 || *field != 0xa3)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* explicitContent;
+    size_t explicitContentLength;
+    size_t explicitLength;
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0xa3,
+        &explicitContent,
+        &explicitContentLength,
+        &explicitLength) ||
+        field + explicitLength != fieldsEnd)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* extensions;
+    size_t extensionsLength;
+    size_t extensionsElementLength;
+    const NvU8* explicitEnd = explicitContent + explicitContentLength;
+    if (!getDerElement(
+        explicitContent,
+        explicitEnd,
+        0x30,
+        &extensions,
+        &extensionsLength,
+        &extensionsElementLength) ||
+        extensionsElementLength != explicitContentLength ||
+        extensionsLength == 0)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* foundData = NULL;
+    size_t foundLength = 0;
+    const NvU8* extension = extensions;
+    const NvU8* extensionsEnd = extensions + extensionsLength;
+    while (extension < extensionsEnd)
+    {
+        const NvU8* extensionContent;
+        size_t extensionContentLength;
+        size_t extensionLength;
+        if (!getDerElement(
+            extension,
+            extensionsEnd,
+            0x30,
+            &extensionContent,
+            &extensionContentLength,
+            &extensionLength))
+        {
+            return NV_FALSE;
+        }
+
+        const NvU8* extensionEnd =
+            extensionContent + extensionContentLength;
+        const NvU8* extensionOid;
+        size_t extensionOidLength;
+        size_t oidElementLength;
+        if (!getDerElement(
+            extensionContent,
+            extensionEnd,
+            0x06,
+            &extensionOid,
+            &extensionOidLength,
+            &oidElementLength) ||
+            !validateOid(extensionOid, extensionOidLength))
+        {
+            return NV_FALSE;
+        }
+
+        const NvU8* value = extensionContent + oidElementLength;
+        if (value < extensionEnd && *value == 0x01)
+        {
+            const NvU8* critical;
+            size_t criticalLength;
+            size_t criticalElementLength;
+            if (!getDerElement(
+                value,
+                extensionEnd,
+                0x01,
+                &critical,
+                &criticalLength,
+                &criticalElementLength) ||
+                criticalLength != 1 || critical[0] != 0xff)
+            {
+                return NV_FALSE;
+            }
+            value += criticalElementLength;
+        }
+
+        const NvU8* valueContent;
+        size_t valueContentLength;
+        size_t valueElementLength;
+        if (!getDerElement(
+            value,
+            extensionEnd,
+            0x04,
+            &valueContent,
+            &valueContentLength,
+            &valueElementLength) ||
+            value + valueElementLength != extensionEnd)
+        {
+            return NV_FALSE;
+        }
+
+        if (oidEquals(
+            extensionOid,
+            extensionOidLength,
+            requestedOid,
+            requestedOidLength))
+        {
+            if (foundData != NULL)
+            {
+                return NV_FALSE;
+            }
+            foundData = valueContent;
+            foundLength = valueContentLength;
+        }
+        extension += extensionLength;
+    }
+
+    if (extension != extensionsEnd)
+    {
+        return NV_FALSE;
+    }
+    if (foundData == NULL)
+    {
+        return NV_TRUE;
+    }
+
+    *extensionDataLength = foundLength;
+    if (foundLength == 0)
+    {
+        return NV_TRUE;
+    }
+    if (extensionData == NULL || extensionDataCapacity < foundLength)
+    {
+        return NV_FALSE;
+    }
+    for (size_t index = 0; index < foundLength; ++index)
+    {
+        extensionData[index] = foundData[index];
+    }
+    return NV_TRUE;
+}
+
+NvBool libspdm_x509_get_extended_key_usage(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvU8* usage,
+    size_t* usageLength)
+{
+    static const NvU8 oid[] = { 0x55, 0x1d, 0x25 };
+    return libspdm_x509_get_extension_data(
+        certificate,
+        certificateLength,
+        oid,
+        sizeof(oid),
+        usage,
+        usageLength);
+}
+
+NvBool libspdm_x509_get_extended_basic_constraints(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvU8* basicConstraints,
+    size_t* basicConstraintsLength)
+{
+    static const NvU8 oid[] = { 0x55, 0x1d, 0x13 };
+    return libspdm_x509_get_extension_data(
+        certificate,
+        certificateLength,
+        oid,
+        sizeof(oid),
+        basicConstraints,
+        basicConstraintsLength);
+}
+
 NvBool libspdm_x509_get_cert_from_cert_chain(
     const NvU8* certificateChain,
     size_t certificateChainLength,
