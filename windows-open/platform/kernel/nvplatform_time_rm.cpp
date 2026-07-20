@@ -11,6 +11,30 @@ constexpr NvU64 TicksPerSecond100ns = 10000000ULL;
 constexpr NvU64 TicksPerMicrosecond100ns = 10ULL;
 constexpr NvU32 MaximumInterruptDelayMicroseconds = 20000;
 constexpr ULONG StallChunkMicroseconds = 50;
+constexpr ULONG NanoTimerPoolTag = 'tRvN';
+
+struct NanoTimer
+{
+    KTIMER timer;
+    KDPC dpc;
+    NvPlatformRmNanoTimerFunction* function;
+    void* gpu;
+    void* timerEvent;
+};
+
+void NanoTimerDpc(
+    KDPC* dpc,
+    void* deferredContext,
+    void* systemArgument1,
+    void* systemArgument2)
+{
+    UNREFERENCED_PARAMETER(dpc);
+    UNREFERENCED_PARAMETER(systemArgument1);
+    UNREFERENCED_PARAMETER(systemArgument2);
+
+    auto* timer = static_cast<NanoTimer*>(deferredContext);
+    timer->function(timer->gpu, timer->timerEvent);
+}
 
 void StallMicroseconds(NvU64 microseconds)
 {
@@ -126,5 +150,92 @@ extern "C" NV_STATUS NvPlatformDelayRmMicroseconds(NvU32 microseconds)
     }
 
     StallMicroseconds(microseconds);
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformRmNanoTimerCreate(
+    NvPlatformRmNanoTimerFunction* function,
+    void* gpu,
+    void* timerEvent,
+    void** timer)
+{
+    if (function == nullptr || gpu == nullptr || timerEvent == nullptr ||
+        timer == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    auto* nanoTimer = static_cast<NanoTimer*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(NanoTimer),
+        NanoTimerPoolTag));
+    if (nanoTimer == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    KeInitializeTimer(&nanoTimer->timer);
+    KeInitializeDpc(&nanoTimer->dpc, NanoTimerDpc, nanoTimer);
+    nanoTimer->function = function;
+    nanoTimer->gpu = gpu;
+    nanoTimer->timerEvent = timerEvent;
+    *timer = nanoTimer;
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformRmNanoTimerStart(
+    void* timer,
+    NvU64 relativeTimeNs)
+{
+    if (timer == nullptr || KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    constexpr NvU64 NanosecondsPerTick = 100;
+    NvU64 ticks = relativeTimeNs / NanosecondsPerTick;
+    if ((relativeTimeNs % NanosecondsPerTick) != 0)
+    {
+        ++ticks;
+    }
+    if (ticks == 0)
+    {
+        ticks = 1;
+    }
+    if (ticks > static_cast<NvU64>(MAXLONGLONG))
+    {
+        ticks = static_cast<NvU64>(MAXLONGLONG);
+    }
+
+    LARGE_INTEGER dueTime{};
+    dueTime.QuadPart = -static_cast<LONGLONG>(ticks);
+    auto* nanoTimer = static_cast<NanoTimer*>(timer);
+    KeSetTimer(&nanoTimer->timer, dueTime, &nanoTimer->dpc);
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformRmNanoTimerCancel(void* timer)
+{
+    if (timer == nullptr || KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    auto* nanoTimer = static_cast<NanoTimer*>(timer);
+    KeCancelTimer(&nanoTimer->timer);
+    KeRemoveQueueDpc(&nanoTimer->dpc);
+    KeFlushQueuedDpcs();
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformRmNanoTimerDestroy(void* timer)
+{
+    const NV_STATUS status = NvPlatformRmNanoTimerCancel(timer);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    ExFreePoolWithTag(timer, NanoTimerPoolTag);
     return NV_OK;
 }

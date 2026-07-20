@@ -42,6 +42,9 @@ NV_STATUS NvPlatformRmGpuReserve(
 NV_STATUS NvPlatformRmGpuPublish(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     void* rmGpu);
+NV_STATUS NvPlatformRmGpuGetPublishedRmGpu(
+    const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void** rmGpu);
 void NvPlatformRmGpuWithdraw(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     void* rmGpu);

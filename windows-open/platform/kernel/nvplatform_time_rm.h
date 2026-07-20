@@ -23,6 +23,19 @@ NV_STATUS NvPlatformDelayRmMilliseconds(NvU32 milliseconds);
 
 NV_STATUS NvPlatformDelayRmMicroseconds(NvU32 microseconds);
 
+typedef void NvPlatformRmNanoTimerFunction(
+    void* gpu,
+    void* timerEvent);
+
+NV_STATUS NvPlatformRmNanoTimerCreate(
+    NvPlatformRmNanoTimerFunction* function,
+    void* gpu,
+    void* timerEvent,
+    void** timer);
+NV_STATUS NvPlatformRmNanoTimerStart(void* timer, NvU64 relativeTimeNs);
+NV_STATUS NvPlatformRmNanoTimerCancel(void* timer);
+NV_STATUS NvPlatformRmNanoTimerDestroy(void* timer);
+
 #ifdef __cplusplus
 }
 #endif

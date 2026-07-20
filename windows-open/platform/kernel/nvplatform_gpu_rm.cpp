@@ -112,6 +112,28 @@ extern "C" NV_STATUS NvPlatformRmGpuPublish(
         : NV_ERR_INVALID_STATE;
 }
 
+extern "C" NV_STATUS NvPlatformRmGpuGetPublishedRmGpu(
+    const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void** rmGpu)
+{
+    if (gpuContext == nullptr || rmGpu == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (InterlockedCompareExchange(
+            const_cast<volatile LONG*>(&gpuContext->state),
+            static_cast<LONG>(GpuContextState::Published),
+            static_cast<LONG>(GpuContextState::Published)) !=
+        static_cast<LONG>(GpuContextState::Published))
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    *rmGpu = gpuContext->rmGpu;
+    return *rmGpu != nullptr ? NV_OK : NV_ERR_INVALID_STATE;
+}
+
 extern "C" void NvPlatformRmGpuWithdraw(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     void* rmGpu)
