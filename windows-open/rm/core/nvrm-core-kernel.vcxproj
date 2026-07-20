@@ -127,6 +127,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_io_vaspace_nvoc.c">
       <Link>generated\g_io_vaspace_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_ioaccess_nvoc.c">
+      <Link>generated\g_ioaccess_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_intr_service_nvoc.c">
       <Link>generated\g_intr_service_nvoc.c</Link>
     </ClCompile>
@@ -147,6 +150,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_nvoc.c">
       <Link>generated\g_gpu_nvoc.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_gpu_access_nvoc.c">
+      <Link>generated\g_gpu_access_nvoc.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_device_nvoc.c">
       <Link>generated\g_device_nvoc.c</Link>
@@ -367,6 +373,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu.c">
       <Link>upstream\gpu\gpu.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_access.c">
+      <Link>upstream\gpu\gpu_access.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_resource.c">
       <Link>upstream\gpu\gpu_resource.c</Link>

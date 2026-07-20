@@ -193,6 +193,11 @@ The unchanged upstream GPU mapping and OS register owners now select BAR0 from
 `OBJGPU`, retain vGPU PCI-mirror routing, and perform bounded Windows
 `READ_REGISTER_*`/`WRITE_REGISTER_*` accesses. Complete upstream NBSI and FNV
 owners preserve firmware-backed registry override lookup on this path.
+Upstream GPU register access and its generated `IoAperture` and
+`RegisterAperture` classes now construct the per-GPU MMIO access object during
+`gpuPostConstruct`. The standalone RM probe reaches the deeper user-register
+permission and GPU-loss policy boundaries without substituting Windows policy
+or weakening register checks.
 Kernel-privileged GPU mappings now return bounded aliases into that existing
 BAR0 mapping, while lower-privilege requests remain delegated to the explicit
 per-process PCI user-mapping boundary. Kernel unmaps therefore preserve the
