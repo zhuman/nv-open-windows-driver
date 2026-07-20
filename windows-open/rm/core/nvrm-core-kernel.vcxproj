@@ -716,6 +716,9 @@
       <Link>upstream\os\os_init.c</Link>
       <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\os\os_timer.c">
+      <Link>upstream\os\os_timer.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\nbsi\nbsi_getv.c">
       <Link>upstream\platform\nbsi\nbsi_getv.c</Link>
     </ClCompile>
