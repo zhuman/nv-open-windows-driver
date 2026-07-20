@@ -196,6 +196,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\vector.c">
       <Link>upstream\containers\vector.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\fnv_hash\fnv_hash.c">
+      <Link>upstream\fnv_hash.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\lib\base_utils.c">
       <Link>upstream\base_utils.c</Link>
     </ClCompile>
@@ -460,6 +463,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\external_device\gsync_api.c">
       <Link>upstream\gpu\external_device\gsync_api.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_device_mapping.c">
+      <Link>upstream\gpu\gpu_device_mapping.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\power\gpu_boost_mgr.c">
       <Link>upstream\power\gpu_boost_mgr.c</Link>
     </ClCompile>
@@ -496,6 +502,16 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\vaspace.c">
       <Link>upstream\memory\vaspace.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\os\os_init.c">
+      <Link>upstream\os\os_init.c</Link>
+      <ForcedIncludeFiles>$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\nbsi\nbsi_getv.c">
+      <Link>upstream\platform\nbsi\nbsi_getv.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\platform\nbsi\nbsi_osrg.c">
+      <Link>upstream\platform\nbsi\nbsi_osrg.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpcstructurecopy.c">
       <Link>upstream\rpcstructurecopy.c</Link>

@@ -1,4 +1,5 @@
 #include "nvplatform_common.h"
+#include "nvplatform_mmio_rm.h"
 
 NvU64 osGetPageSize(void)
 {
@@ -22,4 +23,9 @@ NvU8 osGetPageShift(void)
 NvU64 osGetSupportedSysmemPageSizeMask(void)
 {
     return NvPlatformGetPageSize();
+}
+
+NvU64 osGetMaxUserVa(void)
+{
+    return NvPlatformRmGetMaximumUserAddress();
 }

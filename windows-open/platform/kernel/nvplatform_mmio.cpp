@@ -306,3 +306,47 @@ extern "C" void NvPlatformRmUnmapPhysical(void* virtualAddress)
         ExFreePoolWithTag(found, RmMappingPoolTag);
     }
 }
+
+extern "C" NvU8 NvPlatformRmReadRegister8(const volatile void* address)
+{
+    return READ_REGISTER_UCHAR(reinterpret_cast<volatile UCHAR*>(
+        const_cast<volatile void*>(address)));
+}
+
+extern "C" NvU16 NvPlatformRmReadRegister16(const volatile void* address)
+{
+    return READ_REGISTER_USHORT(reinterpret_cast<volatile USHORT*>(
+        const_cast<volatile void*>(address)));
+}
+
+extern "C" NvU32 NvPlatformRmReadRegister32(const volatile void* address)
+{
+    return READ_REGISTER_ULONG(reinterpret_cast<volatile ULONG*>(
+        const_cast<volatile void*>(address)));
+}
+
+extern "C" void NvPlatformRmWriteRegister8(volatile void* address, NvU8 value)
+{
+    WRITE_REGISTER_UCHAR(
+        reinterpret_cast<volatile UCHAR*>(address),
+        value);
+}
+
+extern "C" void NvPlatformRmWriteRegister16(volatile void* address, NvU16 value)
+{
+    WRITE_REGISTER_USHORT(
+        reinterpret_cast<volatile USHORT*>(address),
+        value);
+}
+
+extern "C" void NvPlatformRmWriteRegister32(volatile void* address, NvU32 value)
+{
+    WRITE_REGISTER_ULONG(
+        reinterpret_cast<volatile ULONG*>(address),
+        value);
+}
+
+extern "C" NvU64 NvPlatformRmGetMaximumUserAddress(void)
+{
+    return reinterpret_cast<NvU64>(MmHighestUserAddress);
+}
