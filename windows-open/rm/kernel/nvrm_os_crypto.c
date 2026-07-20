@@ -352,6 +352,38 @@ static NvBool getCertificateTbsFields(
         return NV_FALSE;
     }
 
+    const NvU8* signatureAlgorithm = certificateContent + tbsElementLength;
+    const NvU8* ignoredContent;
+    size_t ignoredContentLength;
+    size_t signatureAlgorithmLength;
+    if (!getDerElement(
+        signatureAlgorithm,
+        certificateEnd,
+        0x30,
+        &ignoredContent,
+        &ignoredContentLength,
+        &signatureAlgorithmLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* signature = signatureAlgorithm + signatureAlgorithmLength;
+    const NvU8* signatureContent;
+    size_t signatureContentLength;
+    size_t signatureLength;
+    if (!getDerElement(
+        signature,
+        certificateEnd,
+        0x03,
+        &signatureContent,
+        &signatureContentLength,
+        &signatureLength) ||
+        signature + signatureLength != certificateEnd ||
+        signatureContentLength == 0 || signatureContent[0] > 7)
+    {
+        return NV_FALSE;
+    }
+
     *firstField = tbsContent;
     *fieldsEnd = tbsContent + tbsContentLength;
     return NV_TRUE;
@@ -510,6 +542,260 @@ NvBool libspdm_x509_get_serial_number(
     }
     *serialNumberLength = integerContentLength;
     return NV_TRUE;
+}
+
+static NvBool validateDerName(
+    const NvU8* name,
+    const NvU8* end)
+{
+    const NvU8* nameContent;
+    size_t nameContentLength;
+    size_t nameLength;
+    if (!getDerElement(
+        name,
+        end,
+        0x30,
+        &nameContent,
+        &nameContentLength,
+        &nameLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* rdn = nameContent;
+    const NvU8* nameEnd = nameContent + nameContentLength;
+    while (rdn < nameEnd)
+    {
+        const NvU8* rdnContent;
+        size_t rdnContentLength;
+        size_t rdnLength;
+        if (!getDerElement(
+            rdn,
+            nameEnd,
+            0x31,
+            &rdnContent,
+            &rdnContentLength,
+            &rdnLength) || rdnContentLength == 0)
+        {
+            return NV_FALSE;
+        }
+
+        const NvU8* attribute = rdnContent;
+        const NvU8* rdnEnd = rdnContent + rdnContentLength;
+        while (attribute < rdnEnd)
+        {
+            const NvU8* attributeContent;
+            size_t attributeContentLength;
+            size_t attributeLength;
+            if (!getDerElement(
+                attribute,
+                rdnEnd,
+                0x30,
+                &attributeContent,
+                &attributeContentLength,
+                &attributeLength))
+            {
+                return NV_FALSE;
+            }
+
+            const NvU8* oidContent;
+            size_t oidContentLength;
+            size_t oidLength;
+            const NvU8* attributeEnd =
+                attributeContent + attributeContentLength;
+            if (!getDerElement(
+                attributeContent,
+                attributeEnd,
+                0x06,
+                &oidContent,
+                &oidContentLength,
+                &oidLength) || oidContentLength == 0)
+            {
+                return NV_FALSE;
+            }
+
+            const NvU8* value = attributeContent + oidLength;
+            const NvU8* valueContent;
+            size_t valueContentLength;
+            size_t valueLength;
+            if (value == attributeEnd ||
+                !getDerElement(
+                    value,
+                    attributeEnd,
+                    *value,
+                    &valueContent,
+                    &valueContentLength,
+                    &valueLength) ||
+                value + valueLength != attributeEnd)
+            {
+                return NV_FALSE;
+            }
+
+            attribute += attributeLength;
+        }
+        rdn += rdnLength;
+    }
+
+    return rdn == nameEnd;
+}
+
+static NvBool getCertificateName(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvBool getSubject,
+    NvU8* name,
+    size_t* nameLength)
+{
+    if (nameLength == NULL)
+    {
+        return NV_FALSE;
+    }
+    const size_t nameCapacity = *nameLength;
+    *nameLength = 0;
+
+    const NvU8* field;
+    const NvU8* fieldsEnd;
+    size_t version;
+    if (!getCertificateTbsFields(
+            certificate,
+            certificateLength,
+            &field,
+            &fieldsEnd) ||
+        !libspdm_x509_get_version(
+            certificate,
+            certificateLength,
+            &version))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* ignoredContent;
+    size_t ignoredContentLength;
+    size_t fieldLength;
+    if (*field == 0xa0)
+    {
+        if (!getDerElement(
+            field,
+            fieldsEnd,
+            0xa0,
+            &ignoredContent,
+            &ignoredContentLength,
+            &fieldLength))
+        {
+            return NV_FALSE;
+        }
+        field += fieldLength;
+    }
+
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x02,
+        &ignoredContent,
+        &ignoredContentLength,
+        &fieldLength))
+    {
+        return NV_FALSE;
+    }
+    field += fieldLength;
+
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x30,
+        &ignoredContent,
+        &ignoredContentLength,
+        &fieldLength))
+    {
+        return NV_FALSE;
+    }
+    field += fieldLength;
+
+    const NvU8* nameContent;
+    size_t nameContentLength;
+    size_t encodedNameLength;
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x30,
+        &nameContent,
+        &nameContentLength,
+        &encodedNameLength))
+    {
+        return NV_FALSE;
+    }
+
+    if (getSubject)
+    {
+        field += encodedNameLength;
+        if (!getDerElement(
+            field,
+            fieldsEnd,
+            0x30,
+            &ignoredContent,
+            &ignoredContentLength,
+            &fieldLength))
+        {
+            return NV_FALSE;
+        }
+        field += fieldLength;
+
+        if (!getDerElement(
+            field,
+            fieldsEnd,
+            0x30,
+            &nameContent,
+            &nameContentLength,
+            &encodedNameLength))
+        {
+            return NV_FALSE;
+        }
+    }
+
+    if (!validateDerName(field, fieldsEnd))
+    {
+        return NV_FALSE;
+    }
+
+    *nameLength = encodedNameLength;
+    if (name == NULL || nameCapacity < encodedNameLength)
+    {
+        return NV_FALSE;
+    }
+
+    for (size_t index = 0; index < encodedNameLength; ++index)
+    {
+        name[index] = field[index];
+    }
+    return NV_TRUE;
+}
+
+NvBool libspdm_x509_get_issuer_name(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvU8* issuer,
+    size_t* issuerLength)
+{
+    return getCertificateName(
+        certificate,
+        certificateLength,
+        NV_FALSE,
+        issuer,
+        issuerLength);
+}
+
+NvBool libspdm_x509_get_subject_name(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvU8* subject,
+    size_t* subjectLength)
+{
+    return getCertificateName(
+        certificate,
+        certificateLength,
+        NV_TRUE,
+        subject,
+        subjectLength);
 }
 
 NvBool libspdm_x509_get_cert_from_cert_chain(
