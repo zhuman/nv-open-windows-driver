@@ -302,6 +302,21 @@ void osUnrefGpuAccessNeeded(OS_GPU_INFO* osGpuInfo)
     (void)osGpuInfo;
 }
 
+NV_STATUS osGetSyncpointAperture(
+    OS_GPU_INFO* osGpuInfo,
+    NvU32 syncpointId,
+    NvU64* physicalAddress,
+    NvU64* limit,
+    NvU32* offset)
+{
+    (void)osGpuInfo;
+    (void)syncpointId;
+    (void)physicalAddress;
+    (void)limit;
+    (void)offset;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 NV_STATUS osSimEscapeWrite(
     OBJGPU* pGpu,
     const char* path,
