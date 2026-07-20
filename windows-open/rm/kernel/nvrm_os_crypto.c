@@ -1660,6 +1660,95 @@ NvBool libspdm_x509_get_extension_data(
     return NV_TRUE;
 }
 
+NvBool libspdm_x509_get_key_usage(
+    const NvU8* certificate,
+    size_t certificateLength,
+    size_t* usage)
+{
+    static const NvU8 oid[] = { 0x55, 0x1d, 0x0f };
+    if (usage == NULL)
+    {
+        return NV_FALSE;
+    }
+    *usage = 0;
+
+    size_t encodedLength = 0;
+    NvBool status = libspdm_x509_get_extension_data(
+        certificate,
+        certificateLength,
+        oid,
+        sizeof(oid),
+        NULL,
+        &encodedLength);
+    if (status)
+    {
+        return encodedLength == 0;
+    }
+    if (encodedLength == 0 || encodedLength > 5)
+    {
+        return NV_FALSE;
+    }
+
+    NvU8 encoded[5];
+    size_t capacity = sizeof(encoded);
+    if (!libspdm_x509_get_extension_data(
+        certificate,
+        certificateLength,
+        oid,
+        sizeof(oid),
+        encoded,
+        &capacity) || capacity != encodedLength)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* content;
+    size_t contentLength;
+    size_t elementLength;
+    if (!getDerElement(
+        encoded,
+        encoded + encodedLength,
+        0x03,
+        &content,
+        &contentLength,
+        &elementLength) ||
+        elementLength != encodedLength || contentLength == 0 ||
+        contentLength > 3 || content[0] > 7)
+    {
+        return NV_FALSE;
+    }
+
+    if (contentLength == 1)
+    {
+        return content[0] == 0;
+    }
+    const NvU8 finalOctet = content[contentLength - 1];
+    if (finalOctet == 0 ||
+        (finalOctet & ((1u << content[0]) - 1)) != 0)
+    {
+        return NV_FALSE;
+    }
+
+    NvU8 trailingZeroBits = 0;
+    while (((finalOctet >> trailingZeroBits) & 1) == 0)
+    {
+        ++trailingZeroBits;
+    }
+    if (content[0] != trailingZeroBits ||
+        (contentLength == 3 &&
+         (content[2] != 0x80 || content[0] != 7)))
+    {
+        return NV_FALSE;
+    }
+
+    *usage = content[1];
+    if (contentLength == 3)
+    {
+        *usage |= (size_t)content[2] << 8;
+    }
+    return NV_TRUE;
+}
+
 NvBool libspdm_x509_get_extended_key_usage(
     const NvU8* certificate,
     size_t certificateLength,
