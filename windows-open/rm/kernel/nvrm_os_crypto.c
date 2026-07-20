@@ -1,4 +1,5 @@
 #include "nvplatform_crypto_rm.h"
+#include "nvplatform_time_rm.h"
 
 #include <stddef.h>
 
@@ -19,6 +20,145 @@ NvBool libspdm_random_bytes(NvU8* output, size_t size)
 
 NvBool libspdm_check_crypto_backend(void)
 {
+    return NV_TRUE;
+}
+
+void libspdm_sleep(NvU64 microseconds)
+{
+    while (microseconds != 0)
+    {
+        const NvU32 delay = microseconds > NV_U32_MAX
+            ? NV_U32_MAX
+            : (NvU32)microseconds;
+        if (NvPlatformDelayRmMicroseconds(delay) != NV_OK)
+        {
+            return;
+        }
+        microseconds -= delay;
+    }
+}
+
+NvBool libspdm_encode_base64(
+    const NvU8* source,
+    NvU8* destination,
+    size_t sourceLength,
+    size_t* destinationLength)
+{
+    static const NvU8 alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    const size_t maximumSize = (size_t)-1;
+    if (destinationLength == NULL ||
+        (source == NULL && sourceLength != 0) ||
+        sourceLength > maximumSize - 2)
+    {
+        return NV_FALSE;
+    }
+
+    const size_t groupCount = (sourceLength + 2) / 3;
+    if (groupCount > maximumSize / 4)
+    {
+        return NV_FALSE;
+    }
+    const size_t requiredLength = groupCount * 4;
+    if (*destinationLength < requiredLength)
+    {
+        *destinationLength = requiredLength;
+        return NV_FALSE;
+    }
+    if (destination == NULL && requiredLength != 0)
+    {
+        return NV_FALSE;
+    }
+
+    size_t sourceIndex = 0;
+    size_t destinationIndex = 0;
+    while (sourceLength - sourceIndex >= 3)
+    {
+        const NvU32 value = ((NvU32)source[sourceIndex] << 16) |
+            ((NvU32)source[sourceIndex + 1] << 8) |
+            source[sourceIndex + 2];
+        destination[destinationIndex++] = alphabet[(value >> 18) & 0x3f];
+        destination[destinationIndex++] = alphabet[(value >> 12) & 0x3f];
+        destination[destinationIndex++] = alphabet[(value >> 6) & 0x3f];
+        destination[destinationIndex++] = alphabet[value & 0x3f];
+        sourceIndex += 3;
+    }
+
+    const size_t remaining = sourceLength - sourceIndex;
+    if (remaining != 0)
+    {
+        NvU32 value = (NvU32)source[sourceIndex] << 16;
+        if (remaining == 2)
+        {
+            value |= (NvU32)source[sourceIndex + 1] << 8;
+        }
+        destination[destinationIndex++] = alphabet[(value >> 18) & 0x3f];
+        destination[destinationIndex++] = alphabet[(value >> 12) & 0x3f];
+        destination[destinationIndex++] = remaining == 2
+            ? alphabet[(value >> 6) & 0x3f]
+            : '=';
+        destination[destinationIndex++] = '=';
+    }
+
+    *destinationLength = destinationIndex;
+    return NV_TRUE;
+}
+
+NvBool libspdm_asn1_get_tag(
+    NvU8** pointer,
+    const NvU8* end,
+    size_t* length,
+    NvU32 tag)
+{
+    if (pointer == NULL || *pointer == NULL || end == NULL || length == NULL ||
+        tag > NV_U8_MAX || *pointer >= end || **pointer != (NvU8)tag)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* cursor = *pointer + 1;
+    if (cursor >= end)
+    {
+        return NV_FALSE;
+    }
+
+    size_t contentLength = 0;
+    size_t headerLength = 2;
+    const NvU8 firstLength = *cursor++;
+    if ((firstLength & 0x80) == 0)
+    {
+        contentLength = firstLength;
+    }
+    else
+    {
+        const NvU8 lengthBytes = firstLength & 0x7f;
+        if (lengthBytes == 0 || lengthBytes > sizeof(size_t) ||
+            (size_t)(end - cursor) < lengthBytes || cursor[0] == 0)
+        {
+            return NV_FALSE;
+        }
+
+        headerLength += lengthBytes;
+        for (NvU8 index = 0; index < lengthBytes; ++index)
+        {
+            if (contentLength > ((size_t)-1) >> 8)
+            {
+                return NV_FALSE;
+            }
+            contentLength = (contentLength << 8) | cursor[index];
+        }
+        if (contentLength < 0x80)
+        {
+            return NV_FALSE;
+        }
+    }
+
+    if (contentLength > (size_t)(end - *pointer) - headerLength)
+    {
+        return NV_FALSE;
+    }
+    *length = headerLength + contentLength;
     return NV_TRUE;
 }
 
