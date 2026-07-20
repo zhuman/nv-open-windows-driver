@@ -47,6 +47,8 @@ NV_STATUS NvPlatformRmQueueSystemWork(
 	NvPlatformRmSystemWorkFunction* function,
 	void* context);
 
+NvBool NvPlatformRmSystemWorkIsActive(void);
+
 void NvPlatformRmDrainSystemWork(void);
 
 #ifdef __cplusplus

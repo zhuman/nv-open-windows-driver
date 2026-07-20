@@ -476,6 +476,16 @@ extern "C" NV_STATUS NvPlatformRmQueueSystemWork(
     return NV_OK;
 }
 
+extern "C" NvBool NvPlatformRmSystemWorkIsActive(void)
+{
+    return InterlockedCompareExchange(
+        &systemWorkState,
+        SystemWorkStateActive,
+        SystemWorkStateActive) == SystemWorkStateActive
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
 extern "C" void NvPlatformRmDrainSystemWork(void)
 {
     if (InterlockedCompareExchange(

@@ -1,5 +1,8 @@
 #include "g_system_nvoc.h"
 #include "g_os_nvoc.h"
+#include "g_gpu_nvoc.h"
+#include "g_gpu_mgr_nvoc.h"
+#include "kernel/core/locks.h"
 #include "lib/protobuf/prb.h"
 #include "g_nvdebug_pb.h"
 #include "nvplatform_file_rm.h"
@@ -7,6 +10,46 @@
 #include "nvplatform_system_rm.h"
 
 static const char BugCheckOnTimeoutValueName[] = "BugCheckOnTimeout";
+
+typedef struct
+{
+    OSWorkItemFunction* function;
+    void* parameters;
+    NvU32 gpuInstance;
+    OsQueueWorkItemFlags flags;
+} WindowsRmWorkItem;
+
+static void executeRmWorkItem(void* context)
+{
+    WindowsRmWorkItem* workItem = (WindowsRmWorkItem*)context;
+    OsQueueWorkItemFlags releaseLocks = {0};
+    NvU32 gpuMask = 0;
+
+    if (workItemLocksAcquire(
+            workItem->gpuInstance,
+            workItem->flags,
+            &releaseLocks,
+            &gpuMask) == NV_OK)
+    {
+        OBJGPU* pGpu = gpumgrGetGpu(workItem->gpuInstance);
+        if (pGpu != NULL &&
+            !(workItem->flags.bDropOnUnloadQueueFlush &&
+              !NvPlatformRmSystemWorkIsActive()))
+        {
+            NvU32 previousGpuInstance =
+                gpumgrSetCurrentGpuInstance(workItem->gpuInstance);
+            workItem->function(workItem->gpuInstance, workItem->parameters);
+            gpumgrSetCurrentGpuInstance(previousGpuInstance);
+        }
+    }
+
+    workItemLocksRelease(releaseLocks, gpuMask);
+    if (workItem->parameters != NULL && !workItem->flags.bDontFreeParams)
+    {
+        portMemFree(workItem->parameters);
+    }
+    portMemFree(workItem);
+}
 
 void osInitSystemStaticConfig(SYS_STATIC_CONFIG* config)
 {
@@ -33,6 +76,40 @@ NV_STATUS osQueueSystemWorkItem(
     void* context)
 {
     return NvPlatformRmQueueSystemWork(function, context);
+}
+
+NV_STATUS osQueueWorkItem(
+    OBJGPU* pGpu,
+    OSWorkItemFunction function,
+    void* parameters,
+    OsQueueWorkItemFlags flags)
+{
+    WindowsRmWorkItem* workItem;
+    NV_STATUS status;
+
+    if (pGpu == NULL || function == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    workItem = portMemAllocNonPaged(sizeof(*workItem));
+    if (workItem == NULL)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    workItem->function = function;
+    workItem->parameters = parameters;
+    workItem->gpuInstance = gpuGetInstance(pGpu);
+    workItem->flags = flags;
+    workItem->flags.bRequiresGpu = NV_TRUE;
+
+    status = NvPlatformRmQueueSystemWork(executeRmWorkItem, workItem);
+    if (status != NV_OK)
+    {
+        portMemFree(workItem);
+    }
+    return status;
 }
 
 void osSyncWithRmDestroy(void)
