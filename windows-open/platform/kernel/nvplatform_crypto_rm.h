@@ -9,6 +9,11 @@ extern "C" {
 
 NV_STATUS NvPlatformRmGetRandomBytes(NvU8* bytes, NvU32 byteCount);
 
+void* NvPlatformRmCreateEcPublicKey(
+	NvU32 curveNid,
+	const NvU8* publicKey,
+	NvU32 publicKeyLength);
+
 void* NvPlatformRmCreateRsaPublicKey(
 	const NvU8* modulus,
 	NvU32 modulusLength,

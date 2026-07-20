@@ -1749,22 +1749,16 @@ NvBool libspdm_x509_get_key_usage(
     return NV_TRUE;
 }
 
-static NvBool getRsaPublicKeyFromCertificate(
+static NvBool getCertificateSubjectPublicKeyInfo(
     const NvU8* certificate,
     size_t certificateLength,
-    const NvU8** modulus,
-    size_t* modulusLength,
-    const NvU8** exponent,
-    size_t* exponentLength)
+    const NvU8** subjectPublicKeyInfo,
+    size_t* subjectPublicKeyInfoLength)
 {
-    static const NvU8 rsaEncryptionOid[] = {
-        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01
-    };
     const NvU8* field;
     const NvU8* fieldsEnd;
     size_t version;
-    if (modulus == NULL || modulusLength == NULL || exponent == NULL ||
-        exponentLength == NULL ||
+    if (subjectPublicKeyInfo == NULL || subjectPublicKeyInfoLength == NULL ||
         !getCertificateTbsFields(
             certificate,
             certificateLength,
@@ -1791,19 +1785,40 @@ static NvBool getRsaPublicKeyFromCertificate(
         return NV_FALSE;
     }
 
-    const NvU8* subjectPublicKeyInfo;
-    size_t subjectPublicKeyInfoLength;
     size_t subjectPublicKeyInfoElementLength;
-    if (!getDerElement(
+    return getDerElement(
         field,
         fieldsEnd,
         0x30,
-        &subjectPublicKeyInfo,
-        &subjectPublicKeyInfoLength,
-        &subjectPublicKeyInfoElementLength))
+        subjectPublicKeyInfo,
+        subjectPublicKeyInfoLength,
+        &subjectPublicKeyInfoElementLength);
+}
+
+static NvBool getRsaPublicKeyFromCertificate(
+    const NvU8* certificate,
+    size_t certificateLength,
+    const NvU8** modulus,
+    size_t* modulusLength,
+    const NvU8** exponent,
+    size_t* exponentLength)
+{
+    static const NvU8 rsaEncryptionOid[] = {
+        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01
+    };
+    const NvU8* subjectPublicKeyInfo;
+    size_t subjectPublicKeyInfoLength;
+    if (modulus == NULL || modulusLength == NULL || exponent == NULL ||
+        exponentLength == NULL ||
+        !getCertificateSubjectPublicKeyInfo(
+            certificate,
+            certificateLength,
+            &subjectPublicKeyInfo,
+            &subjectPublicKeyInfoLength))
     {
         return NV_FALSE;
     }
+
     const NvU8* subjectPublicKeyInfoEnd =
         subjectPublicKeyInfo + subjectPublicKeyInfoLength;
 
@@ -1948,6 +1963,174 @@ static NvBool getRsaPublicKeyFromCertificate(
     *exponent = integer;
     *exponentLength = integerLength;
     return NV_TRUE;
+}
+
+static NvBool getEcPublicKeyFromCertificate(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvU32* curveNid,
+    const NvU8** publicKey,
+    size_t* publicKeyLength)
+{
+    static const NvU8 ecPublicKeyOid[] = {
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01
+    };
+    static const NvU8 secp256r1Oid[] = {
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07
+    };
+    static const NvU8 secp384r1Oid[] = {
+        0x2b, 0x81, 0x04, 0x00, 0x22
+    };
+    const NvU8* subjectPublicKeyInfo;
+    size_t subjectPublicKeyInfoLength;
+    if (curveNid == NULL || publicKey == NULL || publicKeyLength == NULL ||
+        !getCertificateSubjectPublicKeyInfo(
+            certificate,
+            certificateLength,
+            &subjectPublicKeyInfo,
+            &subjectPublicKeyInfoLength))
+    {
+        return NV_FALSE;
+    }
+    const NvU8* subjectPublicKeyInfoEnd =
+        subjectPublicKeyInfo + subjectPublicKeyInfoLength;
+
+    const NvU8* algorithmOid;
+    size_t algorithmOidLength;
+    size_t algorithmLength;
+    if (!getAlgorithmIdentifierOid(
+            subjectPublicKeyInfo,
+            subjectPublicKeyInfoEnd,
+            &algorithmOid,
+            &algorithmOidLength,
+            &algorithmLength) ||
+        !oidEquals(
+            algorithmOid,
+            algorithmOidLength,
+            ecPublicKeyOid,
+            sizeof(ecPublicKeyOid)))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* algorithmContent;
+    size_t algorithmContentLength;
+    size_t ignoredLength;
+    const NvU8* ignoredOid;
+    size_t ignoredOidLength;
+    size_t oidElementLength;
+    if (!getDerElement(
+            subjectPublicKeyInfo,
+            subjectPublicKeyInfoEnd,
+            0x30,
+            &algorithmContent,
+            &algorithmContentLength,
+            &ignoredLength) ||
+        !getDerElement(
+            algorithmContent,
+            algorithmContent + algorithmContentLength,
+            0x06,
+            &ignoredOid,
+            &ignoredOidLength,
+            &oidElementLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* curveOid;
+    size_t curveOidLength;
+    size_t curveOidElementLength;
+    const NvU8* encodedCurveOid = algorithmContent + oidElementLength;
+    if (!getDerElement(
+            encodedCurveOid,
+            algorithmContent + algorithmContentLength,
+            0x06,
+            &curveOid,
+            &curveOidLength,
+            &curveOidElementLength) ||
+        encodedCurveOid + curveOidElementLength !=
+            algorithmContent + algorithmContentLength)
+    {
+        return NV_FALSE;
+    }
+
+    size_t coordinateLength;
+    if (oidEquals(
+            curveOid,
+            curveOidLength,
+            secp256r1Oid,
+            sizeof(secp256r1Oid)))
+    {
+        *curveNid = 0x0204;
+        coordinateLength = 32;
+    }
+    else if (oidEquals(
+                 curveOid,
+                 curveOidLength,
+                 secp384r1Oid,
+                 sizeof(secp384r1Oid)))
+    {
+        *curveNid = 0x0205;
+        coordinateLength = 48;
+    }
+    else
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* publicKeyBits;
+    size_t publicKeyBitsLength;
+    size_t publicKeyElementLength;
+    const NvU8* encodedPublicKey = subjectPublicKeyInfo + algorithmLength;
+    if (!getDerElement(
+            encodedPublicKey,
+            subjectPublicKeyInfoEnd,
+            0x03,
+            &publicKeyBits,
+            &publicKeyBitsLength,
+            &publicKeyElementLength) ||
+        encodedPublicKey + publicKeyElementLength != subjectPublicKeyInfoEnd ||
+        publicKeyBitsLength != 2 + 2 * coordinateLength ||
+        publicKeyBits[0] != 0 || publicKeyBits[1] != 0x04)
+    {
+        return NV_FALSE;
+    }
+
+    *publicKey = publicKeyBits + 2;
+    *publicKeyLength = 2 * coordinateLength;
+    return NV_TRUE;
+}
+
+NvBool libspdm_ec_get_public_key_from_x509(
+    const NvU8* certificate,
+    size_t certificateLength,
+    void** ecContext)
+{
+    if (ecContext == NULL)
+    {
+        return NV_FALSE;
+    }
+    *ecContext = NULL;
+
+    NvU32 curveNid;
+    const NvU8* publicKey;
+    size_t publicKeyLength;
+    if (!getEcPublicKeyFromCertificate(
+            certificate,
+            certificateLength,
+            &curveNid,
+            &publicKey,
+            &publicKeyLength) ||
+        publicKeyLength > NV_U32_MAX)
+    {
+        return NV_FALSE;
+    }
+
+    *ecContext = NvPlatformRmCreateEcPublicKey(
+        curveNid,
+        publicKey,
+        (NvU32)publicKeyLength);
+    return *ecContext != NULL;
 }
 
 NvBool libspdm_rsa_get_public_key_from_x509(

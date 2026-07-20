@@ -26,6 +26,8 @@ struct AesGcmContext
 struct EcContext
 {
     ULONG coordinateLength;
+    ULONG publicDataLength;
+    NvU8 publicData[2 * 48];
     ULONG privateBlobLength;
     NvU8 privateBlob[sizeof(BCRYPT_ECCKEY_BLOB) + 3 * 48];
 };
@@ -36,6 +38,43 @@ struct RsaContext
     BCRYPT_KEY_HANDLE key;
     ULONG modulusLength;
 };
+
+EcContext* CreateEcContext(size_t nid) noexcept
+{
+    ULONG coordinateLength = 0;
+    if (nid == 0x0204)
+    {
+        coordinateLength = 32;
+    }
+    else if (nid == 0x0205)
+    {
+        coordinateLength = 48;
+    }
+    else
+    {
+        return nullptr;
+    }
+
+    auto* context = static_cast<EcContext*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(EcContext),
+        CryptoPoolTag));
+    if (context != nullptr)
+    {
+        RtlZeroMemory(context, sizeof(*context));
+        context->coordinateLength = coordinateLength;
+    }
+    return context;
+}
+
+void DestroyEcContext(EcContext* context) noexcept
+{
+    if (context != nullptr)
+    {
+        RtlSecureZeroMemory(context, sizeof(*context));
+        ExFreePoolWithTag(context, CryptoPoolTag);
+    }
+}
 
 void DestroyHashContext(HashContext* context) noexcept
 {
@@ -645,6 +684,40 @@ extern "C" NV_STATUS NvPlatformRmGetRandomBytes(
         : NV_ERR_OPERATING_SYSTEM;
 }
 
+extern "C" void* NvPlatformRmCreateEcPublicKey(
+    NvU32 curveNid,
+    const NvU8* publicKey,
+    NvU32 publicKeyLength)
+{
+    EcContext* context = CreateEcContext(curveNid);
+    if (context == nullptr || publicKey == nullptr ||
+        publicKeyLength != 2 * context->coordinateLength)
+    {
+        DestroyEcContext(context);
+        return nullptr;
+    }
+
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_KEY_HANDLE key = nullptr;
+    if (!ImportEcKey(
+            context,
+            GetEcdsaAlgorithm(context),
+            GetEcdsaPublicMagic(context),
+            publicKey,
+            publicKeyLength,
+            &algorithm,
+            &key))
+    {
+        DestroyEcContext(context);
+        return nullptr;
+    }
+    CloseEcKey(algorithm, key);
+
+    RtlCopyMemory(context->publicData, publicKey, publicKeyLength);
+    context->publicDataLength = publicKeyLength;
+    return context;
+}
+
 extern "C" void* NvPlatformRmCreateRsaPublicKey(
     const NvU8* modulus,
     NvU32 modulusLength,
@@ -1241,39 +1314,12 @@ extern "C" bool libspdm_aead_aes_gcm_decrypt(
 
 extern "C" void* libspdm_ec_new_by_nid(size_t nid)
 {
-    ULONG coordinateLength = 0;
-    if (nid == 0x0204)
-    {
-        coordinateLength = 32;
-    }
-    else if (nid == 0x0205)
-    {
-        coordinateLength = 48;
-    }
-    else
-    {
-        return nullptr;
-    }
-
-    auto* context = static_cast<EcContext*>(ExAllocatePool2(
-        POOL_FLAG_NON_PAGED,
-        sizeof(EcContext),
-        CryptoPoolTag));
-    if (context != nullptr)
-    {
-        RtlZeroMemory(context, sizeof(*context));
-        context->coordinateLength = coordinateLength;
-    }
-    return context;
+    return CreateEcContext(nid);
 }
 
 extern "C" void libspdm_ec_free(void* ecContext)
 {
-    if (ecContext != nullptr)
-    {
-        RtlSecureZeroMemory(ecContext, sizeof(EcContext));
-        ExFreePoolWithTag(ecContext, CryptoPoolTag);
-    }
+    DestroyEcContext(static_cast<EcContext*>(ecContext));
 }
 
 extern "C" bool libspdm_ec_generate_key(
@@ -1328,9 +1374,14 @@ extern "C" bool libspdm_ec_generate_key(
     {
         context->privateBlobLength = blobLength;
         RtlCopyMemory(
-            publicData,
+            context->publicData,
             context->privateBlob + sizeof(BCRYPT_ECCKEY_BLOB),
             2 * context->coordinateLength);
+        context->publicDataLength = 2 * context->coordinateLength;
+        RtlCopyMemory(
+            publicData,
+            context->publicData,
+            context->publicDataLength);
         *publicLength = 2 * context->coordinateLength;
     }
     else
@@ -1505,7 +1556,7 @@ extern "C" bool libspdm_ecdsa_verify(
 {
     auto* context = static_cast<EcContext*>(ecContext);
     if (context == nullptr || hash == nullptr || signature == nullptr ||
-        context->privateBlobLength == 0 ||
+        context->publicDataLength != 2 * context->coordinateLength ||
         signatureLength != 2 * context->coordinateLength ||
         ((hashNid == 0x0001 && hashLength != 32) ||
          (hashNid == 0x0002 && hashLength != 48) ||
@@ -1515,15 +1566,14 @@ extern "C" bool libspdm_ecdsa_verify(
         return false;
     }
 
-    const NvU8* publicData = context->privateBlob + sizeof(BCRYPT_ECCKEY_BLOB);
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_KEY_HANDLE key = nullptr;
     if (!ImportEcKey(
         context,
         GetEcdsaAlgorithm(context),
         GetEcdsaPublicMagic(context),
-        publicData,
-        2 * context->coordinateLength,
+        context->publicData,
+        context->publicDataLength,
         &algorithm,
         &key))
     {
