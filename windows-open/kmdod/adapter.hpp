@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hardware_resources.hpp"
+#include "nvplatform_gpu_rm.h"
 #include "pci_device.hpp"
 #include "register_aperture.hpp"
 #include "wdk.hpp"
@@ -52,6 +53,7 @@ public:
         _In_ const DXGKARG_QUERYADAPTERINFO* queryAdapterInfo) const noexcept;
 
     [[nodiscard]] bool IsStarted() const noexcept;
+    [[nodiscard]] NV_PLATFORM_RM_GPU_CONTEXT* RmGpuContext() const noexcept;
 
 private:
     enum class State : UCHAR
@@ -75,6 +77,7 @@ private:
     HardwareResources hardwareResources_;
     PciDevice pciDevice_;
     RegisterAperture registerAperture_;
+    NV_PLATFORM_RM_GPU_CONTEXT* rmGpuContext_;
     DEVICE_POWER_STATE adapterPowerState_;
     State state_;
 };

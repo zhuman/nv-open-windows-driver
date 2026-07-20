@@ -33,6 +33,7 @@
     <ClCompile Include="nvplatform_common.cpp" />
     <ClCompile Include="nvplatform_cpu_rm.cpp" />
     <ClCompile Include="nvplatform_event.cpp" />
+    <ClCompile Include="nvplatform_gpu_rm.cpp" />
     <ClCompile Include="nvplatform_mmio.cpp">
       <AdditionalIncludeDirectories>$(RepoRoot)src\nvidia\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -47,6 +48,7 @@
     <ClInclude Include="nvplatform_common.h" />
     <ClInclude Include="nvplatform_cpu_rm.h" />
     <ClInclude Include="nvplatform_event.h" />
+    <ClInclude Include="nvplatform_gpu_rm.h" />
     <ClInclude Include="nvplatform_mmio.h" />
     <ClInclude Include="nvplatform_mmio_rm.h" />
     <ClInclude Include="nvplatform_pci.h" />

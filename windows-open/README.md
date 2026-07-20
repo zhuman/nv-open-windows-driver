@@ -194,6 +194,11 @@ Kernel-privileged GPU mappings now return bounded aliases into that existing
 BAR0 mapping, while lower-privilege requests remain delegated to the explicit
 per-process PCI user-mapping boundary. Kernel unmaps therefore preserve the
 adapter's BAR ownership rather than releasing device memory prematurely.
+KMDOD now owns a nonpaged opaque RM GPU context from successful BAR validation
+until adapter stop. RM's DPC attach reserves the context, normal attach publishes
+the `OBJGPU`, and detach withdraws it before GPU destruction; failed publication
+can roll back the reservation. Creating this context does not invoke RM or wire
+interrupt dispatch into KMDOD.
 RM execution-context queries now distinguish wait-safe, DPC, and interrupt
 IRQLs through the Windows kernel. Spin polling uses the architecture's processor
 pause primitive, write-combined register ordering uses `KeFlushWriteBuffer`,

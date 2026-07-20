@@ -25,6 +25,7 @@ Adapter::Adapter(_In_ DEVICE_OBJECT* physicalDeviceObject) noexcept
     hardwareResources_{},
     pciDevice_{},
     registerAperture_{},
+            rmGpuContext_(nullptr),
       adapterPowerState_(PowerDeviceD0),
       state_(State::Stopped)
 {
@@ -121,6 +122,15 @@ NTSTATUS Adapter::Start(
     {
         ClearRuntimeState();
         return status;
+    }
+
+    const NV_STATUS rmStatus = NvPlatformRmGpuContextCreate(this, &rmGpuContext_);
+    if (rmStatus != NV_OK)
+    {
+        ClearRuntimeState();
+        return rmStatus == NV_ERR_NO_MEMORY
+            ? STATUS_INSUFFICIENT_RESOURCES
+            : STATUS_UNSUCCESSFUL;
     }
 
     adapterPowerState_ = PowerDeviceD0;
@@ -251,8 +261,15 @@ bool Adapter::IsStarted() const noexcept
     return state_ == State::Started;
 }
 
+NV_PLATFORM_RM_GPU_CONTEXT* Adapter::RmGpuContext() const noexcept
+{
+    return state_ == State::Started ? rmGpuContext_ : nullptr;
+}
+
 void Adapter::ClearRuntimeState() noexcept
 {
+    NvPlatformRmGpuContextDestroy(rmGpuContext_);
+    rmGpuContext_ = nullptr;
     registerAperture_.Reset();
     pciDevice_.Reset();
     hardwareResources_.Reset();
