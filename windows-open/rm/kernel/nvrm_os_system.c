@@ -350,3 +350,13 @@ void osDeleteRecordForCrashLog(void* pBuffer)
 {
     NvPlatformRmDeleteCrashLog(pBuffer);
 }
+
+void osErrorLogV(
+    OBJGPU* pGpu,
+    XidContext context,
+    const char* pFormat,
+    va_list arglist)
+{
+    (void)pGpu;
+    NvPlatformRmLogErrorV(context.xid, pFormat, arglist);
+}

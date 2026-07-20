@@ -488,6 +488,28 @@ extern "C" void NvPlatformRmDeleteCrashLog(void* buffer)
     }
 }
 
+extern "C" void NvPlatformRmLogErrorV(
+    NvU32 xid,
+    const char* format,
+    va_list arguments)
+{
+    if (format == nullptr || *format == '\0')
+    {
+        return;
+    }
+
+    DbgPrintEx(
+        DPFLTR_IHVVIDEO_ID,
+        DPFLTR_ERROR_LEVEL,
+        "NVRM: Xid %u: ",
+        xid);
+    vDbgPrintEx(
+        DPFLTR_IHVVIDEO_ID,
+        DPFLTR_ERROR_LEVEL,
+        format,
+        arguments);
+}
+
 extern "C" NV_STATUS NvPlatformRmSystemWorkInitialize(void)
 {
     if (systemWorkDriverObject == nullptr)

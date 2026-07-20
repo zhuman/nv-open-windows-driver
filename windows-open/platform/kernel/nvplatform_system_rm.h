@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdarg.h>
+
 #include "nvstatus.h"
 #include "nvtypes.h"
 
@@ -32,6 +34,10 @@ NV_STATUS NvPlatformRmGetOsVersion(
 	NvU32* productType);
 NV_STATUS NvPlatformRmAddCrashLog(void* buffer, NvU32 length);
 void NvPlatformRmDeleteCrashLog(void* buffer);
+void NvPlatformRmLogErrorV(
+	NvU32 xid,
+	const char* format,
+	va_list arguments);
 void NvPlatformRmCaptureAssertion(void);
 __declspec(noreturn) void NvPlatformRmBugCheck(NvU32 bugCode);
 
