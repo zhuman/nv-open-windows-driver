@@ -1,5 +1,6 @@
 #include "nvplatform_system.h"
 #include "nvplatform_system_rm.h"
+#include "nvplatform_pci.h"
 
 extern "C" {
 #include <ntpoapi.h>
@@ -56,6 +57,15 @@ NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
         return STATUS_INVALID_DEVICE_STATE;
     }
 
+    const NTSTATUS pciStatus = NvPlatformPciInitialize();
+    if (!NT_SUCCESS(pciStatus))
+    {
+        InterlockedExchangePointer(
+            reinterpret_cast<void* volatile*>(&systemWorkDriverObject),
+            nullptr);
+        return pciStatus;
+    }
+
     KeInitializeSemaphore(&rmSema, 1, 1);
     return STATUS_SUCCESS;
 }
@@ -63,6 +73,7 @@ NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
 void NvPlatformSystemShutdown(void) noexcept
 {
     NvPlatformRmDrainSystemWork();
+    NvPlatformPciShutdown();
     InterlockedExchangePointer(
         reinterpret_cast<void* volatile*>(&systemWorkDriverObject),
         nullptr);

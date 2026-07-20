@@ -30,6 +30,40 @@ typedef struct NV_PLATFORM_PCI_CONFIG_ACCESS
     NV_PLATFORM_PCI_CONFIG_WRITE write;
 } NV_PLATFORM_PCI_CONFIG_ACCESS;
 
+typedef struct NV_PLATFORM_PCI_LOCATION
+{
+    ULONG domain;
+    UCHAR bus;
+    UCHAR device;
+    UCHAR function;
+} NV_PLATFORM_PCI_LOCATION;
+
+NTSTATUS NvPlatformPciInitialize(void) NV_PLATFORM_NOEXCEPT;
+void NvPlatformPciShutdown(void) NV_PLATFORM_NOEXCEPT;
+
+NTSTATUS NvPlatformRegisterPciConfig(
+    _In_ const NV_PLATFORM_PCI_LOCATION* location,
+    _In_ const NV_PLATFORM_PCI_CONFIG_ACCESS* access,
+    _Outptr_ void** handle) NV_PLATFORM_NOEXCEPT;
+
+void NvPlatformUnregisterPciConfig(
+    _In_opt_ void* handle) NV_PLATFORM_NOEXCEPT;
+
+void* NvPlatformOpenPciConfig(
+    _In_ const NV_PLATFORM_PCI_LOCATION* location) NV_PLATFORM_NOEXCEPT;
+
+NTSTATUS NvPlatformReadPciConfigHandle(
+    _In_ void* handle,
+    _In_ ULONG offset,
+    _Out_writes_bytes_(length) void* buffer,
+    _In_ ULONG length) NV_PLATFORM_NOEXCEPT;
+
+NTSTATUS NvPlatformWritePciConfigHandle(
+    _In_ void* handle,
+    _In_ ULONG offset,
+    _In_reads_bytes_(length) const void* buffer,
+    _In_ ULONG length) NV_PLATFORM_NOEXCEPT;
+
 NTSTATUS NvPlatformReadPciConfig(
     _In_ const NV_PLATFORM_PCI_CONFIG_ACCESS* access,
     _In_ ULONG offset,

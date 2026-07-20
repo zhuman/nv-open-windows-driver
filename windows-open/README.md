@@ -174,6 +174,10 @@ The complete upstream `Intr` owner and vector container now provide RM's
 interrupt state and mask bookkeeping. Windows lock hooks preserve the upstream
 PCI-GPU behavior by disabling and restoring hardware interrupts through the
 `Intr` HAL; unsupported Tegra SoC display IRQ control is asserted explicitly.
+PCI configuration access now has an allocation-free platform registry keyed by
+the complete domain, bus, device, and function tuple. Stable handles retain the
+owning adapter's configuration callbacks, while a WDK-free sidecar supplies
+RM's byte, word, and dword PCI ABI without introducing global-adapter policy.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor

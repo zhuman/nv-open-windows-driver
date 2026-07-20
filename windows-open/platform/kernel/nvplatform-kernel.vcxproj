@@ -45,6 +45,7 @@
     <ClInclude Include="nvplatform_event.h" />
     <ClInclude Include="nvplatform_mmio.h" />
     <ClInclude Include="nvplatform_pci.h" />
+    <ClInclude Include="nvplatform_pci_rm.h" />
     <ClInclude Include="nvplatform_registry.h" />
     <ClInclude Include="nvplatform_registry_rm.h" />
     <ClInclude Include="nvplatform_sync.h" />
