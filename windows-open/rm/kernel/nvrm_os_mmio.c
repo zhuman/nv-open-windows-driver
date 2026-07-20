@@ -24,6 +24,36 @@ void osUnmapKernelSpace(void* address, NvU64 size)
     NvPlatformRmUnmapPhysical(address);
 }
 
+NV_STATUS osMapPciMemoryKernelOld(
+    OBJGPU* pGpu,
+    RmPhysAddr busAddress,
+    NvU64 length,
+    NvU32 protect,
+    void** pVirtualAddress,
+    NvU32 mode)
+{
+    (void)pGpu;
+    if (pVirtualAddress == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    // The platform provider tracks the aligned WDK mapping metadata globally,
+    // so the legacy ABI does not need Linux's per-GPU mapping list.
+    return NvPlatformRmMapPhysical(
+        busAddress,
+        length,
+        protect,
+        mode,
+        pVirtualAddress);
+}
+
+void osUnmapPciMemoryKernelOld(OBJGPU* pGpu, void* virtualAddress)
+{
+    (void)pGpu;
+    NvPlatformRmUnmapPhysical(virtualAddress);
+}
+
 NV_STATUS osMapPciMemoryKernel64(
     OBJGPU* pGpu,
     RmPhysAddr busAddress,
