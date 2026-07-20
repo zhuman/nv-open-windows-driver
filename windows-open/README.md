@@ -178,6 +178,10 @@ PCI configuration access now has an allocation-free platform registry keyed by
 the complete domain, bus, device, and function tuple. Stable handles retain the
 owning adapter's configuration callbacks, while a WDK-free sidecar supplies
 RM's byte, word, and dword PCI ABI without introducing global-adapter policy.
+KMDOD registers each callback set during adapter start using the PDO's packed
+PCI segment/bus and slot properties, and unregisters it before clearing the
+DXGK interface during stop. The stored location is available to construct RM's
+eventual attach argument without assuming segment zero.
 Kernel PCI mappings now preserve RM's requested cache and protection modes
 through `MmMapIoSpaceEx`. Nonpaged platform metadata retains each aligned
 Windows mapping so both generic kernel-space and PCI-specific RM unmaps release

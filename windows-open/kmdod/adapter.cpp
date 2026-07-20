@@ -107,6 +107,7 @@ NTSTATUS Adapter::Start(
     }
 
     status = pciDevice_.Initialize(
+        physicalDeviceObject_,
         dxgkInterface_,
         hardwareResources_.MemoryRangeCount() != 0);
     if (!NT_SUCCESS(status))

@@ -23,6 +23,7 @@ public:
     PciDevice() noexcept;
 
     NTSTATUS Initialize(
+        _In_ DEVICE_OBJECT* physicalDeviceObject,
         _In_ const DXGKRNL_INTERFACE& dxgkInterface,
         _In_ bool configurationRequired) noexcept;
 
@@ -40,12 +41,15 @@ public:
 
     [[nodiscard]] bool IsPresent() const noexcept;
     [[nodiscard]] const PciIdentity* Identity() const noexcept;
+    [[nodiscard]] const NV_PLATFORM_PCI_LOCATION* Location() const noexcept;
     [[nodiscard]] PHYSICAL_ADDRESS RegisterBarAddress() const noexcept;
 
 private:
     PciIdentity identity_;
+    NV_PLATFORM_PCI_LOCATION location_;
     PHYSICAL_ADDRESS registerBarAddress_;
     NV_PLATFORM_PCI_CONFIG_ACCESS configAccess_;
+    void* configRegistration_;
     bool present_;
 };
 

@@ -44,13 +44,16 @@ namespace nv::kmdod {
 
 PciDevice::PciDevice() noexcept
     : identity_{},
+            location_{},
     registerBarAddress_{},
     configAccess_{},
+            configRegistration_(nullptr),
       present_(false)
 {
 }
 
 NTSTATUS PciDevice::Initialize(
+        _In_ DEVICE_OBJECT* physicalDeviceObject,
     _In_ const DXGKRNL_INTERFACE& dxgkInterface,
     _In_ bool configurationRequired) noexcept
 {
@@ -61,9 +64,9 @@ NTSTATUS PciDevice::Initialize(
         return STATUS_SUCCESS;
     }
 
-    if (dxgkInterface.DxgkCbReadDeviceSpace == nullptr)
+    if (physicalDeviceObject == nullptr || dxgkInterface.DxgkCbReadDeviceSpace == nullptr)
     {
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_INVALID_PARAMETER;
     }
 
     NV_PLATFORM_PCI_CONFIG_ACCESS configAccess = {};
@@ -112,6 +115,55 @@ NTSTATUS PciDevice::Initialize(
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
+    PCI_SEGMENT_BUS_NUMBER segmentBus = {};
+    ULONG propertyLength = 0;
+    NTSTATUS propertyStatus = IoGetDeviceProperty(
+        physicalDeviceObject,
+        DevicePropertyBusNumber,
+        sizeof(segmentBus.u.AsULONG),
+        &segmentBus.u.AsULONG,
+        &propertyLength);
+    if (!NT_SUCCESS(propertyStatus) ||
+        propertyLength != sizeof(segmentBus.u.AsULONG) ||
+        segmentBus.u.bits.Reserved != 0)
+    {
+        return NT_SUCCESS(propertyStatus)
+            ? STATUS_DEVICE_CONFIGURATION_ERROR
+            : propertyStatus;
+    }
+
+    PCI_SLOT_NUMBER slot = {};
+    propertyStatus = IoGetDeviceProperty(
+        physicalDeviceObject,
+        DevicePropertyAddress,
+        sizeof(slot.u.AsULONG),
+        &slot.u.AsULONG,
+        &propertyLength);
+    if (!NT_SUCCESS(propertyStatus) ||
+        propertyLength != sizeof(slot.u.AsULONG) ||
+        slot.u.bits.Reserved != 0)
+    {
+        return NT_SUCCESS(propertyStatus)
+            ? STATUS_DEVICE_CONFIGURATION_ERROR
+            : propertyStatus;
+    }
+
+    NV_PLATFORM_PCI_LOCATION location = {};
+    location.domain = segmentBus.u.bits.SegmentNumber;
+    location.bus = static_cast<UCHAR>(segmentBus.u.bits.BusNumber);
+    location.device = static_cast<UCHAR>(slot.u.bits.DeviceNumber);
+    location.function = static_cast<UCHAR>(slot.u.bits.FunctionNumber);
+
+    void* configRegistration = nullptr;
+    propertyStatus = NvPlatformRegisterPciConfig(
+        &location,
+        &configAccess,
+        &configRegistration);
+    if (!NT_SUCCESS(propertyStatus))
+    {
+        return propertyStatus;
+    }
+
     identity_.vendorId = configuration.VendorID;
     identity_.deviceId = configuration.DeviceID;
     identity_.subsystemVendorId = configuration.u.type0.SubVendorID;
@@ -120,17 +172,22 @@ NTSTATUS PciDevice::Initialize(
     identity_.programmingInterface = configuration.ProgIf;
     identity_.subclass = configuration.SubClass;
     identity_.baseClass = configuration.BaseClass;
+    location_ = location;
     registerBarAddress_.QuadPart = registerBarAddress;
     configAccess_ = configAccess;
+    configRegistration_ = configRegistration;
     present_ = true;
     return STATUS_SUCCESS;
 }
 
 void PciDevice::Reset() noexcept
 {
+    NvPlatformUnregisterPciConfig(configRegistration_);
     RtlZeroMemory(&identity_, sizeof(identity_));
+    RtlZeroMemory(&location_, sizeof(location_));
     registerBarAddress_.QuadPart = 0;
     RtlZeroMemory(&configAccess_, sizeof(configAccess_));
+    configRegistration_ = nullptr;
     present_ = false;
 }
 
@@ -162,6 +219,11 @@ bool PciDevice::IsPresent() const noexcept
 const PciIdentity* PciDevice::Identity() const noexcept
 {
     return present_ ? &identity_ : nullptr;
+}
+
+const NV_PLATFORM_PCI_LOCATION* PciDevice::Location() const noexcept
+{
+    return present_ ? &location_ : nullptr;
 }
 
 PHYSICAL_ADDRESS PciDevice::RegisterBarAddress() const noexcept
