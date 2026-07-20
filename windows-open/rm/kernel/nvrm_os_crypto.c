@@ -279,6 +279,239 @@ NvBool libspdm_asn1_get_tag(
     return NV_TRUE;
 }
 
+static NvBool getDerElement(
+    const NvU8* element,
+    const NvU8* end,
+    NvU8 tag,
+    const NvU8** content,
+    size_t* contentLength,
+    size_t* elementLength)
+{
+    NvU8* mutableElement = (NvU8*)element;
+    size_t length;
+
+    if (content == NULL || contentLength == NULL || elementLength == NULL ||
+        !libspdm_asn1_get_tag(&mutableElement, end, &length, tag))
+    {
+        return NV_FALSE;
+    }
+
+    const size_t headerLength = element[1] < 0x80
+        ? 2
+        : 2 + (element[1] & 0x7f);
+    if (headerLength > length)
+    {
+        return NV_FALSE;
+    }
+
+    *content = element + headerLength;
+    *contentLength = length - headerLength;
+    *elementLength = length;
+    return NV_TRUE;
+}
+
+static NvBool getCertificateTbsFields(
+    const NvU8* certificate,
+    size_t certificateLength,
+    const NvU8** firstField,
+    const NvU8** fieldsEnd)
+{
+    if (certificate == NULL || certificateLength == 0 ||
+        firstField == NULL || fieldsEnd == NULL)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* certificateEnd = certificate + certificateLength;
+    const NvU8* certificateContent;
+    size_t certificateContentLength;
+    size_t certificateElementLength;
+    if (!getDerElement(
+        certificate,
+        certificateEnd,
+        0x30,
+        &certificateContent,
+        &certificateContentLength,
+        &certificateElementLength) ||
+        certificateElementLength != certificateLength)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* tbsContent;
+    size_t tbsContentLength;
+    size_t tbsElementLength;
+    if (!getDerElement(
+        certificateContent,
+        certificateEnd,
+        0x30,
+        &tbsContent,
+        &tbsContentLength,
+        &tbsElementLength))
+    {
+        return NV_FALSE;
+    }
+
+    *firstField = tbsContent;
+    *fieldsEnd = tbsContent + tbsContentLength;
+    return NV_TRUE;
+}
+
+NvBool libspdm_x509_get_version(
+    const NvU8* certificate,
+    size_t certificateLength,
+    size_t* version)
+{
+    const NvU8* field;
+    const NvU8* fieldsEnd;
+    if (version == NULL ||
+        !getCertificateTbsFields(
+            certificate,
+            certificateLength,
+            &field,
+            &fieldsEnd))
+    {
+        return NV_FALSE;
+    }
+
+    if (field == fieldsEnd || *field != 0xa0)
+    {
+        if (field == fieldsEnd || *field != 0x02)
+        {
+            return NV_FALSE;
+        }
+        *version = 0;
+        return NV_TRUE;
+    }
+
+    const NvU8* explicitContent;
+    size_t explicitContentLength;
+    size_t explicitElementLength;
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0xa0,
+        &explicitContent,
+        &explicitContentLength,
+        &explicitElementLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* integerContent;
+    size_t integerContentLength;
+    size_t integerElementLength;
+    if (!getDerElement(
+        explicitContent,
+        explicitContent + explicitContentLength,
+        0x02,
+        &integerContent,
+        &integerContentLength,
+        &integerElementLength) ||
+        integerElementLength != explicitContentLength ||
+        integerContentLength == 0 || (integerContent[0] & 0x80) != 0 ||
+        (integerContentLength > 1 && integerContent[0] == 0 &&
+         (integerContent[1] & 0x80) == 0))
+    {
+        return NV_FALSE;
+    }
+
+    size_t value = 0;
+    for (size_t index = 0; index < integerContentLength; ++index)
+    {
+        if (value > ((size_t)-1) >> 8)
+        {
+            return NV_FALSE;
+        }
+        value = (value << 8) | integerContent[index];
+    }
+
+    const NvU8* serialField = field + explicitElementLength;
+    if (serialField == fieldsEnd || *serialField != 0x02)
+    {
+        return NV_FALSE;
+    }
+
+    *version = value;
+    return NV_TRUE;
+}
+
+NvBool libspdm_x509_get_serial_number(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvU8* serialNumber,
+    size_t* serialNumberLength)
+{
+    const NvU8* field;
+    const NvU8* fieldsEnd;
+    if (serialNumberLength == NULL ||
+        !getCertificateTbsFields(
+            certificate,
+            certificateLength,
+            &field,
+            &fieldsEnd))
+    {
+        return NV_FALSE;
+    }
+
+    size_t ignoredVersion;
+    if (!libspdm_x509_get_version(
+        certificate,
+        certificateLength,
+        &ignoredVersion))
+    {
+        return NV_FALSE;
+    }
+
+    if (field < fieldsEnd && *field == 0xa0)
+    {
+        const NvU8* ignoredContent;
+        size_t ignoredContentLength;
+        size_t versionElementLength;
+        if (!getDerElement(
+            field,
+            fieldsEnd,
+            0xa0,
+            &ignoredContent,
+            &ignoredContentLength,
+            &versionElementLength))
+        {
+            return NV_FALSE;
+        }
+        field += versionElementLength;
+    }
+
+    const NvU8* integerContent;
+    size_t integerContentLength;
+    size_t integerElementLength;
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x02,
+        &integerContent,
+        &integerContentLength,
+        &integerElementLength) ||
+        integerContentLength == 0 || (integerContent[0] & 0x80) != 0 ||
+        (integerContentLength > 1 && integerContent[0] == 0 &&
+         (integerContent[1] & 0x80) == 0))
+    {
+        return NV_FALSE;
+    }
+
+    if (serialNumber == NULL || *serialNumberLength < integerContentLength)
+    {
+        *serialNumberLength = integerContentLength;
+        return NV_FALSE;
+    }
+
+    for (size_t index = 0; index < integerContentLength; ++index)
+    {
+        serialNumber[index] = integerContent[index];
+    }
+    *serialNumberLength = integerContentLength;
+    return NV_TRUE;
+}
+
 NvBool libspdm_x509_get_cert_from_cert_chain(
     const NvU8* certificateChain,
     size_t certificateChainLength,
