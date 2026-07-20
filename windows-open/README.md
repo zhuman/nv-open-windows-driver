@@ -186,6 +186,10 @@ The unchanged upstream GPU mapping and OS register owners now select BAR0 from
 `OBJGPU`, retain vGPU PCI-mirror routing, and perform bounded Windows
 `READ_REGISTER_*`/`WRITE_REGISTER_*` accesses. Complete upstream NBSI and FNV
 owners preserve firmware-backed registry override lookup on this path.
+Kernel-privileged GPU mappings now return bounded aliases into that existing
+BAR0 mapping, while lower-privilege requests remain delegated to the explicit
+per-process PCI user-mapping boundary. Kernel unmaps therefore preserve the
+adapter's BAR ownership rather than releasing device memory prematurely.
 RM execution-context queries now distinguish wait-safe, DPC, and interrupt
 IRQLs through the Windows kernel. Spin polling uses the architecture's processor
 pause primitive, write-combined register ordering uses `KeFlushWriteBuffer`,
