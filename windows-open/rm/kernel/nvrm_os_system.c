@@ -161,6 +161,11 @@ NvBool osIsAdministrator(void)
     return NvPlatformRmIsCurrentSubjectAdministrator();
 }
 
+NvBool osDmabufIsSupported(void)
+{
+    return NV_FALSE;
+}
+
 NvBool hypervisorIsVgxHyper_IMPL(void)
 {
     return NV_FALSE;
