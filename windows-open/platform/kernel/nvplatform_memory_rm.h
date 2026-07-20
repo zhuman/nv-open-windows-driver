@@ -88,6 +88,18 @@ NV_STATUS NvPlatformRmMapSectionView(
 
 NV_STATUS NvPlatformRmUnmapSectionView(void* address);
 
+// Pins a page-aligned system-space view in bounded MDL chunks and returns its
+// PFNs to RM. The opaque range must be unlocked before the view is unmapped.
+NV_STATUS NvPlatformRmLockSystemAddress(
+    void* address,
+    NvU64 length,
+    void** lockedRange,
+    NvU64* physicalAddresses,
+    NvU32 physicalAddressCapacity,
+    NvU32* physicalAddressCount);
+
+void NvPlatformRmUnlockSystemAddress(void* lockedRange);
+
 #ifdef __cplusplus
 }
 #endif

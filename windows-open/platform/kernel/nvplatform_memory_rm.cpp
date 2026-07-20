@@ -7,7 +7,9 @@ namespace {
 
 constexpr ULONG MemoryAllocationTag = 'mRvN';
 constexpr ULONG SectionAllocationTag = 'sRvN';
+constexpr ULONG LockedRangeAllocationTag = 'lRvN';
 constexpr NvU64 SectionViewAlignment = 64 * 1024;
+constexpr ULONG MaximumMdlChunkSize = 16 * 1024 * 1024;
 
 struct RmPageAllocation
 {
@@ -32,6 +34,24 @@ struct RmSection
     void* sectionObject;
     NvU64 maximumSize;
 };
+
+struct RmLockedRange
+{
+    PMDL mdl;
+    RmLockedRange* next;
+};
+
+void UnlockSystemAddress(RmLockedRange* lockedRange)
+{
+    while (lockedRange != nullptr)
+    {
+        RmLockedRange* next = lockedRange->next;
+        MmUnlockPages(lockedRange->mdl);
+        IoFreeMdl(lockedRange->mdl);
+        ExFreePoolWithTag(lockedRange, LockedRangeAllocationTag);
+        lockedRange = next;
+    }
+}
 
 MEMORY_CACHING_TYPE ConvertCacheType(
     NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType)
@@ -670,4 +690,108 @@ extern "C" NV_STATUS NvPlatformRmUnmapSectionView(void* address)
     return NT_SUCCESS(MmUnmapViewInSystemSpace(address))
         ? NV_OK
         : NV_ERR_OPERATING_SYSTEM;
+}
+
+extern "C" NV_STATUS NvPlatformRmLockSystemAddress(
+    void* address,
+    NvU64 length,
+    void** lockedRange,
+    NvU64* physicalAddresses,
+    NvU32 physicalAddressCapacity,
+    NvU32* physicalAddressCount)
+{
+    if (address == nullptr || length == 0 || lockedRange == nullptr ||
+        physicalAddresses == nullptr || physicalAddressCount == nullptr ||
+        (reinterpret_cast<ULONG_PTR>(address) & (PAGE_SIZE - 1)) != 0 ||
+        KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (length > NV_U64_MAX - (PAGE_SIZE - 1))
+    {
+        return NV_ERR_INVALID_LIMIT;
+    }
+    const NvU64 pageCount = (length + PAGE_SIZE - 1) >> PAGE_SHIFT;
+    if (pageCount > physicalAddressCapacity || pageCount > NV_U32_MAX)
+    {
+        return NV_ERR_BUFFER_TOO_SMALL;
+    }
+
+    *lockedRange = nullptr;
+    *physicalAddressCount = 0;
+    auto* cursor = static_cast<NvU8*>(address);
+    NvU64 remaining = length;
+    RmLockedRange* head = nullptr;
+    RmLockedRange** tail = &head;
+
+    while (remaining != 0)
+    {
+        const ULONG chunkSize = static_cast<ULONG>(
+            remaining > MaximumMdlChunkSize ? MaximumMdlChunkSize : remaining);
+        auto* node = static_cast<RmLockedRange*>(ExAllocatePool2(
+            POOL_FLAG_NON_PAGED,
+            sizeof(RmLockedRange),
+            LockedRangeAllocationTag));
+        if (node == nullptr)
+        {
+            UnlockSystemAddress(head);
+            return NV_ERR_NO_MEMORY;
+        }
+        node->next = nullptr;
+        node->mdl = IoAllocateMdl(cursor, chunkSize, FALSE, FALSE, nullptr);
+        if (node->mdl == nullptr)
+        {
+            ExFreePoolWithTag(node, LockedRangeAllocationTag);
+            UnlockSystemAddress(head);
+            return NV_ERR_NO_MEMORY;
+        }
+
+        bool locked = false;
+        __try
+        {
+            MmProbeAndLockPages(node->mdl, KernelMode, IoModifyAccess);
+            locked = true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        if (!locked)
+        {
+            IoFreeMdl(node->mdl);
+            ExFreePoolWithTag(node, LockedRangeAllocationTag);
+            UnlockSystemAddress(head);
+            return NV_ERR_INVALID_ADDRESS;
+        }
+
+        const NvU32 mdlPageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(cursor, chunkSize);
+        if (mdlPageCount > physicalAddressCapacity - *physicalAddressCount)
+        {
+            MmUnlockPages(node->mdl);
+            IoFreeMdl(node->mdl);
+            ExFreePoolWithTag(node, LockedRangeAllocationTag);
+            UnlockSystemAddress(head);
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+        const PPFN_NUMBER pageFrameNumbers = MmGetMdlPfnArray(node->mdl);
+        for (NvU32 index = 0; index < mdlPageCount; ++index)
+        {
+            physicalAddresses[*physicalAddressCount + index] =
+                static_cast<NvU64>(pageFrameNumbers[index]) << PAGE_SHIFT;
+        }
+        *physicalAddressCount += mdlPageCount;
+
+        *tail = node;
+        tail = &node->next;
+        cursor += chunkSize;
+        remaining -= chunkSize;
+    }
+
+    *lockedRange = head;
+    return NV_OK;
+}
+
+extern "C" void NvPlatformRmUnlockSystemAddress(void* lockedRange)
+{
+    UnlockSystemAddress(static_cast<RmLockedRange*>(lockedRange));
 }

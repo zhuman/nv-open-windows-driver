@@ -3,6 +3,7 @@
 #include "nvplatform_mmio_rm.h"
 #include "g_os_nvoc.h"
 #include "g_mem_desc_nvoc.h"
+#include "gpu/gpu.h"
 #include "kernel/os/nv_memory_type.h"
 
 void osInternalReserveAllocCallback(
@@ -20,6 +21,12 @@ void osInternalReserveFreeCallback(NvU64 offset, NvU32 gpuId)
 {
     (void)offset;
     (void)gpuId;
+}
+
+static void releaseImportedSystemAddress(MEMORY_DESCRIPTOR* pMemDesc)
+{
+    NvPlatformRmUnlockSystemAddress(pMemDesc->_pMemData);
+    pMemDesc->_pMemData = NULL;
 }
 
 NV_STATUS osAllocPagesInternal(MEMORY_DESCRIPTOR* pMemDesc)
@@ -127,6 +134,68 @@ NV_STATUS osUnmapViewFromSection(
     }
 
     return NvPlatformRmUnmapSectionView(pAddress);
+}
+
+NV_STATUS osCreateMemFromOsDescriptorInternal(
+    OBJGPU* pGpu,
+    void* pAddress,
+    NvU32 flags,
+    NvU64 size,
+    MEMORY_DESCRIPTOR** ppMemDesc,
+    NvBool bCachedKernel,
+    RS_PRIV_LEVEL privilegeLevel)
+{
+    MEMORY_DESCRIPTOR* pMemDesc = NULL;
+    void* lockedRange = NULL;
+    NvU32 physicalAddressCount = 0;
+    NV_STATUS status;
+
+    if (pGpu == NULL || pAddress == NULL || size == 0 || ppMemDesc == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    *ppMemDesc = NULL;
+
+    // This internal form is the non-IOMMU FBSR section view. Imported handles,
+    // user mappings, and IOMMU-owned MDLs require separate ownership contracts.
+    if (flags != 0 || !bCachedKernel || privilegeLevel < RS_PRIV_LEVEL_KERNEL ||
+        pGpu->getProperty(pGpu, PDB_PROP_GPU_ENABLE_IOMMU_SUPPORT))
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    status = memdescCreate(
+        &pMemDesc,
+        pGpu,
+        size,
+        0,
+        NV_FALSE,
+        ADDR_SYSMEM,
+        NV_MEMORY_CACHED,
+        MEMDESC_FLAGS_NONE);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = NvPlatformRmLockSystemAddress(
+        pAddress,
+        size,
+        &lockedRange,
+        pMemDesc->_pteArray,
+        (NvU32)pMemDesc->pageArraySize,
+        &physicalAddressCount);
+    if (status != NV_OK)
+    {
+        memdescDestroy(pMemDesc);
+        return status;
+    }
+
+    pMemDesc->PageCount = physicalAddressCount;
+    pMemDesc->ActualSize = (NvU64)physicalAddressCount * RM_PAGE_SIZE;
+    memdescSetMemData(pMemDesc, lockedRange, releaseImportedSystemAddress);
+    *ppMemDesc = pMemDesc;
+    return NV_OK;
 }
 
 NV_STATUS osLockMem(MEMORY_DESCRIPTOR* pMemDesc)
