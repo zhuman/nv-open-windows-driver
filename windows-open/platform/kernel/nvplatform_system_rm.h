@@ -20,6 +20,16 @@ NV_STATUS NvPlatformRmGetAcpiTable(
 	void* table,
 	NvU32 tableSize,
 	NvU32* returnSize);
+NV_STATUS NvPlatformRmGetDriverImageInfo(
+	void** imageBase,
+	NvU8 debugIdentifier[16],
+	NvU32* debugAge,
+	NvU32* codeOffset);
+NV_STATUS NvPlatformRmGetOsVersion(
+	NvU32* majorVersion,
+	NvU32* minorVersion,
+	NvU32* buildNumber,
+	NvU32* productType);
 void NvPlatformRmCaptureAssertion(void);
 __declspec(noreturn) void NvPlatformRmBugCheck(NvU32 bugCode);
 

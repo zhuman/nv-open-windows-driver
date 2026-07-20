@@ -1,5 +1,7 @@
 #include "g_system_nvoc.h"
 #include "g_os_nvoc.h"
+#include "lib/protobuf/prb.h"
+#include "g_nvdebug_pb.h"
 #include "nvplatform_file_rm.h"
 #include "nvplatform_registry_rm.h"
 #include "nvplatform_system_rm.h"
@@ -197,4 +199,67 @@ NV_STATUS osReadFromFile(
     NvU64 offset)
 {
     return NvPlatformRmReadFile(pFile, buffer, size, offset);
+}
+
+NV_STATUS osGetDriverBlock(
+    OS_GPU_INFO* pOsGpuInfo,
+    OS_DRIVER_BLOCK* pBlock)
+{
+    (void)pOsGpuInfo;
+    if (pBlock == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NvPlatformRmGetDriverImageInfo(
+        &pBlock->driverStart,
+        pBlock->unique_id,
+        &pBlock->age,
+        &pBlock->offset);
+}
+
+NV_STATUS osGetVersionDump(void* pEncoder)
+{
+    NvU32 majorVersion;
+    NvU32 minorVersion;
+    NvU32 buildNumber;
+    NvU32 productType;
+    NV_STATUS status;
+
+    if (pEncoder == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    status = NvPlatformRmGetOsVersion(
+        &majorVersion,
+        &minorVersion,
+        &buildNumber,
+        &productType);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    prbEncAddUInt32(
+        (PRB_ENCODER*)pEncoder,
+        NVDEBUG_SYSTEMINFO_OSINFO_FAMILY,
+        NVDEBUG_OS_NT);
+    prbEncAddUInt32(
+        (PRB_ENCODER*)pEncoder,
+        NVDEBUG_SYSTEMINFO_OSINFO_OSMAJORVERSION,
+        majorVersion);
+    prbEncAddUInt32(
+        (PRB_ENCODER*)pEncoder,
+        NVDEBUG_SYSTEMINFO_OSINFO_OSMINORVERSION,
+        minorVersion);
+    prbEncAddUInt32(
+        (PRB_ENCODER*)pEncoder,
+        NVDEBUG_SYSTEMINFO_OSINFO_OSBLDNUM,
+        buildNumber);
+    prbEncAddUInt32(
+        (PRB_ENCODER*)pEncoder,
+        NVDEBUG_SYSTEMINFO_OSINFO_WINPRODUCTTYPE,
+        productType);
+    return NV_OK;
 }

@@ -27,6 +27,15 @@ struct SystemWorkItem
     void* context;
 };
 
+struct CodeViewRsdsHeader
+{
+    ULONG signature;
+    GUID identifier;
+    ULONG age;
+};
+
+constexpr ULONG CodeViewRsdsSignature = 'SDSR';
+
 EX_RUNDOWN_REF systemWorkRundown;
 volatile LONG systemWorkState = SystemWorkStateNeverInitialized;
 PDRIVER_OBJECT systemWorkDriverObject;
@@ -221,6 +230,131 @@ extern "C" NV_STATUS NvPlatformRmGetAcpiTable(
         return NV_ERR_OBJECT_NOT_FOUND;
     }
     return NV_ERR_OPERATING_SYSTEM;
+}
+
+extern "C" NV_STATUS NvPlatformRmGetDriverImageInfo(
+    void** imageBase,
+    NvU8 debugIdentifier[16],
+    NvU32* debugAge,
+    NvU32* codeOffset)
+{
+    if (imageBase == nullptr || debugIdentifier == nullptr ||
+        debugAge == nullptr || codeOffset == nullptr ||
+        systemWorkDriverObject == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    auto* base = static_cast<NvU8*>(systemWorkDriverObject->DriverStart);
+    const ULONG imageSize = systemWorkDriverObject->DriverSize;
+    if (base == nullptr || imageSize < sizeof(IMAGE_DOS_HEADER))
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    const auto* dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE || dosHeader->e_lfanew < 0 ||
+        static_cast<ULONG>(dosHeader->e_lfanew) > imageSize - sizeof(IMAGE_NT_HEADERS))
+    {
+        return NV_ERR_INVALID_DATA;
+    }
+
+    const auto* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+        base + dosHeader->e_lfanew);
+    if (ntHeaders->Signature != IMAGE_NT_SIGNATURE)
+    {
+        return NV_ERR_INVALID_DATA;
+    }
+
+    *imageBase = base;
+    *debugAge = 0;
+    *codeOffset = 0;
+    RtlZeroMemory(debugIdentifier, 16);
+
+    const auto* section = IMAGE_FIRST_SECTION(ntHeaders);
+    const SIZE_T sectionOffset =
+        reinterpret_cast<const NvU8*>(section) - base;
+    if (sectionOffset > imageSize ||
+        ntHeaders->FileHeader.NumberOfSections >
+            (imageSize - sectionOffset) / sizeof(IMAGE_SECTION_HEADER))
+    {
+        return NV_ERR_INVALID_DATA;
+    }
+    for (USHORT index = 0; index < ntHeaders->FileHeader.NumberOfSections; ++index)
+    {
+        if ((section[index].Characteristics & IMAGE_SCN_CNT_CODE) != 0)
+        {
+            *codeOffset = section[index].VirtualAddress;
+            break;
+        }
+    }
+
+    if (ntHeaders->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG)
+    {
+        return NV_OK;
+    }
+    const IMAGE_DATA_DIRECTORY& debugDirectoryEntry =
+        ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+    if (debugDirectoryEntry.VirtualAddress == 0 || debugDirectoryEntry.Size == 0 ||
+        debugDirectoryEntry.VirtualAddress > imageSize ||
+        debugDirectoryEntry.Size > imageSize - debugDirectoryEntry.VirtualAddress)
+    {
+        return NV_OK;
+    }
+
+    const auto* debugDirectories = reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(
+        base + debugDirectoryEntry.VirtualAddress);
+    const ULONG debugDirectoryCount =
+        debugDirectoryEntry.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
+    for (ULONG index = 0; index < debugDirectoryCount; ++index)
+    {
+        const IMAGE_DEBUG_DIRECTORY& directory = debugDirectories[index];
+        if (directory.Type != IMAGE_DEBUG_TYPE_CODEVIEW ||
+            directory.AddressOfRawData > imageSize ||
+            directory.SizeOfData < sizeof(CodeViewRsdsHeader) ||
+            directory.SizeOfData > imageSize - directory.AddressOfRawData)
+        {
+            continue;
+        }
+
+        const auto* codeView = reinterpret_cast<const CodeViewRsdsHeader*>(
+            base + directory.AddressOfRawData);
+        if (codeView->signature == CodeViewRsdsSignature)
+        {
+            RtlCopyMemory(debugIdentifier, &codeView->identifier, 16);
+            *debugAge = codeView->age;
+            break;
+        }
+    }
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformRmGetOsVersion(
+    NvU32* majorVersion,
+    NvU32* minorVersion,
+    NvU32* buildNumber,
+    NvU32* productType)
+{
+    if (majorVersion == nullptr || minorVersion == nullptr ||
+        buildNumber == nullptr || productType == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    RTL_OSVERSIONINFOEXW version{};
+    version.dwOSVersionInfoSize = sizeof(version);
+    const NTSTATUS status = RtlGetVersion(
+        reinterpret_cast<PRTL_OSVERSIONINFOW>(&version));
+    if (!NT_SUCCESS(status))
+    {
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+
+    *majorVersion = version.dwMajorVersion;
+    *minorVersion = version.dwMinorVersion;
+    *buildNumber = version.dwBuildNumber;
+    *productType = version.wProductType;
+    return NV_OK;
 }
 
 extern "C" NV_STATUS NvPlatformRmSystemWorkInitialize(void)
