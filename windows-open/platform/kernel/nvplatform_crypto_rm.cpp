@@ -23,6 +23,13 @@ struct AesGcmContext
     BCRYPT_ALG_HANDLE algorithm;
 };
 
+struct EcContext
+{
+    ULONG coordinateLength;
+    ULONG privateBlobLength;
+    NvU8 privateBlob[sizeof(BCRYPT_ECCKEY_BLOB) + 3 * 48];
+};
+
 void DestroyHashContext(HashContext* context) noexcept
 {
     if (context == nullptr)
@@ -503,6 +510,108 @@ bool AesGcmCrypt(
     return true;
 }
 
+PCWSTR GetEcdhAlgorithm(const EcContext* context) noexcept
+{
+    return context->coordinateLength == 32
+        ? BCRYPT_ECDH_P256_ALGORITHM
+        : BCRYPT_ECDH_P384_ALGORITHM;
+}
+
+PCWSTR GetEcdsaAlgorithm(const EcContext* context) noexcept
+{
+    return context->coordinateLength == 32
+        ? BCRYPT_ECDSA_P256_ALGORITHM
+        : BCRYPT_ECDSA_P384_ALGORITHM;
+}
+
+ULONG GetEcdhPublicMagic(const EcContext* context) noexcept
+{
+    return context->coordinateLength == 32
+        ? BCRYPT_ECDH_PUBLIC_P256_MAGIC
+        : BCRYPT_ECDH_PUBLIC_P384_MAGIC;
+}
+
+ULONG GetEcdsaPrivateMagic(const EcContext* context) noexcept
+{
+    return context->coordinateLength == 32
+        ? BCRYPT_ECDSA_PRIVATE_P256_MAGIC
+        : BCRYPT_ECDSA_PRIVATE_P384_MAGIC;
+}
+
+ULONG GetEcdsaPublicMagic(const EcContext* context) noexcept
+{
+    return context->coordinateLength == 32
+        ? BCRYPT_ECDSA_PUBLIC_P256_MAGIC
+        : BCRYPT_ECDSA_PUBLIC_P384_MAGIC;
+}
+
+bool OpenAlgorithm(PCWSTR name, BCRYPT_ALG_HANDLE* algorithm) noexcept
+{
+    return KeGetCurrentIrql() == PASSIVE_LEVEL &&
+        NT_SUCCESS(BCryptOpenAlgorithmProvider(algorithm, name, nullptr, 0));
+}
+
+bool ImportEcKey(
+    const EcContext* context,
+    PCWSTR algorithmName,
+    ULONG magic,
+    const NvU8* keyData,
+    ULONG keyDataLength,
+    BCRYPT_ALG_HANDLE* algorithm,
+    BCRYPT_KEY_HANDLE* key) noexcept
+{
+    if (!OpenAlgorithm(algorithmName, algorithm))
+    {
+        return false;
+    }
+
+    NvU8 blob[sizeof(BCRYPT_ECCKEY_BLOB) + 3 * 48]{};
+    if (keyDataLength > sizeof(blob) - sizeof(BCRYPT_ECCKEY_BLOB))
+    {
+        BCryptCloseAlgorithmProvider(*algorithm, 0);
+        *algorithm = nullptr;
+        return false;
+    }
+
+    auto* header = reinterpret_cast<BCRYPT_ECCKEY_BLOB*>(blob);
+    header->dwMagic = magic;
+    header->cbKey = context->coordinateLength;
+    RtlCopyMemory(blob + sizeof(*header), keyData, keyDataLength);
+    LPCWSTR blobType = keyDataLength == 2 * context->coordinateLength
+        ? BCRYPT_ECCPUBLIC_BLOB
+        : BCRYPT_ECCPRIVATE_BLOB;
+    const NTSTATUS status = BCryptImportKeyPair(
+        *algorithm,
+        nullptr,
+        blobType,
+        key,
+        blob,
+        sizeof(*header) + keyDataLength,
+        0);
+    RtlSecureZeroMemory(blob, sizeof(blob));
+    if (!NT_SUCCESS(status))
+    {
+        BCryptCloseAlgorithmProvider(*algorithm, 0);
+        *algorithm = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void CloseEcKey(
+    BCRYPT_ALG_HANDLE algorithm,
+    BCRYPT_KEY_HANDLE key) noexcept
+{
+    if (key != nullptr)
+    {
+        BCryptDestroyKey(key);
+    }
+    if (algorithm != nullptr)
+    {
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+    }
+}
+
 } // namespace
 
 extern "C" NV_STATUS NvPlatformRmGetRandomBytes(
@@ -971,4 +1080,307 @@ extern "C" bool libspdm_aead_aes_gcm_decrypt(
         false);
     DestroyAesGcmContext(context);
     return result;
+}
+
+extern "C" void* libspdm_ec_new_by_nid(size_t nid)
+{
+    ULONG coordinateLength = 0;
+    if (nid == 0x0204)
+    {
+        coordinateLength = 32;
+    }
+    else if (nid == 0x0205)
+    {
+        coordinateLength = 48;
+    }
+    else
+    {
+        return nullptr;
+    }
+
+    auto* context = static_cast<EcContext*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(EcContext),
+        CryptoPoolTag));
+    if (context != nullptr)
+    {
+        RtlZeroMemory(context, sizeof(*context));
+        context->coordinateLength = coordinateLength;
+    }
+    return context;
+}
+
+extern "C" void libspdm_ec_free(void* ecContext)
+{
+    if (ecContext != nullptr)
+    {
+        RtlSecureZeroMemory(ecContext, sizeof(EcContext));
+        ExFreePoolWithTag(ecContext, CryptoPoolTag);
+    }
+}
+
+extern "C" bool libspdm_ec_generate_key(
+    void* ecContext,
+    NvU8* publicData,
+    size_t* publicLength)
+{
+    auto* context = static_cast<EcContext*>(ecContext);
+    if (context == nullptr || publicLength == nullptr ||
+        (publicData == nullptr && *publicLength != 0) ||
+        *publicLength < 2 * context->coordinateLength ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return false;
+    }
+
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_KEY_HANDLE key = nullptr;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &algorithm,
+        GetEcdhAlgorithm(context),
+        nullptr,
+        0);
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptGenerateKeyPair(
+            algorithm,
+            &key,
+            context->coordinateLength * 8,
+            0);
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptFinalizeKeyPair(key, 0);
+    }
+
+    ULONG blobLength = 0;
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptExportKey(
+            key,
+            nullptr,
+            BCRYPT_ECCPRIVATE_BLOB,
+            context->privateBlob,
+            sizeof(context->privateBlob),
+            &blobLength,
+            0);
+    }
+    if (NT_SUCCESS(status) &&
+        blobLength == sizeof(BCRYPT_ECCKEY_BLOB) +
+            3 * context->coordinateLength)
+    {
+        context->privateBlobLength = blobLength;
+        RtlCopyMemory(
+            publicData,
+            context->privateBlob + sizeof(BCRYPT_ECCKEY_BLOB),
+            2 * context->coordinateLength);
+        *publicLength = 2 * context->coordinateLength;
+    }
+    else
+    {
+        status = STATUS_INVALID_PARAMETER;
+    }
+
+    CloseEcKey(algorithm, key);
+    return NT_SUCCESS(status);
+}
+
+extern "C" bool libspdm_ec_compute_key(
+    void* ecContext,
+    const NvU8* peerPublic,
+    size_t peerPublicLength,
+    NvU8* secret,
+    size_t* secretLength)
+{
+    auto* context = static_cast<EcContext*>(ecContext);
+    if (context == nullptr || peerPublic == nullptr || secret == nullptr ||
+        secretLength == nullptr || context->privateBlobLength == 0 ||
+        peerPublicLength != 2 * context->coordinateLength ||
+        *secretLength < context->coordinateLength ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return false;
+    }
+
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_KEY_HANDLE privateKey = nullptr;
+    BCRYPT_KEY_HANDLE publicKey = nullptr;
+    BCRYPT_SECRET_HANDLE agreement = nullptr;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &algorithm,
+        GetEcdhAlgorithm(context),
+        nullptr,
+        0);
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptImportKeyPair(
+            algorithm,
+            nullptr,
+            BCRYPT_ECCPRIVATE_BLOB,
+            &privateKey,
+            context->privateBlob,
+            context->privateBlobLength,
+            0);
+    }
+
+    NvU8 peerBlob[sizeof(BCRYPT_ECCKEY_BLOB) + 2 * 48]{};
+    auto* peerHeader = reinterpret_cast<BCRYPT_ECCKEY_BLOB*>(peerBlob);
+    peerHeader->dwMagic = GetEcdhPublicMagic(context);
+    peerHeader->cbKey = context->coordinateLength;
+    RtlCopyMemory(peerBlob + sizeof(*peerHeader), peerPublic, peerPublicLength);
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptImportKeyPair(
+            algorithm,
+            nullptr,
+            BCRYPT_ECCPUBLIC_BLOB,
+            &publicKey,
+            peerBlob,
+            sizeof(*peerHeader) + static_cast<ULONG>(peerPublicLength),
+            0);
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptSecretAgreement(privateKey, publicKey, &agreement, 0);
+    }
+
+    ULONG produced = 0;
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptDeriveKey(
+            agreement,
+            BCRYPT_KDF_RAW_SECRET,
+            nullptr,
+            secret,
+            context->coordinateLength,
+            &produced,
+            0);
+    }
+    if (NT_SUCCESS(status) && produced == context->coordinateLength)
+    {
+        for (ULONG left = 0, right = produced - 1; left < right;
+             ++left, --right)
+        {
+            const NvU8 value = secret[left];
+            secret[left] = secret[right];
+            secret[right] = value;
+        }
+        *secretLength = produced;
+    }
+    else
+    {
+        status = STATUS_INVALID_PARAMETER;
+    }
+
+    if (agreement != nullptr)
+    {
+        BCryptDestroySecret(agreement);
+    }
+    CloseEcKey(nullptr, publicKey);
+    CloseEcKey(algorithm, privateKey);
+    return NT_SUCCESS(status);
+}
+
+extern "C" bool libspdm_ecdsa_sign(
+    void* ecContext,
+    size_t hashNid,
+    const NvU8* hash,
+    size_t hashLength,
+    NvU8* signature,
+    size_t* signatureLength)
+{
+    auto* context = static_cast<EcContext*>(ecContext);
+    if (context == nullptr || hash == nullptr || signature == nullptr ||
+        signatureLength == nullptr || context->privateBlobLength == 0 ||
+        ((hashNid == 0x0001 && hashLength != 32) ||
+         (hashNid == 0x0002 && hashLength != 48) ||
+         (hashNid != 0x0001 && hashNid != 0x0002)) ||
+        *signatureLength < 2 * context->coordinateLength ||
+        hashLength > MAXULONG)
+    {
+        return false;
+    }
+
+    const NvU8* keyData = context->privateBlob + sizeof(BCRYPT_ECCKEY_BLOB);
+    const ULONG keyDataLength = context->privateBlobLength -
+        sizeof(BCRYPT_ECCKEY_BLOB);
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_KEY_HANDLE key = nullptr;
+    if (!ImportEcKey(
+        context,
+        GetEcdsaAlgorithm(context),
+        GetEcdsaPrivateMagic(context),
+        keyData,
+        keyDataLength,
+        &algorithm,
+        &key))
+    {
+        return false;
+    }
+
+    ULONG produced = 0;
+    const NTSTATUS status = BCryptSignHash(
+        key,
+        nullptr,
+        const_cast<PUCHAR>(hash),
+        static_cast<ULONG>(hashLength),
+        signature,
+        static_cast<ULONG>(*signatureLength),
+        &produced,
+        0);
+    CloseEcKey(algorithm, key);
+    if (!NT_SUCCESS(status))
+    {
+        return false;
+    }
+
+    *signatureLength = produced;
+    return produced == 2 * context->coordinateLength;
+}
+
+extern "C" bool libspdm_ecdsa_verify(
+    void* ecContext,
+    size_t hashNid,
+    const NvU8* hash,
+    size_t hashLength,
+    const NvU8* signature,
+    size_t signatureLength)
+{
+    auto* context = static_cast<EcContext*>(ecContext);
+    if (context == nullptr || hash == nullptr || signature == nullptr ||
+        context->privateBlobLength == 0 ||
+        signatureLength != 2 * context->coordinateLength ||
+        ((hashNid == 0x0001 && hashLength != 32) ||
+         (hashNid == 0x0002 && hashLength != 48) ||
+         (hashNid != 0x0001 && hashNid != 0x0002)) ||
+        hashLength > MAXULONG)
+    {
+        return false;
+    }
+
+    const NvU8* publicData = context->privateBlob + sizeof(BCRYPT_ECCKEY_BLOB);
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_KEY_HANDLE key = nullptr;
+    if (!ImportEcKey(
+        context,
+        GetEcdsaAlgorithm(context),
+        GetEcdsaPublicMagic(context),
+        publicData,
+        2 * context->coordinateLength,
+        &algorithm,
+        &key))
+    {
+        return false;
+    }
+
+    const NTSTATUS status = BCryptVerifySignature(
+        key,
+        nullptr,
+        const_cast<PUCHAR>(hash),
+        static_cast<ULONG>(hashLength),
+        const_cast<PUCHAR>(signature),
+        static_cast<ULONG>(signatureLength),
+        0);
+    CloseEcKey(algorithm, key);
+    return NT_SUCCESS(status);
 }
