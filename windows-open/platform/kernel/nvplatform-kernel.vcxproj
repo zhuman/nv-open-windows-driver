@@ -43,6 +43,7 @@
     <ClCompile Include="nvplatform_system_rm.cpp" />
     <ClCompile Include="nvplatform_thread.cpp" />
     <ClCompile Include="nvplatform_time_rm.cpp" />
+    <ClCompile Include="nvplatform_wait_rm.cpp" />
     <ClInclude Include="nvplatform_common.h" />
     <ClInclude Include="nvplatform_cpu_rm.h" />
     <ClInclude Include="nvplatform_event.h" />
@@ -58,6 +59,7 @@
     <ClInclude Include="nvplatform_system_rm.h" />
     <ClInclude Include="nvplatform_thread.h" />
     <ClInclude Include="nvplatform_time_rm.h" />
+    <ClInclude Include="nvplatform_wait_rm.h" />
   </ItemGroup>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
     <ItemGroup>

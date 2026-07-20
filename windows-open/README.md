@@ -204,6 +204,10 @@ nonpaged `KAPC_STATE` for the synchronous attach, and releases both in reverse
 order after unmapping. Direct RM parameter buffers are classified with
 overflow-safe `MmSystemRangeStart` bounds rather than probing arbitrary kernel
 addresses or treating user pointers as trusted.
+RM wait queues use nonpaged Windows synchronization events. A wake remains
+pending until one waiter consumes it, DPC-level producers can signal safely,
+and RM's interruptible and uninterruptible waits map to alertable and
+nonalertable kernel waits at wait-safe IRQL.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor
