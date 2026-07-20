@@ -286,6 +286,22 @@ NvBool osGpuSupportsAts(OBJGPU* pGpu)
     return NV_FALSE;
 }
 
+NvU32 osGetDynamicPowerSupportMask(void)
+{
+    return 0;
+}
+
+NV_STATUS osRefGpuAccessNeeded(OS_GPU_INFO* osGpuInfo)
+{
+    (void)osGpuInfo;
+    return NV_OK;
+}
+
+void osUnrefGpuAccessNeeded(OS_GPU_INFO* osGpuInfo)
+{
+    (void)osGpuInfo;
+}
+
 NV_STATUS osSimEscapeWrite(
     OBJGPU* pGpu,
     const char* path,
