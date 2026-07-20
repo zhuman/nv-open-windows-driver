@@ -279,6 +279,62 @@ NvBool libspdm_asn1_get_tag(
     return NV_TRUE;
 }
 
+NvBool libspdm_x509_get_cert_from_cert_chain(
+    const NvU8* certificateChain,
+    size_t certificateChainLength,
+    NvS32 certificateIndex,
+    const NvU8** certificate,
+    size_t* certificateLength)
+{
+    if (certificateChain == NULL || certificateChainLength == 0 ||
+        certificateIndex < -1 || certificate == NULL ||
+        certificateLength == NULL)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* end = certificateChain + certificateChainLength;
+    const NvU8* current = certificateChain;
+    const NvU8* last = NULL;
+    size_t lastLength = 0;
+    NvS32 currentIndex = 0;
+
+    while (current < end)
+    {
+        NvU8* mutableCurrent = (NvU8*)current;
+        size_t currentLength = 0;
+        if (!libspdm_asn1_get_tag(
+            &mutableCurrent,
+            end,
+            &currentLength,
+            0x30) || currentLength == 0)
+        {
+            return NV_FALSE;
+        }
+
+        if (currentIndex == certificateIndex)
+        {
+            *certificate = current;
+            *certificateLength = currentLength;
+            return NV_TRUE;
+        }
+
+        last = current;
+        lastLength = currentLength;
+        current += currentLength;
+        ++currentIndex;
+    }
+
+    if (current != end || certificateIndex != -1 || last == NULL)
+    {
+        return NV_FALSE;
+    }
+
+    *certificate = last;
+    *certificateLength = lastLength;
+    return NV_TRUE;
+}
+
 static NvBool decodeBase64Character(
     NvU8 character,
     NvU8* value,
