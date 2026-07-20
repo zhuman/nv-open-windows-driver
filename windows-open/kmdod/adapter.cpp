@@ -196,6 +196,9 @@ NTSTATUS Adapter::Stop() noexcept
         return STATUS_SUCCESS;
     }
 
+    // StopDevice is terminal for this adapter context. Ordinary D-state
+    // transitions are reported through SetPowerState and do not set this bit.
+    NvPlatformRmGpuMarkShutdown(rmGpuContext_);
     ClearRuntimeState();
     return STATUS_SUCCESS;
 }

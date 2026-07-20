@@ -26,6 +26,7 @@ struct NV_PLATFORM_RM_GPU_CONTEXT
     void* rmGpu;
     volatile LONG state;
     volatile LONG lost;
+    volatile LONG shutdown;
 };
 
 extern "C" NV_STATUS NvPlatformRmGpuContextCreate(
@@ -57,6 +58,7 @@ extern "C" NV_STATUS NvPlatformRmGpuContextCreate(
     (*gpuContext)->rmGpu = nullptr;
     (*gpuContext)->state = static_cast<LONG>(GpuContextState::Available);
     (*gpuContext)->lost = FALSE;
+    (*gpuContext)->shutdown = FALSE;
     return NV_OK;
 }
 
@@ -177,6 +179,27 @@ extern "C" NvBool NvPlatformRmGpuIsLost(
     return gpuContext != nullptr &&
         InterlockedCompareExchange(
             const_cast<volatile LONG*>(&gpuContext->lost),
+            TRUE,
+            TRUE) != FALSE
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
+extern "C" void NvPlatformRmGpuMarkShutdown(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    if (gpuContext != nullptr)
+    {
+        InterlockedExchange(&gpuContext->shutdown, TRUE);
+    }
+}
+
+extern "C" NvBool NvPlatformRmGpuIsShutdown(
+    const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    return gpuContext != nullptr &&
+        InterlockedCompareExchange(
+            const_cast<volatile LONG*>(&gpuContext->shutdown),
             TRUE,
             TRUE) != FALSE
         ? NV_TRUE

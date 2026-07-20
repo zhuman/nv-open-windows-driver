@@ -62,6 +62,15 @@ NvBool osIsGpuAccessible(OBJGPU* pGpu)
         : NV_FALSE;
 }
 
+NvBool osIsGpuShutdown(OBJGPU* pGpu)
+{
+    return pGpu == NULL || pGpu->pOsGpuInfo == NULL ||
+        NvPlatformRmGpuIsShutdown(
+            (NV_PLATFORM_RM_GPU_CONTEXT*)pGpu->pOsGpuInfo)
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
 NV_STATUS osHandleGpuLost(OBJGPU* pGpu, NvBool bEmitXid)
 {
     if (pGpu == NULL)
