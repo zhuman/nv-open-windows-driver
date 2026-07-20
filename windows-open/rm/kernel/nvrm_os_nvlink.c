@@ -1,6 +1,8 @@
 #include "nvlink_os.h"
 #include "nvport/nvport.h"
 
+typedef struct OBJGPU OBJGPU;
+
 NV_STATUS osDelay(NvU32 milliseconds);
 void osAssertFailed(void);
 
@@ -43,4 +45,24 @@ void nvlink_assert(int expression)
 void nvlink_sleep(unsigned int milliseconds)
 {
     (void)osDelay(milliseconds);
+}
+
+NV_STATUS osGetForcedNVLinkConnection(
+    OBJGPU* pGpu,
+    NvU32 maxLinks,
+    NvU32* linkConnection)
+{
+    (void)pGpu;
+    (void)maxLinks;
+    (void)linkConnection;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osGetPlatformNvlinkLinerate(
+    OBJGPU* pGpu,
+    NvU32* lineRate)
+{
+    (void)pGpu;
+    (void)lineRate;
+    return NV_ERR_NOT_SUPPORTED;
 }
