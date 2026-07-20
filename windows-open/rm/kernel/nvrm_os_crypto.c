@@ -1749,6 +1749,269 @@ NvBool libspdm_x509_get_key_usage(
     return NV_TRUE;
 }
 
+static NvBool getRsaPublicKeyFromCertificate(
+    const NvU8* certificate,
+    size_t certificateLength,
+    const NvU8** modulus,
+    size_t* modulusLength,
+    const NvU8** exponent,
+    size_t* exponentLength)
+{
+    static const NvU8 rsaEncryptionOid[] = {
+        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01
+    };
+    const NvU8* field;
+    const NvU8* fieldsEnd;
+    size_t version;
+    if (modulus == NULL || modulusLength == NULL || exponent == NULL ||
+        exponentLength == NULL ||
+        !getCertificateTbsFields(
+            certificate,
+            certificateLength,
+            &field,
+            &fieldsEnd) ||
+        !libspdm_x509_get_version(
+            certificate,
+            certificateLength,
+            &version))
+    {
+        return NV_FALSE;
+    }
+
+    if (*field == 0xa0 && !skipTbsField(&field, fieldsEnd, 0xa0))
+    {
+        return NV_FALSE;
+    }
+    if (!skipTbsField(&field, fieldsEnd, 0x02) ||
+        !skipTbsField(&field, fieldsEnd, 0x30) ||
+        !skipTbsField(&field, fieldsEnd, 0x30) ||
+        !skipTbsField(&field, fieldsEnd, 0x30) ||
+        !skipTbsField(&field, fieldsEnd, 0x30))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* subjectPublicKeyInfo;
+    size_t subjectPublicKeyInfoLength;
+    size_t subjectPublicKeyInfoElementLength;
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x30,
+        &subjectPublicKeyInfo,
+        &subjectPublicKeyInfoLength,
+        &subjectPublicKeyInfoElementLength))
+    {
+        return NV_FALSE;
+    }
+    const NvU8* subjectPublicKeyInfoEnd =
+        subjectPublicKeyInfo + subjectPublicKeyInfoLength;
+
+    const NvU8* algorithmOid;
+    size_t algorithmOidLength;
+    size_t algorithmLength;
+    if (!getAlgorithmIdentifierOid(
+            subjectPublicKeyInfo,
+            subjectPublicKeyInfoEnd,
+            &algorithmOid,
+            &algorithmOidLength,
+            &algorithmLength) ||
+        !oidEquals(
+            algorithmOid,
+            algorithmOidLength,
+            rsaEncryptionOid,
+            sizeof(rsaEncryptionOid)))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* algorithmContent;
+    size_t algorithmContentLength;
+    size_t ignoredLength;
+    const NvU8* ignoredOid;
+    size_t ignoredOidLength;
+    size_t oidElementLength;
+    if (!getDerElement(
+            subjectPublicKeyInfo,
+            subjectPublicKeyInfoEnd,
+            0x30,
+            &algorithmContent,
+            &algorithmContentLength,
+            &ignoredLength) ||
+        !getDerElement(
+            algorithmContent,
+            algorithmContent + algorithmContentLength,
+            0x06,
+            &ignoredOid,
+            &ignoredOidLength,
+            &oidElementLength) ||
+        algorithmContentLength != oidElementLength + 2 ||
+        algorithmContent[oidElementLength] != 0x05 ||
+        algorithmContent[oidElementLength + 1] != 0)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* publicKeyBits;
+    size_t publicKeyBitsLength;
+    size_t publicKeyElementLength;
+    const NvU8* publicKey = subjectPublicKeyInfo + algorithmLength;
+    if (!getDerElement(
+            publicKey,
+            subjectPublicKeyInfoEnd,
+            0x03,
+            &publicKeyBits,
+            &publicKeyBitsLength,
+            &publicKeyElementLength) ||
+        publicKey + publicKeyElementLength != subjectPublicKeyInfoEnd ||
+        publicKeyBitsLength < 2 || publicKeyBits[0] != 0)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* rsaPublicKey;
+    size_t rsaPublicKeyLength;
+    size_t rsaPublicKeyElementLength;
+    if (!getDerElement(
+            publicKeyBits + 1,
+            publicKeyBits + publicKeyBitsLength,
+            0x30,
+            &rsaPublicKey,
+            &rsaPublicKeyLength,
+            &rsaPublicKeyElementLength) ||
+        rsaPublicKeyElementLength != publicKeyBitsLength - 1)
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* integer;
+    size_t integerLength;
+    size_t integerElementLength;
+    const NvU8* rsaPublicKeyEnd = rsaPublicKey + rsaPublicKeyLength;
+    if (!getDerElement(
+            rsaPublicKey,
+            rsaPublicKeyEnd,
+            0x02,
+            &integer,
+            &integerLength,
+            &integerElementLength) ||
+        integerLength == 0 || (integer[0] & 0x80) != 0)
+    {
+        return NV_FALSE;
+    }
+    if (integerLength > 1 && integer[0] == 0)
+    {
+        if ((integer[1] & 0x80) == 0)
+        {
+            return NV_FALSE;
+        }
+        ++integer;
+        --integerLength;
+    }
+    if ((integerLength != 256 && integerLength != 384 &&
+         integerLength != 512) ||
+        (integer[0] & 0x80) == 0)
+    {
+        return NV_FALSE;
+    }
+    *modulus = integer;
+    *modulusLength = integerLength;
+
+    const NvU8* exponentInteger = rsaPublicKey + integerElementLength;
+    if (!getDerElement(
+            exponentInteger,
+            rsaPublicKeyEnd,
+            0x02,
+            &integer,
+            &integerLength,
+            &integerElementLength) ||
+        exponentInteger + integerElementLength != rsaPublicKeyEnd ||
+        integerLength == 0 || (integer[0] & 0x80) != 0)
+    {
+        return NV_FALSE;
+    }
+    if (integerLength > 1 && integer[0] == 0)
+    {
+        if ((integer[1] & 0x80) == 0)
+        {
+            return NV_FALSE;
+        }
+        ++integer;
+        --integerLength;
+    }
+    if (integerLength == 0 || integerLength > sizeof(NvU64) ||
+        (integer[integerLength - 1] & 1) == 0 ||
+        (integerLength == 1 && integer[0] < 3))
+    {
+        return NV_FALSE;
+    }
+    *exponent = integer;
+    *exponentLength = integerLength;
+    return NV_TRUE;
+}
+
+NvBool libspdm_rsa_get_public_key_from_x509(
+    const NvU8* certificate,
+    size_t certificateLength,
+    void** rsaContext)
+{
+    if (rsaContext == NULL)
+    {
+        return NV_FALSE;
+    }
+    *rsaContext = NULL;
+
+    const NvU8* modulus;
+    size_t modulusLength;
+    const NvU8* exponent;
+    size_t exponentLength;
+    if (!getRsaPublicKeyFromCertificate(
+            certificate,
+            certificateLength,
+            &modulus,
+            &modulusLength,
+            &exponent,
+            &exponentLength) ||
+        modulusLength > NV_U32_MAX || exponentLength > NV_U32_MAX)
+    {
+        return NV_FALSE;
+    }
+
+    *rsaContext = NvPlatformRmCreateRsaPublicKey(
+        modulus,
+        (NvU32)modulusLength,
+        exponent,
+        (NvU32)exponentLength);
+    return *rsaContext != NULL;
+}
+
+void libspdm_rsa_free(void* rsaContext)
+{
+    NvPlatformRmDestroyRsaKey(rsaContext);
+}
+
+NvBool libspdm_rsa_pss_verify(
+    void* rsaContext,
+    size_t hashNid,
+    const NvU8* hash,
+    size_t hashLength,
+    const NvU8* signature,
+    size_t signatureLength)
+{
+    if (hashNid > NV_U32_MAX || hashLength > NV_U32_MAX ||
+        signatureLength > NV_U32_MAX)
+    {
+        return NV_FALSE;
+    }
+    return NvPlatformRmVerifyRsaPss(
+        rsaContext,
+        (NvU32)hashNid,
+        hash,
+        (NvU32)hashLength,
+        signature,
+        (NvU32)signatureLength);
+}
+
 NvBool libspdm_x509_get_extended_key_usage(
     const NvU8* certificate,
     size_t certificateLength,

@@ -30,6 +30,13 @@ struct EcContext
     NvU8 privateBlob[sizeof(BCRYPT_ECCKEY_BLOB) + 3 * 48];
 };
 
+struct RsaContext
+{
+    BCRYPT_ALG_HANDLE algorithm;
+    BCRYPT_KEY_HANDLE key;
+    ULONG modulusLength;
+};
+
 void DestroyHashContext(HashContext* context) noexcept
 {
     if (context == nullptr)
@@ -636,6 +643,156 @@ extern "C" NV_STATUS NvPlatformRmGetRandomBytes(
         BCRYPT_USE_SYSTEM_PREFERRED_RNG))
         ? NV_OK
         : NV_ERR_OPERATING_SYSTEM;
+}
+
+extern "C" void* NvPlatformRmCreateRsaPublicKey(
+    const NvU8* modulus,
+    NvU32 modulusLength,
+    const NvU8* exponent,
+    NvU32 exponentLength)
+{
+    if (modulus == nullptr || exponent == nullptr ||
+        (modulusLength != 256 && modulusLength != 384 &&
+         modulusLength != 512) ||
+        exponentLength == 0 || exponentLength > sizeof(ULONGLONG) ||
+        exponentLength > MAXULONG - sizeof(BCRYPT_RSAKEY_BLOB) -
+            modulusLength ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return nullptr;
+    }
+
+    auto* context = static_cast<RsaContext*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(RsaContext),
+        CryptoPoolTag));
+    if (context == nullptr)
+    {
+        return nullptr;
+    }
+    RtlZeroMemory(context, sizeof(*context));
+    context->modulusLength = modulusLength;
+
+    const ULONG blobLength = sizeof(BCRYPT_RSAKEY_BLOB) +
+        exponentLength + modulusLength;
+    auto* blob = static_cast<PUCHAR>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        blobLength,
+        CryptoPoolTag));
+    if (blob == nullptr)
+    {
+        ExFreePoolWithTag(context, CryptoPoolTag);
+        return nullptr;
+    }
+
+    auto* header = reinterpret_cast<BCRYPT_RSAKEY_BLOB*>(blob);
+    RtlZeroMemory(header, sizeof(*header));
+    header->Magic = BCRYPT_RSAPUBLIC_MAGIC;
+    header->BitLength = modulusLength * 8;
+    header->cbPublicExp = exponentLength;
+    header->cbModulus = modulusLength;
+    RtlCopyMemory(blob + sizeof(*header), exponent, exponentLength);
+    RtlCopyMemory(
+        blob + sizeof(*header) + exponentLength,
+        modulus,
+        modulusLength);
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &context->algorithm,
+        BCRYPT_RSA_ALGORITHM,
+        nullptr,
+        0);
+    if (NT_SUCCESS(status))
+    {
+        status = BCryptImportKeyPair(
+            context->algorithm,
+            nullptr,
+            BCRYPT_RSAPUBLIC_BLOB,
+            &context->key,
+            blob,
+            blobLength,
+            0);
+    }
+    RtlSecureZeroMemory(blob, blobLength);
+    ExFreePoolWithTag(blob, CryptoPoolTag);
+
+    if (!NT_SUCCESS(status))
+    {
+        NvPlatformRmDestroyRsaKey(context);
+        return nullptr;
+    }
+    return context;
+}
+
+extern "C" void NvPlatformRmDestroyRsaKey(void* rsaContext)
+{
+    auto* context = static_cast<RsaContext*>(rsaContext);
+    if (context == nullptr)
+    {
+        return;
+    }
+    if (context->key != nullptr)
+    {
+        BCryptDestroyKey(context->key);
+    }
+    if (context->algorithm != nullptr)
+    {
+        BCryptCloseAlgorithmProvider(context->algorithm, 0);
+    }
+    RtlSecureZeroMemory(context, sizeof(*context));
+    ExFreePoolWithTag(context, CryptoPoolTag);
+}
+
+extern "C" NvBool NvPlatformRmVerifyRsaPss(
+    void* rsaContext,
+    NvU32 hashNid,
+    const NvU8* hash,
+    NvU32 hashLength,
+    const NvU8* signature,
+    NvU32 signatureLength)
+{
+    auto* context = static_cast<RsaContext*>(rsaContext);
+    PCWSTR algorithmName;
+    NvU32 requiredHashLength;
+    switch (hashNid)
+    {
+        case 0x0001:
+            algorithmName = BCRYPT_SHA256_ALGORITHM;
+            requiredHashLength = 32;
+            break;
+        case 0x0002:
+            algorithmName = BCRYPT_SHA384_ALGORITHM;
+            requiredHashLength = 48;
+            break;
+        case 0x0003:
+            algorithmName = BCRYPT_SHA512_ALGORITHM;
+            requiredHashLength = 64;
+            break;
+        default:
+            return NV_FALSE;
+    }
+
+    if (context == nullptr || hash == nullptr || signature == nullptr ||
+        hashLength != requiredHashLength ||
+        signatureLength != context->modulusLength ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return NV_FALSE;
+    }
+
+    BCRYPT_PSS_PADDING_INFO paddingInfo{};
+    paddingInfo.pszAlgId = algorithmName;
+    paddingInfo.cbSalt = requiredHashLength;
+    return NT_SUCCESS(BCryptVerifySignature(
+        context->key,
+        &paddingInfo,
+        const_cast<PUCHAR>(hash),
+        hashLength,
+        const_cast<PUCHAR>(signature),
+        signatureLength,
+        BCRYPT_PAD_PSS))
+        ? NV_TRUE
+        : NV_FALSE;
 }
 
 extern "C" void* libspdm_sha256_new(void)
