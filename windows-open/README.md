@@ -170,6 +170,10 @@ RM's allocation-free system semaphore ABI now uses a driver-global Windows
 kernel semaphore initialized with the platform-system lifetime. Blocking
 acquisition is limited to wait-safe IRQL, conditional acquisition is
 nonblocking, and teardown remains ordered after RM has released its locks.
+The complete upstream `Intr` owner and vector container now provide RM's
+interrupt state and mask bookkeeping. Windows lock hooks preserve the upstream
+PCI-GPU behavior by disabling and restoring hardware interrupts through the
+`Intr` HAL; unsupported Tegra SoC display IRQ control is asserted explicitly.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor

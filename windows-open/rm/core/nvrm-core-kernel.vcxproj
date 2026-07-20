@@ -130,6 +130,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_intr_service_nvoc.c">
       <Link>generated\g_intr_service_nvoc.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_intr_nvoc.c">
+      <Link>generated\g_intr_nvoc.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_mem_mgr_nvoc.c">
       <Link>generated\g_mem_mgr_nvoc.c</Link>
     </ClCompile>
@@ -189,6 +192,9 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\multimap.c">
       <Link>upstream\containers\multimap.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\containers\vector.c">
+      <Link>upstream\containers\vector.c</Link>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\lib\base_utils.c">
       <Link>upstream\base_utils.c</Link>
@@ -373,6 +379,11 @@
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\intr\intr_service.c">
       <Link>upstream\gpu\intr_service.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\intr\intr.c">
+      <Link>upstream\gpu\intr.c</Link>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/clang:-Wno-sign-compare %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\timer\timer.c">
       <Link>upstream\gpu\timer.c</Link>
