@@ -152,6 +152,12 @@ Generated RM configuration predicates and the shared `OBJENGSTATE` and
 `IntrService` NVOC ancestors now compile unchanged. A direct `coreInitializeRm`
 link probe resolves those families and is being used to drive the remaining
 resource-catalog and GPU HAL closure without weakening the production path.
+The Windows RM core now compiles NVIDIA's complete generated NVOC and protobuf
+catalog unchanged. Existing per-file metadata remains authoritative, while the
+remaining generated units share their upstream control, GSP metadata, CrashCat,
+and NVLink declaration headers. This makes every registered class contract
+visible to the standalone probe so missing implementation owners cannot remain
+hidden behind absent class definitions.
 The generated `GpuManagementApi` and complete `GSyncApi` resource layers now
 close their catalog entries. GSync notification traversal intentionally leaves
 Windows event delivery as an explicit OS-service boundary rather than using a
