@@ -27,6 +27,7 @@ public:
     NTSTATUS Read32(_In_ SIZE_T offset, _Out_ ULONG* value) const noexcept;
 
     [[nodiscard]] bool IsMapped() const noexcept;
+    [[nodiscard]] volatile void* Address() const noexcept;
     [[nodiscard]] SIZE_T Length() const noexcept;
     [[nodiscard]] const BootIdentity* Identity() const noexcept;
 

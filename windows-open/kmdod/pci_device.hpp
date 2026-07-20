@@ -20,6 +20,8 @@ struct PciIdentity final
 class PciDevice final
 {
 public:
+    static constexpr ULONG MaximumGpuMemoryBarCount = 3;
+
     PciDevice() noexcept;
 
     NTSTATUS Initialize(
@@ -42,11 +44,15 @@ public:
     [[nodiscard]] bool IsPresent() const noexcept;
     [[nodiscard]] const PciIdentity* Identity() const noexcept;
     [[nodiscard]] const NV_PLATFORM_PCI_LOCATION* Location() const noexcept;
+    [[nodiscard]] ULONG MemoryBarCount() const noexcept;
+    [[nodiscard]] PHYSICAL_ADDRESS MemoryBarAddress(_In_ ULONG index) const noexcept;
     [[nodiscard]] PHYSICAL_ADDRESS RegisterBarAddress() const noexcept;
 
 private:
     PciIdentity identity_;
     NV_PLATFORM_PCI_LOCATION location_;
+    PHYSICAL_ADDRESS memoryBarAddresses_[MaximumGpuMemoryBarCount];
+    ULONG memoryBarCount_;
     PHYSICAL_ADDRESS registerBarAddress_;
     NV_PLATFORM_PCI_CONFIG_ACCESS configAccess_;
     void* configRegistration_;

@@ -9,10 +9,33 @@ extern "C" {
 
 typedef struct NV_PLATFORM_RM_GPU_CONTEXT NV_PLATFORM_RM_GPU_CONTEXT;
 
+typedef struct NV_PLATFORM_RM_GPU_APERTURE
+{
+    NvU64 physicalAddress;
+    volatile void* kernelAddress;
+    NvU64 length;
+} NV_PLATFORM_RM_GPU_APERTURE;
+
+typedef struct NV_PLATFORM_RM_GPU_ATTACH_INFO
+{
+    NvU32 domain;
+    NvU8 bus;
+    NvU8 device;
+    NvU8 function;
+    NvU8 apertureCount;
+    NV_PLATFORM_RM_GPU_APERTURE apertures[3];
+    NvU32 interruptLine;
+    NvU32 interruptCount;
+} NV_PLATFORM_RM_GPU_ATTACH_INFO;
+
 NV_STATUS NvPlatformRmGpuContextCreate(
     void* adapterContext,
+    const NV_PLATFORM_RM_GPU_ATTACH_INFO* attachInfo,
     NV_PLATFORM_RM_GPU_CONTEXT** gpuContext);
 void NvPlatformRmGpuContextDestroy(NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
+NV_STATUS NvPlatformRmGpuGetAttachInfo(
+    const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    NV_PLATFORM_RM_GPU_ATTACH_INFO* attachInfo);
 NV_STATUS NvPlatformRmGpuReserve(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     void* rmGpu);

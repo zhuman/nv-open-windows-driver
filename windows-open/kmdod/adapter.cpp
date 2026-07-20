@@ -124,7 +124,55 @@ NTSTATUS Adapter::Start(
         return status;
     }
 
-    const NV_STATUS rmStatus = NvPlatformRmGpuContextCreate(this, &rmGpuContext_);
+    NV_PLATFORM_RM_GPU_ATTACH_INFO attachInfo = {};
+    const NV_PLATFORM_PCI_LOCATION* location = pciDevice_.Location();
+    if (location == nullptr)
+    {
+        ClearRuntimeState();
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    attachInfo.domain = location->domain;
+    attachInfo.bus = location->bus;
+    attachInfo.device = location->device;
+    attachInfo.function = location->function;
+    attachInfo.apertureCount = static_cast<NvU8>(pciDevice_.MemoryBarCount());
+    for (ULONG barIndex = 0; barIndex < pciDevice_.MemoryBarCount(); ++barIndex)
+    {
+        const PHYSICAL_ADDRESS barAddress = pciDevice_.MemoryBarAddress(barIndex);
+        const MemoryRange* barRange = nullptr;
+        for (ULONG rangeIndex = 0; rangeIndex < hardwareResources_.MemoryRangeCount(); ++rangeIndex)
+        {
+            const MemoryRange* candidate = hardwareResources_.MemoryRangeAt(rangeIndex);
+            if (candidate != nullptr &&
+                candidate->physicalAddress.QuadPart == barAddress.QuadPart)
+            {
+                barRange = candidate;
+                break;
+            }
+        }
+
+        if (barRange == nullptr)
+        {
+            ClearRuntimeState();
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+
+        attachInfo.apertures[barIndex].physicalAddress =
+            static_cast<NvU64>(barRange->physicalAddress.QuadPart);
+        attachInfo.apertures[barIndex].length = static_cast<NvU64>(barRange->length);
+    }
+    attachInfo.apertures[0].kernelAddress = registerAperture_.Address();
+    attachInfo.interruptCount = hardwareResources_.InterruptCount();
+    if (const InterruptResource* interrupt = hardwareResources_.InterruptAt(0))
+    {
+        attachInfo.interruptLine = interrupt->vector;
+    }
+
+    const NV_STATUS rmStatus = NvPlatformRmGpuContextCreate(
+        this,
+        &attachInfo,
+        &rmGpuContext_);
     if (rmStatus != NV_OK)
     {
         ClearRuntimeState();

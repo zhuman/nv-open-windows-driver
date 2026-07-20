@@ -31,6 +31,12 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="nvrm_gpu_attach.c">
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)rm\include;$(RepoRoot)src\common\inc\swref;$(RepoRoot)src\common\inc\swref\published;$(RepoRoot)src\common\nvlink\inband\interface;$(RepoRoot)src\common\shared\inc;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc;$(RepoRoot)src\nvidia\inc;$(RepoRoot)src\nvidia\inc\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\generated;$(RepoRoot)src\nvidia\interface;$(RepoRoot)src\nvidia\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <PreprocessorDefinitions>__NO_CTYPE;LOCK_VAL_ENABLED=0;PORT_ATOMIC_64_BIT_SUPPORTED=1;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=1;PORT_MODULE_core=1;PORT_MODULE_cpu=1;PORT_MODULE_crypto=1;PORT_MODULE_debug=1;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=1;PORT_MODULE_string=1;PORT_MODULE_sync=1;PORT_MODULE_thread=1;PORT_MODULE_time=1;PORT_MODULE_util=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/clang:-Wno-gnu-folding-constant /clang:-Wno-missing-field-initializers /clang:-Wno-unused-parameter %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="nvrm_os_cpu.c" />
     <ClCompile Include="nvrm_os_execution.c" />
     <ClCompile Include="nvrm_os_event.c">

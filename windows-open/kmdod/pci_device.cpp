@@ -45,6 +45,8 @@ namespace nv::kmdod {
 PciDevice::PciDevice() noexcept
     : identity_{},
             location_{},
+            memoryBarAddresses_{},
+            memoryBarCount_(0),
     registerBarAddress_{},
     configAccess_{},
             configRegistration_(nullptr),
@@ -97,20 +99,36 @@ NTSTATUS PciDevice::Initialize(
         return STATUS_NOT_SUPPORTED;
     }
 
-    const ULONG registerBarLow = configuration.u.type0.BaseAddresses[0];
-    if ((registerBarLow & PCI_ADDRESS_IO_SPACE) != 0)
+    PHYSICAL_ADDRESS memoryBarAddresses[MaximumGpuMemoryBarCount] = {};
+    ULONG memoryBarCount = 0;
+    for (ULONG barIndex = 0;
+         barIndex < PCI_TYPE0_ADDRESSES && memoryBarCount < MaximumGpuMemoryBarCount;
+         ++barIndex)
     {
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
+        const ULONG barLow = configuration.u.type0.BaseAddresses[barIndex];
+        if (barLow == 0 || (barLow & PCI_ADDRESS_IO_SPACE) != 0)
+        {
+            continue;
+        }
+
+        ULONGLONG barAddress = barLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK;
+        if ((barLow & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT)
+        {
+            if (++barIndex == PCI_TYPE0_ADDRESSES)
+            {
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            }
+            barAddress |=
+                static_cast<ULONGLONG>(configuration.u.type0.BaseAddresses[barIndex]) << 32;
+        }
+
+        if (barAddress != 0)
+        {
+            memoryBarAddresses[memoryBarCount++].QuadPart = barAddress;
+        }
     }
 
-    ULONGLONG registerBarAddress = registerBarLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK;
-    if ((registerBarLow & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT)
-    {
-        registerBarAddress |=
-            static_cast<ULONGLONG>(configuration.u.type0.BaseAddresses[1]) << 32;
-    }
-
-    if (registerBarAddress == 0)
+    if (memoryBarCount == 0)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
@@ -173,7 +191,12 @@ NTSTATUS PciDevice::Initialize(
     identity_.subclass = configuration.SubClass;
     identity_.baseClass = configuration.BaseClass;
     location_ = location;
-    registerBarAddress_.QuadPart = registerBarAddress;
+    RtlCopyMemory(
+        memoryBarAddresses_,
+        memoryBarAddresses,
+        memoryBarCount * sizeof(memoryBarAddresses_[0]));
+    memoryBarCount_ = memoryBarCount;
+    registerBarAddress_ = memoryBarAddresses_[0];
     configAccess_ = configAccess;
     configRegistration_ = configRegistration;
     present_ = true;
@@ -185,6 +208,8 @@ void PciDevice::Reset() noexcept
     NvPlatformUnregisterPciConfig(configRegistration_);
     RtlZeroMemory(&identity_, sizeof(identity_));
     RtlZeroMemory(&location_, sizeof(location_));
+    RtlZeroMemory(memoryBarAddresses_, sizeof(memoryBarAddresses_));
+    memoryBarCount_ = 0;
     registerBarAddress_.QuadPart = 0;
     RtlZeroMemory(&configAccess_, sizeof(configAccess_));
     configRegistration_ = nullptr;
@@ -224,6 +249,17 @@ const PciIdentity* PciDevice::Identity() const noexcept
 const NV_PLATFORM_PCI_LOCATION* PciDevice::Location() const noexcept
 {
     return present_ ? &location_ : nullptr;
+}
+
+ULONG PciDevice::MemoryBarCount() const noexcept
+{
+    return present_ ? memoryBarCount_ : 0;
+}
+
+PHYSICAL_ADDRESS PciDevice::MemoryBarAddress(_In_ ULONG index) const noexcept
+{
+    PHYSICAL_ADDRESS address = {};
+    return present_ && index < memoryBarCount_ ? memoryBarAddresses_[index] : address;
 }
 
 PHYSICAL_ADDRESS PciDevice::RegisterBarAddress() const noexcept

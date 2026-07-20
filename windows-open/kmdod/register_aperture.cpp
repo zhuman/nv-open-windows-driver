@@ -93,6 +93,11 @@ bool RegisterAperture::IsMapped() const noexcept
     return mapping_.address != nullptr;
 }
 
+volatile void* RegisterAperture::Address() const noexcept
+{
+    return mapping_.address;
+}
+
 SIZE_T RegisterAperture::Length() const noexcept
 {
     return mapping_.length;

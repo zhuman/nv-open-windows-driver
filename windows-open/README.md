@@ -199,6 +199,13 @@ until adapter stop. RM's DPC attach reserves the context, normal attach publishe
 the `OBJGPU`, and detach withdraws it before GPU destruction; failed publication
 can roll back the reservation. Creating this context does not invoke RM or wire
 interrupt dispatch into KMDOD.
+That context now retains full BDF identity, the first three valid PCI memory
+BARs in upstream register/framebuffer/instance order, translated aperture
+lengths, BAR0's volatile kernel mapping, and interrupt-vector metadata. A
+WDK-free RM wrapper converts it to `GPUATTACHARG` and transactionally performs
+GPU-ID registration, instance allocation, attach, and failure unwind under the
+RMAPI lock. The wrapper is probe-link complete but remains disconnected from
+KMDOD while the wider RM probe is unresolved.
 RM execution-context queries now distinguish wait-safe, DPC, and interrupt
 IRQLs through the Windows kernel. Spin polling uses the architecture's processor
 pause primitive, write-combined register ordering uses `KeFlushWriteBuffer`,

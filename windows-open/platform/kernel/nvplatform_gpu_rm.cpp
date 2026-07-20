@@ -22,15 +22,22 @@ enum class GpuContextState : LONG
 struct NV_PLATFORM_RM_GPU_CONTEXT
 {
     void* adapterContext;
+    NV_PLATFORM_RM_GPU_ATTACH_INFO attachInfo;
     void* rmGpu;
     volatile LONG state;
 };
 
 extern "C" NV_STATUS NvPlatformRmGpuContextCreate(
     void* adapterContext,
+    const NV_PLATFORM_RM_GPU_ATTACH_INFO* attachInfo,
     NV_PLATFORM_RM_GPU_CONTEXT** gpuContext)
 {
-    if (adapterContext == nullptr || gpuContext == nullptr)
+    if (adapterContext == nullptr || attachInfo == nullptr || gpuContext == nullptr ||
+        attachInfo->apertureCount == 0 ||
+        attachInfo->apertureCount > RTL_NUMBER_OF(attachInfo->apertures) ||
+        attachInfo->apertures[0].physicalAddress == 0 ||
+        attachInfo->apertures[0].kernelAddress == nullptr ||
+        attachInfo->apertures[0].length == 0)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
@@ -45,6 +52,7 @@ extern "C" NV_STATUS NvPlatformRmGpuContextCreate(
     }
 
     (*gpuContext)->adapterContext = adapterContext;
+    (*gpuContext)->attachInfo = *attachInfo;
     (*gpuContext)->rmGpu = nullptr;
     (*gpuContext)->state = static_cast<LONG>(GpuContextState::Available);
     return NV_OK;
@@ -115,4 +123,17 @@ extern "C" void NvPlatformRmGpuWithdraw(
     InterlockedExchange(
         &gpuContext->state,
         static_cast<LONG>(GpuContextState::Available));
+}
+
+extern "C" NV_STATUS NvPlatformRmGpuGetAttachInfo(
+    const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    NV_PLATFORM_RM_GPU_ATTACH_INFO* attachInfo)
+{
+    if (gpuContext == nullptr || attachInfo == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    *attachInfo = gpuContext->attachInfo;
+    return NV_OK;
 }
