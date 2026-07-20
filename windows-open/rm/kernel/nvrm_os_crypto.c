@@ -1021,6 +1021,210 @@ NvBool libspdm_x509_get_validity(
     return NV_TRUE;
 }
 
+static NvBool getAlgorithmIdentifierOid(
+    const NvU8* algorithm,
+    const NvU8* end,
+    const NvU8** oid,
+    size_t* oidLength,
+    size_t* algorithmLength)
+{
+    const NvU8* algorithmContent;
+    size_t algorithmContentLength;
+    if (oid == NULL || oidLength == NULL || algorithmLength == NULL ||
+        !getDerElement(
+            algorithm,
+            end,
+            0x30,
+            &algorithmContent,
+            &algorithmContentLength,
+            algorithmLength))
+    {
+        return NV_FALSE;
+    }
+
+    size_t oidElementLength;
+    if (!getDerElement(
+        algorithmContent,
+        algorithmContent + algorithmContentLength,
+        0x06,
+        oid,
+        oidLength,
+        &oidElementLength) || *oidLength == 0)
+    {
+        return NV_FALSE;
+    }
+
+    for (size_t index = 0; index < *oidLength;)
+    {
+        if ((*oid)[index] == 0x80)
+        {
+            return NV_FALSE;
+        }
+        do
+        {
+            if (index >= *oidLength)
+            {
+                return NV_FALSE;
+            }
+        } while (((*oid)[index++] & 0x80) != 0);
+    }
+
+    const NvU8* parameters = algorithmContent + oidElementLength;
+    const NvU8* algorithmEnd = algorithmContent + algorithmContentLength;
+    if (parameters != algorithmEnd)
+    {
+        const NvU8* ignoredContent;
+        size_t ignoredContentLength;
+        size_t parametersLength;
+        if (!getDerElement(
+            parameters,
+            algorithmEnd,
+            *parameters,
+            &ignoredContent,
+            &ignoredContentLength,
+            &parametersLength) ||
+            parameters + parametersLength != algorithmEnd)
+        {
+            return NV_FALSE;
+        }
+    }
+    return NV_TRUE;
+}
+
+NvBool libspdm_x509_get_signature_algorithm(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvU8* oid,
+    size_t* oidLength)
+{
+    if (oidLength == NULL)
+    {
+        return NV_FALSE;
+    }
+    const size_t oidCapacity = *oidLength;
+    *oidLength = 0;
+
+    const NvU8* field;
+    const NvU8* fieldsEnd;
+    size_t version;
+    if (!getCertificateTbsFields(
+            certificate,
+            certificateLength,
+            &field,
+            &fieldsEnd) ||
+        !libspdm_x509_get_version(
+            certificate,
+            certificateLength,
+            &version))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* ignoredContent;
+    size_t ignoredContentLength;
+    size_t fieldLength;
+    if (*field == 0xa0)
+    {
+        if (!getDerElement(
+            field,
+            fieldsEnd,
+            0xa0,
+            &ignoredContent,
+            &ignoredContentLength,
+            &fieldLength))
+        {
+            return NV_FALSE;
+        }
+        field += fieldLength;
+    }
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x02,
+        &ignoredContent,
+        &ignoredContentLength,
+        &fieldLength))
+    {
+        return NV_FALSE;
+    }
+    const NvU8* tbsAlgorithm = field + fieldLength;
+
+    const NvU8* tbsOid;
+    size_t tbsOidLength;
+    size_t tbsAlgorithmLength;
+    if (!getAlgorithmIdentifierOid(
+        tbsAlgorithm,
+        fieldsEnd,
+        &tbsOid,
+        &tbsOidLength,
+        &tbsAlgorithmLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* certificateEnd = certificate + certificateLength;
+    const NvU8* certificateContent;
+    size_t certificateContentLength;
+    size_t certificateElementLength;
+    if (!getDerElement(
+        certificate,
+        certificateEnd,
+        0x30,
+        &certificateContent,
+        &certificateContentLength,
+        &certificateElementLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* tbsContent;
+    size_t tbsContentLength;
+    size_t tbsLength;
+    if (!getDerElement(
+        certificateContent,
+        certificateEnd,
+        0x30,
+        &tbsContent,
+        &tbsContentLength,
+        &tbsLength))
+    {
+        return NV_FALSE;
+    }
+    const NvU8* outerAlgorithm = certificateContent + tbsLength;
+
+    const NvU8* outerOid;
+    size_t outerOidLength;
+    size_t outerAlgorithmLength;
+    if (!getAlgorithmIdentifierOid(
+            outerAlgorithm,
+            certificateEnd,
+            &outerOid,
+            &outerOidLength,
+            &outerAlgorithmLength) ||
+        tbsAlgorithmLength != outerAlgorithmLength)
+    {
+        return NV_FALSE;
+    }
+    for (size_t index = 0; index < tbsAlgorithmLength; ++index)
+    {
+        if (tbsAlgorithm[index] != outerAlgorithm[index])
+        {
+            return NV_FALSE;
+        }
+    }
+
+    *oidLength = outerOidLength;
+    if (oid == NULL || oidCapacity < outerOidLength)
+    {
+        return NV_FALSE;
+    }
+    for (size_t index = 0; index < outerOidLength; ++index)
+    {
+        oid[index] = outerOid[index];
+    }
+    return NV_TRUE;
+}
+
 NvBool libspdm_x509_get_cert_from_cert_chain(
     const NvU8* certificateChain,
     size_t certificateChainLength,
