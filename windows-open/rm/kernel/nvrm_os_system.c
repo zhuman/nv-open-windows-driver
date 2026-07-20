@@ -340,3 +340,13 @@ NV_STATUS osGetVersionDump(void* pEncoder)
         productType);
     return NV_OK;
 }
+
+void osAddRecordForCrashLog(void* pBuffer, NvU32 length)
+{
+    (void)NvPlatformRmAddCrashLog(pBuffer, length);
+}
+
+void osDeleteRecordForCrashLog(void* pBuffer)
+{
+    NvPlatformRmDeleteCrashLog(pBuffer);
+}

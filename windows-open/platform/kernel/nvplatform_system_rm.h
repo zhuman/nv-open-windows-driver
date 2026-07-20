@@ -30,6 +30,8 @@ NV_STATUS NvPlatformRmGetOsVersion(
 	NvU32* minorVersion,
 	NvU32* buildNumber,
 	NvU32* productType);
+NV_STATUS NvPlatformRmAddCrashLog(void* buffer, NvU32 length);
+void NvPlatformRmDeleteCrashLog(void* buffer);
 void NvPlatformRmCaptureAssertion(void);
 __declspec(noreturn) void NvPlatformRmBugCheck(NvU32 bugCode);
 

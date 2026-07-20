@@ -36,10 +36,71 @@ struct CodeViewRsdsHeader
 
 constexpr ULONG CodeViewRsdsSignature = 'SDSR';
 
+struct CrashLogRecord
+{
+    LIST_ENTRY listEntry;
+    KBUGCHECK_REASON_CALLBACK_RECORD callbackRecord;
+    void* buffer;
+    NvU32 length;
+};
+
+constexpr ULONG CrashLogPoolTag = 'cRvN';
+UCHAR crashLogComponent[] = "NVIDIA RM nvlog";
+const GUID crashLogGuid =
+    {0x4f6f38b7, 0x2e7d, 0x4a61, {0xa8, 0x5f, 0x1b, 0x56, 0xea, 0xe5, 0x33, 0x70}};
+
 EX_RUNDOWN_REF systemWorkRundown;
 volatile LONG systemWorkState = SystemWorkStateNeverInitialized;
 PDRIVER_OBJECT systemWorkDriverObject;
 KSEMAPHORE rmSema;
+LIST_ENTRY crashLogRecords;
+KSPIN_LOCK crashLogLock;
+
+void CrashLogDumpCallback(
+    KBUGCHECK_CALLBACK_REASON reason,
+    PKBUGCHECK_REASON_CALLBACK_RECORD callbackRecord,
+    void* reasonSpecificData,
+    ULONG reasonSpecificDataLength)
+{
+    if (reason != KbCallbackSecondaryDumpData ||
+        reasonSpecificData == nullptr ||
+        reasonSpecificDataLength < sizeof(KBUGCHECK_SECONDARY_DUMP_DATA))
+    {
+        return;
+    }
+
+    auto* record = CONTAINING_RECORD(
+        callbackRecord,
+        CrashLogRecord,
+        callbackRecord);
+    auto* dumpData = static_cast<PKBUGCHECK_SECONDARY_DUMP_DATA>(
+        reasonSpecificData);
+    dumpData->Guid = crashLogGuid;
+    dumpData->OutBuffer = record->buffer;
+    dumpData->OutBufferLength = min(record->length, dumpData->MaximumAllowed);
+}
+
+void DrainCrashLogs()
+{
+    for (;;)
+    {
+        KIRQL oldIrql;
+        KeAcquireSpinLock(&crashLogLock, &oldIrql);
+        if (IsListEmpty(&crashLogRecords))
+        {
+            KeReleaseSpinLock(&crashLogLock, oldIrql);
+            break;
+        }
+
+        PLIST_ENTRY entry = RemoveHeadList(&crashLogRecords);
+        KeReleaseSpinLock(&crashLogLock, oldIrql);
+        auto* record = CONTAINING_RECORD(entry, CrashLogRecord, listEntry);
+        if (KeDeregisterBugCheckReasonCallback(&record->callbackRecord))
+        {
+            ExFreePoolWithTag(record, CrashLogPoolTag);
+        }
+    }
+}
 
 void SystemWorkRoutine(
     void* ioObject,
@@ -104,12 +165,15 @@ NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
     }
 
     KeInitializeSemaphore(&rmSema, 1, 1);
+    InitializeListHead(&crashLogRecords);
+    KeInitializeSpinLock(&crashLogLock);
     return STATUS_SUCCESS;
 }
 
 void NvPlatformSystemShutdown(void) noexcept
 {
     NvPlatformRmDrainSystemWork();
+    DrainCrashLogs();
     NvPlatformPciShutdown();
     NvPlatformMmioShutdown();
     InterlockedExchangePointer(
@@ -355,6 +419,73 @@ extern "C" NV_STATUS NvPlatformRmGetOsVersion(
     *buildNumber = version.dwBuildNumber;
     *productType = version.wProductType;
     return NV_OK;
+}
+
+extern "C" NV_STATUS NvPlatformRmAddCrashLog(void* buffer, NvU32 length)
+{
+    if (buffer == nullptr || length == 0 || systemWorkDriverObject == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    auto* record = static_cast<CrashLogRecord*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(CrashLogRecord),
+        CrashLogPoolTag));
+    if (record == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    record->buffer = buffer;
+    record->length = length;
+    KeInitializeCallbackRecord(&record->callbackRecord);
+    if (!KeRegisterBugCheckReasonCallback(
+            &record->callbackRecord,
+            CrashLogDumpCallback,
+            KbCallbackSecondaryDumpData,
+            crashLogComponent))
+    {
+        ExFreePoolWithTag(record, CrashLogPoolTag);
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&crashLogLock, &oldIrql);
+    InsertTailList(&crashLogRecords, &record->listEntry);
+    KeReleaseSpinLock(&crashLogLock, oldIrql);
+    return NV_OK;
+}
+
+extern "C" void NvPlatformRmDeleteCrashLog(void* buffer)
+{
+    if (buffer == nullptr)
+    {
+        return;
+    }
+
+    CrashLogRecord* record = nullptr;
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&crashLogLock, &oldIrql);
+    for (PLIST_ENTRY entry = crashLogRecords.Flink;
+         entry != &crashLogRecords;
+         entry = entry->Flink)
+    {
+        auto* candidate = CONTAINING_RECORD(entry, CrashLogRecord, listEntry);
+        if (candidate->buffer == buffer)
+        {
+            RemoveEntryList(entry);
+            record = candidate;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&crashLogLock, oldIrql);
+
+    if (record != nullptr &&
+        KeDeregisterBugCheckReasonCallback(&record->callbackRecord))
+    {
+        ExFreePoolWithTag(record, CrashLogPoolTag);
+    }
 }
 
 extern "C" NV_STATUS NvPlatformRmSystemWorkInitialize(void)
