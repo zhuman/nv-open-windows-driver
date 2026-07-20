@@ -111,13 +111,18 @@ NvBool libspdm_x509_set_date_time(
         return NV_FALSE;
     }
 
-    WINDOWS_RM_X509_DATE_TIME* value = dateTime;
-    value->sortableValue = year;
-    value->sortableValue = value->sortableValue * 100 + month;
-    value->sortableValue = value->sortableValue * 100 + day;
-    value->sortableValue = value->sortableValue * 100 + hour;
-    value->sortableValue = value->sortableValue * 100 + minute;
-    value->sortableValue = value->sortableValue * 100 + second;
+    WINDOWS_RM_X509_DATE_TIME value;
+    value.sortableValue = year;
+    value.sortableValue = value.sortableValue * 100 + month;
+    value.sortableValue = value.sortableValue * 100 + day;
+    value.sortableValue = value.sortableValue * 100 + hour;
+    value.sortableValue = value.sortableValue * 100 + minute;
+    value.sortableValue = value.sortableValue * 100 + second;
+    const NvU8* valueBytes = (const NvU8*)&value;
+    for (size_t index = 0; index < requiredSize; ++index)
+    {
+        ((NvU8*)dateTime)[index] = valueBytes[index];
+    }
     *dateTimeSize = requiredSize;
     return NV_TRUE;
 }
@@ -131,13 +136,18 @@ NvS32 libspdm_x509_compare_date_time(
         return -2;
     }
 
-    const WINDOWS_RM_X509_DATE_TIME* first = firstDateTime;
-    const WINDOWS_RM_X509_DATE_TIME* second = secondDateTime;
-    if (first->sortableValue == second->sortableValue)
+    WINDOWS_RM_X509_DATE_TIME first;
+    WINDOWS_RM_X509_DATE_TIME second;
+    for (size_t index = 0; index < sizeof(first); ++index)
+    {
+        ((NvU8*)&first)[index] = ((const NvU8*)firstDateTime)[index];
+        ((NvU8*)&second)[index] = ((const NvU8*)secondDateTime)[index];
+    }
+    if (first.sortableValue == second.sortableValue)
     {
         return 0;
     }
-    return first->sortableValue > second->sortableValue ? 1 : -1;
+    return first.sortableValue > second.sortableValue ? 1 : -1;
 }
 
 void libspdm_sleep(NvU64 microseconds)
@@ -796,6 +806,219 @@ NvBool libspdm_x509_get_subject_name(
         NV_TRUE,
         subject,
         subjectLength);
+}
+
+static NvBool parseCertificateTime(
+    const NvU8* encodedTime,
+    const NvU8* end,
+    WINDOWS_RM_X509_DATE_TIME* dateTime,
+    size_t* encodedLength)
+{
+    if (encodedTime == NULL || encodedTime >= end || dateTime == NULL ||
+        encodedLength == NULL ||
+        (*encodedTime != 0x17 && *encodedTime != 0x18))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8 tag = *encodedTime;
+    const NvU8* content;
+    size_t contentLength;
+    if (!getDerElement(
+        encodedTime,
+        end,
+        tag,
+        &content,
+        &contentLength,
+        encodedLength))
+    {
+        return NV_FALSE;
+    }
+
+    char normalized[16];
+    if (tag == 0x17)
+    {
+        if (contentLength != 13 || content[12] != 'Z')
+        {
+            return NV_FALSE;
+        }
+        if (content[0] < '0' || content[0] > '9' ||
+            content[1] < '0' || content[1] > '9')
+        {
+            return NV_FALSE;
+        }
+
+        const NvU32 shortYear =
+            (NvU32)(content[0] - '0') * 10 + (content[1] - '0');
+        const NvU32 century = shortYear >= 50 ? 1900 : 2000;
+        normalized[0] = (char)('0' + (century / 1000) % 10);
+        normalized[1] = (char)('0' + (century / 100) % 10);
+        for (size_t index = 2; index < 15; ++index)
+        {
+            normalized[index] = (char)content[index - 2];
+        }
+    }
+    else
+    {
+        if (contentLength != 15 || content[14] != 'Z')
+        {
+            return NV_FALSE;
+        }
+        for (size_t index = 0; index < 15; ++index)
+        {
+            normalized[index] = (char)content[index];
+        }
+    }
+    normalized[15] = '\0';
+
+    size_t dateTimeLength = sizeof(*dateTime);
+    return libspdm_x509_set_date_time(
+        normalized,
+        dateTime,
+        &dateTimeLength);
+}
+
+NvBool libspdm_x509_get_validity(
+    const NvU8* certificate,
+    size_t certificateLength,
+    NvU8* notBefore,
+    size_t* notBeforeLength,
+    NvU8* notAfter,
+    size_t* notAfterLength)
+{
+    if (notBeforeLength == NULL || notAfterLength == NULL)
+    {
+        return NV_FALSE;
+    }
+    const size_t notBeforeCapacity = *notBeforeLength;
+    const size_t notAfterCapacity = *notAfterLength;
+    *notBeforeLength = 0;
+    *notAfterLength = 0;
+
+    const NvU8* field;
+    const NvU8* fieldsEnd;
+    size_t version;
+    if (!getCertificateTbsFields(
+            certificate,
+            certificateLength,
+            &field,
+            &fieldsEnd) ||
+        !libspdm_x509_get_version(
+            certificate,
+            certificateLength,
+            &version))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* content;
+    size_t contentLength;
+    size_t fieldLength;
+    if (*field == 0xa0)
+    {
+        if (!getDerElement(
+            field,
+            fieldsEnd,
+            0xa0,
+            &content,
+            &contentLength,
+            &fieldLength))
+        {
+            return NV_FALSE;
+        }
+        field += fieldLength;
+    }
+
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x02,
+        &content,
+        &contentLength,
+        &fieldLength))
+    {
+        return NV_FALSE;
+    }
+    field += fieldLength;
+
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x30,
+        &content,
+        &contentLength,
+        &fieldLength))
+    {
+        return NV_FALSE;
+    }
+    field += fieldLength;
+
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x30,
+        &content,
+        &contentLength,
+        &fieldLength) ||
+        !validateDerName(field, fieldsEnd))
+    {
+        return NV_FALSE;
+    }
+    field += fieldLength;
+
+    const NvU8* validityContent;
+    size_t validityContentLength;
+    if (!getDerElement(
+        field,
+        fieldsEnd,
+        0x30,
+        &validityContent,
+        &validityContentLength,
+        &fieldLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* validityEnd = validityContent + validityContentLength;
+    WINDOWS_RM_X509_DATE_TIME parsedNotBefore;
+    WINDOWS_RM_X509_DATE_TIME parsedNotAfter;
+    size_t timeLength;
+    if (!parseCertificateTime(
+        validityContent,
+        validityEnd,
+        &parsedNotBefore,
+        &timeLength))
+    {
+        return NV_FALSE;
+    }
+
+    const NvU8* encodedNotAfter = validityContent + timeLength;
+    size_t notAfterEncodedLength;
+    if (!parseCertificateTime(
+        encodedNotAfter,
+        validityEnd,
+        &parsedNotAfter,
+        &notAfterEncodedLength) ||
+        encodedNotAfter + notAfterEncodedLength != validityEnd)
+    {
+        return NV_FALSE;
+    }
+
+    *notBeforeLength = sizeof(parsedNotBefore);
+    *notAfterLength = sizeof(parsedNotAfter);
+    if (notBefore == NULL || notAfter == NULL ||
+        notBeforeCapacity < sizeof(parsedNotBefore) ||
+        notAfterCapacity < sizeof(parsedNotAfter))
+    {
+        return NV_FALSE;
+    }
+
+    for (size_t index = 0; index < sizeof(parsedNotBefore); ++index)
+    {
+        notBefore[index] = ((const NvU8*)&parsedNotBefore)[index];
+        notAfter[index] = ((const NvU8*)&parsedNotAfter)[index];
+    }
+    return NV_TRUE;
 }
 
 NvBool libspdm_x509_get_cert_from_cert_chain(
