@@ -182,6 +182,50 @@ NvS32 osImexChannelGet(NvU64 descriptor)
     return -1;
 }
 
+NvCgroupImpl osCgroupImplementation(void)
+{
+    return CGROUP_IMPL_NONE;
+}
+
+ClientGroupID osClientGroupID(NvU64 process, void* pidInfo)
+{
+    (void)process;
+    (void)pidInfo;
+    return 0;
+}
+
+void* osCgroupRegisterRegion(OBJGPU* pGpu, NvU64 size)
+{
+    (void)pGpu;
+    (void)size;
+    return NULL;
+}
+
+void osCgroupUnregisterRegion(void* region)
+{
+    (void)region;
+}
+
+NV_STATUS osMemacctTryCharge(
+    void* region,
+    NvLength size,
+    void** pool)
+{
+    (void)region;
+    (void)size;
+    if (pool != NULL)
+    {
+        *pool = NULL;
+    }
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+void osMemacctReleaseCharge(void* pool, NvLength size)
+{
+    (void)pool;
+    (void)size;
+}
+
 NV_STATUS osSimEscapeWrite(
     OBJGPU* pGpu,
     const char* path,
