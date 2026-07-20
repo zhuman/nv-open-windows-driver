@@ -226,6 +226,48 @@ void osMemacctReleaseCharge(void* pool, NvLength size)
     (void)size;
 }
 
+NV_STATUS osTegraSocGetImpImportData(
+    OBJGPU* pGpu,
+    TEGRA_IMP_IMPORT_DATA* importData)
+{
+    (void)pGpu;
+    (void)importData;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osTegraSocGetImpUefiData(
+    OS_GPU_INFO* osGpuInfo,
+    NvU32* isoBandwidthKbps,
+    NvU32* floorBandwidthKbps)
+{
+    (void)osGpuInfo;
+    (void)isoBandwidthKbps;
+    (void)floorBandwidthKbps;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osTegraAllocateDisplayBandwidth(
+    OS_GPU_INFO* osGpuInfo,
+    NvU32 averageBandwidthKbps,
+    NvU32 floorBandwidthKbps)
+{
+    (void)osGpuInfo;
+    (void)averageBandwidthKbps;
+    (void)floorBandwidthKbps;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osTegraiGpuPerfBoost(
+    OBJGPU* pGpu,
+    NvBool enable,
+    NvU32 duration)
+{
+    (void)pGpu;
+    (void)enable;
+    (void)duration;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 NV_STATUS osSimEscapeWrite(
     OBJGPU* pGpu,
     const char* path,
