@@ -182,6 +182,66 @@ NvS32 osImexChannelGet(NvU64 descriptor)
     return -1;
 }
 
+NV_STATUS osSimEscapeWrite(
+    OBJGPU* pGpu,
+    const char* path,
+    NvU32 index,
+    NvU32 size,
+    NvU32 value)
+{
+    (void)pGpu;
+    (void)path;
+    (void)index;
+    (void)size;
+    (void)value;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osSimEscapeWriteBuffer(
+    OBJGPU* pGpu,
+    const char* path,
+    NvU32 index,
+    NvU32 size,
+    void* buffer)
+{
+    (void)pGpu;
+    (void)path;
+    (void)index;
+    (void)size;
+    (void)buffer;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osSimEscapeRead(
+    OBJGPU* pGpu,
+    const char* path,
+    NvU32 index,
+    NvU32 size,
+    NvU32* value)
+{
+    (void)pGpu;
+    (void)path;
+    (void)index;
+    (void)size;
+    (void)value;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osSimEscapeReadBuffer(
+    OBJGPU* pGpu,
+    const char* path,
+    NvU32 index,
+    NvU32 size,
+    void* buffer)
+{
+    (void)pGpu;
+    (void)path;
+    (void)index;
+    (void)size;
+    (void)buffer;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 NvBool hypervisorIsVgxHyper_IMPL(void)
 {
     return NV_FALSE;
