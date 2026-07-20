@@ -377,6 +377,9 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_access.c">
       <Link>upstream\gpu\gpu_access.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_register_access_map.c">
+      <Link>upstream\gpu\gpu_register_access_map.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_resource.c">
       <Link>upstream\gpu\gpu_resource.c</Link>
     </ClCompile>

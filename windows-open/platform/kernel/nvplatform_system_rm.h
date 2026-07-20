@@ -8,6 +8,9 @@ extern "C" {
 #endif
 
 NvBool NvPlatformRmIsNotebook(void);
+NvBool NvPlatformRmIsCurrentSubjectAdministrator(void);
+void NvPlatformRmCaptureAssertion(void);
+__declspec(noreturn) void NvPlatformRmBugCheck(NvU32 bugCode);
 
 typedef void NvPlatformRmSystemWorkFunction(void* context);
 

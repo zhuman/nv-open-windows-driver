@@ -25,6 +25,7 @@ struct NV_PLATFORM_RM_GPU_CONTEXT
     NV_PLATFORM_RM_GPU_ATTACH_INFO attachInfo;
     void* rmGpu;
     volatile LONG state;
+    volatile LONG lost;
 };
 
 extern "C" NV_STATUS NvPlatformRmGpuContextCreate(
@@ -55,6 +56,7 @@ extern "C" NV_STATUS NvPlatformRmGpuContextCreate(
     (*gpuContext)->attachInfo = *attachInfo;
     (*gpuContext)->rmGpu = nullptr;
     (*gpuContext)->state = static_cast<LONG>(GpuContextState::Available);
+    (*gpuContext)->lost = FALSE;
     return NV_OK;
 }
 
@@ -136,4 +138,25 @@ extern "C" NV_STATUS NvPlatformRmGpuGetAttachInfo(
 
     *attachInfo = gpuContext->attachInfo;
     return NV_OK;
+}
+
+extern "C" void NvPlatformRmGpuMarkLost(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    if (gpuContext != nullptr)
+    {
+        InterlockedExchange(&gpuContext->lost, TRUE);
+    }
+}
+
+extern "C" NvBool NvPlatformRmGpuIsLost(
+    const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    return gpuContext != nullptr &&
+        InterlockedCompareExchange(
+            const_cast<volatile LONG*>(&gpuContext->lost),
+            TRUE,
+            TRUE) != FALSE
+        ? NV_TRUE
+        : NV_FALSE;
 }

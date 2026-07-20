@@ -1,5 +1,7 @@
 #include "core/core.h"
 #include "gpu/gpu.h"
+#include "class/cl2080_notification.h"
+#include "nverror.h"
 #include "nvplatform_gpu_rm.h"
 
 void osInitOSHwInfo(OBJGPU* pGpu)
@@ -40,4 +42,37 @@ void osDpcDetachGpu(OBJGPU* pGpu)
             pGpu);
         pGpu->pOsGpuInfo = NULL;
     }
+}
+
+NV_STATUS osHandleGpuLost(OBJGPU* pGpu, NvBool bEmitXid)
+{
+    if (pGpu == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_CONNECTED))
+    {
+        return NV_OK;
+    }
+
+    if (bEmitXid)
+    {
+        nvErrorLog_va(
+            pGpu,
+            ROBUST_CHANNEL_GPU_HAS_FALLEN_OFF_THE_BUS,
+            "GPU has fallen off the bus.");
+    }
+
+    gpuNotifySubDeviceEvent(
+        pGpu,
+        NV2080_NOTIFIERS_GPU_UNAVAILABLE,
+        NULL,
+        0,
+        ROBUST_CHANNEL_GPU_HAS_FALLEN_OFF_THE_BUS,
+        0);
+    gpuSetDisconnectedProperties(pGpu);
+    NvPlatformRmGpuMarkLost(
+        (NV_PLATFORM_RM_GPU_CONTEXT*)pGpu->pOsGpuInfo);
+    return NV_OK;
 }

@@ -198,6 +198,12 @@ Upstream GPU register access and its generated `IoAperture` and
 `gpuPostConstruct`. The standalone RM probe reaches the deeper user-register
 permission and GPU-loss policy boundaries without substituting Windows policy
 or weakening register checks.
+The complete upstream user-register permission bitmap owner now enforces the
+per-register allowlist. Windows evaluates administrator access against the
+effective subject token, captures assertion stacks without allocation, maps RM
+fatal codes to a deliberate kernel bugcheck, and handles lost GPUs by emitting
+Xid 79, notifying RM subdevices, setting upstream disconnected properties, and
+latching loss in the adapter-owned context.
 Kernel-privileged GPU mappings now return bounded aliases into that existing
 BAR0 mapping, while lower-privilege requests remain delegated to the explicit
 per-process PCI user-mapping boundary. Kernel unmaps therefore preserve the

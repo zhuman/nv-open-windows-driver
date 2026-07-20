@@ -1,11 +1,12 @@
+extern "C" {
+#include <ntifs.h>
+#include <ntpoapi.h>
+}
+
 #include "nvplatform_system.h"
 #include "nvplatform_system_rm.h"
 #include "nvplatform_mmio.h"
 #include "nvplatform_pci.h"
-
-extern "C" {
-#include <ntpoapi.h>
-}
 
 namespace {
 
@@ -13,6 +14,9 @@ constexpr ULONG SystemWorkPoolTag = 'wRvN';
 constexpr LONG SystemWorkStateNeverInitialized = 0;
 constexpr LONG SystemWorkStateActive = 1;
 constexpr LONG SystemWorkStateStopped = 2;
+constexpr ULONG RmBugCheckCode = 0xE2;
+constexpr ULONG_PTR RmBugCheckSignature = 'MRVN';
+constexpr ULONG MaximumAssertionFrames = 16;
 
 struct SystemWorkItem
 {
@@ -234,4 +238,56 @@ extern "C" void NvPlatformRmDrainSystemWork(void)
     {
         ExWaitForRundownProtectionRelease(&systemWorkRundown);
     }
+}
+
+extern "C" NvBool NvPlatformRmIsCurrentSubjectAdministrator(void)
+{
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return NV_FALSE;
+    }
+
+    SECURITY_SUBJECT_CONTEXT subjectContext{};
+    SeCaptureSubjectContext(&subjectContext);
+    SeLockSubjectContext(&subjectContext);
+    const BOOLEAN isAdministrator = SeTokenIsAdmin(
+        SeQuerySubjectContextToken(&subjectContext));
+    SeUnlockSubjectContext(&subjectContext);
+    SeReleaseSubjectContext(&subjectContext);
+    return isAdministrator ? NV_TRUE : NV_FALSE;
+}
+
+extern "C" void NvPlatformRmCaptureAssertion(void)
+{
+    void* frames[MaximumAssertionFrames]{};
+    const USHORT frameCount = RtlCaptureStackBackTrace(
+        1,
+        RTL_NUMBER_OF(frames),
+        frames,
+        nullptr);
+
+    DbgPrintEx(
+        DPFLTR_IHVVIDEO_ID,
+        DPFLTR_ERROR_LEVEL,
+        "NVRM: assertion failed, stack depth %hu\n",
+        frameCount);
+    for (USHORT index = 0; index < frameCount; ++index)
+    {
+        DbgPrintEx(
+            DPFLTR_IHVVIDEO_ID,
+            DPFLTR_ERROR_LEVEL,
+            "NVRM:   [%hu] %p\n",
+            index,
+            frames[index]);
+    }
+}
+
+extern "C" __declspec(noreturn) void NvPlatformRmBugCheck(NvU32 bugCode)
+{
+    KeBugCheckEx(
+        RmBugCheckCode,
+        RmBugCheckSignature,
+        bugCode,
+        reinterpret_cast<ULONG_PTR>(_ReturnAddress()),
+        0);
 }

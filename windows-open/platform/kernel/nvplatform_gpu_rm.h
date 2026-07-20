@@ -45,6 +45,8 @@ NV_STATUS NvPlatformRmGpuPublish(
 void NvPlatformRmGpuWithdraw(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     void* rmGpu);
+void NvPlatformRmGpuMarkLost(NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
+NvBool NvPlatformRmGpuIsLost(const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 
 #ifdef __cplusplus
 }

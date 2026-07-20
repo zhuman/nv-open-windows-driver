@@ -56,3 +56,21 @@ NvU32 osReleaseRmSema(void* pSema, OBJGPU* pDpcGpu)
     NvPlatformRmSemaRelease();
     return NV_SEMA_RELEASE_SUCCEED;
 }
+
+NvBool osIsAdministrator(void)
+{
+    return NvPlatformRmIsCurrentSubjectAdministrator();
+}
+
+void osAssertFailed(void)
+{
+    NvPlatformRmCaptureAssertion();
+}
+
+void osBugCheck(NvU32 bugCode)
+{
+    NvPlatformRmBugCheck(
+        bugCode <= OS_BUG_CHECK_BUGCODE_LAST
+            ? bugCode
+            : OS_BUG_CHECK_BUGCODE_UNKNOWN);
+}
