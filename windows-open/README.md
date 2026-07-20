@@ -166,6 +166,10 @@ The generated `KernelWatchdog` resource and its upstream implementation also
 compile unchanged. Registry overrides use the existing Windows registry ABI;
 its remaining MIG predicate is shared with the wider pending MIG manager
 closure rather than introducing a new startup dependency.
+RM's allocation-free system semaphore ABI now uses a driver-global Windows
+kernel semaphore initialized with the platform-system lifetime. Blocking
+acquisition is limited to wait-safe IRQL, conditional acquisition is
+nonblocking, and teardown remains ordered after RM has released its locks.
 Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
 ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
 guarded platform intrinsics, while the existing CPUID, frequency, and processor

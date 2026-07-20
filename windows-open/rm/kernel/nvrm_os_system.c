@@ -1,4 +1,5 @@
 #include "g_system_nvoc.h"
+#include "g_os_nvoc.h"
 #include "nvplatform_registry_rm.h"
 #include "nvplatform_system_rm.h"
 
@@ -34,4 +35,24 @@ NV_STATUS osQueueSystemWorkItem(
 void osSyncWithRmDestroy(void)
 {
     NvPlatformRmDrainSystemWork();
+}
+
+NV_STATUS osAcquireRmSema(void* pSema)
+{
+    (void)pSema;
+    return NvPlatformRmSemaAcquire();
+}
+
+NV_STATUS osCondAcquireRmSema(void* pSema)
+{
+    (void)pSema;
+    return NvPlatformRmSemaTryAcquire();
+}
+
+NvU32 osReleaseRmSema(void* pSema, OBJGPU* pDpcGpu)
+{
+    (void)pSema;
+    (void)pDpcGpu;
+    NvPlatformRmSemaRelease();
+    return NV_SEMA_RELEASE_SUCCEED;
 }

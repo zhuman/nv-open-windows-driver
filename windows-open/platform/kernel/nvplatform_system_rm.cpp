@@ -22,6 +22,7 @@ struct SystemWorkItem
 EX_RUNDOWN_REF systemWorkRundown;
 volatile LONG systemWorkState = SystemWorkStateNeverInitialized;
 PDRIVER_OBJECT systemWorkDriverObject;
+KSEMAPHORE rmSema;
 
 void SystemWorkRoutine(
     void* ioObject,
@@ -47,12 +48,16 @@ NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
         return STATUS_INVALID_PARAMETER;
     }
 
-    return InterlockedCompareExchangePointer(
+    if (InterlockedCompareExchangePointer(
         reinterpret_cast<void* volatile*>(&systemWorkDriverObject),
         driverObject,
-        nullptr) == nullptr
-        ? STATUS_SUCCESS
-        : STATUS_INVALID_DEVICE_STATE;
+        nullptr) != nullptr)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    KeInitializeSemaphore(&rmSema, 1, 1);
+    return STATUS_SUCCESS;
 }
 
 void NvPlatformSystemShutdown(void) noexcept
@@ -108,6 +113,47 @@ extern "C" NV_STATUS NvPlatformRmSystemWorkInitialize(void)
     return previousState == SystemWorkStateActive
         ? NV_OK
         : NV_ERR_INVALID_STATE;
+}
+
+extern "C" NV_STATUS NvPlatformRmSemaAcquire(void)
+{
+    if (systemWorkDriverObject == nullptr || KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    return KeWaitForSingleObject(
+        &rmSema,
+        Executive,
+        KernelMode,
+        FALSE,
+        nullptr) == STATUS_SUCCESS
+        ? NV_OK
+        : NV_ERR_INVALID_STATE;
+}
+
+extern "C" NV_STATUS NvPlatformRmSemaTryAcquire(void)
+{
+    LARGE_INTEGER timeout{};
+
+    if (systemWorkDriverObject == nullptr)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    return KeWaitForSingleObject(
+        &rmSema,
+        Executive,
+        KernelMode,
+        FALSE,
+        &timeout) == STATUS_SUCCESS
+        ? NV_OK
+        : NV_ERR_STATE_IN_USE;
+}
+
+extern "C" void NvPlatformRmSemaRelease(void)
+{
+    KeReleaseSemaphore(&rmSema, IO_NO_INCREMENT, 1, FALSE);
 }
 
 extern "C" NV_STATUS NvPlatformRmQueueSystemWork(
