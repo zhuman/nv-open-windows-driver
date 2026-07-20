@@ -171,6 +171,16 @@ NvBool hypervisorIsVgxHyper_IMPL(void)
     return NV_FALSE;
 }
 
+NV_STATUS osIsVgpuVfioPresent(void)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osIsVfioPciCorePresent(void)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 NV_STATUS hypervisorInjectInterrupt_IMPL(
     void* pHypervisor,
     void* pVgpuNsIntr)
