@@ -135,6 +135,18 @@ NV_STATUS osSrUnpinSysmem(OS_GPU_INFO* pOsGpuInfo)
     return NV_ERR_NOT_SUPPORTED;
 }
 
+NvBool osMatchGpuOsInfo(OBJGPU* pGpu, void* pOsInfo)
+{
+    (void)pGpu;
+    (void)pOsInfo;
+    return NV_FALSE;
+}
+
+void osReleaseGpuOsInfo(void* pOsInfo)
+{
+    (void)pOsInfo;
+}
+
 static void releaseImportedSystemAddress(MEMORY_DESCRIPTOR* pMemDesc)
 {
     NvPlatformRmUnlockSystemAddress(pMemDesc->_pMemData);
