@@ -88,6 +88,53 @@ void osNumaRemoveGpuMemory(
     (void)numaNodeId;
 }
 
+NV_STATUS osAllocPagesNode(
+    NvS32 nodeId,
+    NvLength size,
+    NvU32 flags,
+    NvU64* pPhysicalAddress)
+{
+    (void)nodeId;
+    (void)size;
+    (void)flags;
+    (void)pPhysicalAddress;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osOfflinePageAtAddress(NvU64 address)
+{
+    (void)address;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osIovaMap(PIOVAMAPPING pIovaMapping)
+{
+    (void)pIovaMapping;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+void osIovaUnmap(PIOVAMAPPING pIovaMapping)
+{
+    (void)pIovaMapping;
+}
+
+NV_STATUS osSrPinSysmem(
+    OS_GPU_INFO* pOsGpuInfo,
+    NvU64 commitSize,
+    void* pMdl)
+{
+    (void)pOsGpuInfo;
+    (void)commitSize;
+    (void)pMdl;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osSrUnpinSysmem(OS_GPU_INFO* pOsGpuInfo)
+{
+    (void)pOsGpuInfo;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 static void releaseImportedSystemAddress(MEMORY_DESCRIPTOR* pMemDesc)
 {
     NvPlatformRmUnlockSystemAddress(pMemDesc->_pMemData);
