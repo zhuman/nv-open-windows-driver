@@ -23,6 +23,71 @@ void osInternalReserveFreeCallback(NvU64 offset, NvU32 gpuId)
     (void)gpuId;
 }
 
+NV_STATUS osGetFbNumaInfo(
+    OBJGPU* pGpu,
+    NvU64* pPhysicalAddress,
+    NvU64* pPhysicalSize,
+    NvU64* pReservedPhysicalAddress,
+    NvS32* pNodeId)
+{
+    (void)pGpu;
+    (void)pPhysicalAddress;
+    (void)pPhysicalSize;
+    (void)pReservedPhysicalAddress;
+    (void)pNodeId;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osGetEgmInfo(
+    OBJGPU* pGpu,
+    NvU64* pPhysicalAddress,
+    NvU64* pSize,
+    NvS32* pNodeId)
+{
+    (void)pGpu;
+    (void)pPhysicalAddress;
+    (void)pSize;
+    (void)pNodeId;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osNumaMemblockSize(NvU64* pMemblockSize)
+{
+    (void)pMemblockSize;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NvBool osNumaOnliningEnabled(OS_GPU_INFO* pOsGpuInfo)
+{
+    (void)pOsGpuInfo;
+    return NV_FALSE;
+}
+
+NV_STATUS osNumaAddGpuMemory(
+    OS_GPU_INFO* pOsGpuInfo,
+    NvU64 offset,
+    NvU64 size,
+    NvU32* pNumaNodeId)
+{
+    (void)pOsGpuInfo;
+    (void)offset;
+    (void)size;
+    (void)pNumaNodeId;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+void osNumaRemoveGpuMemory(
+    OS_GPU_INFO* pOsGpuInfo,
+    NvU64 offset,
+    NvU64 size,
+    NvU32 numaNodeId)
+{
+    (void)pOsGpuInfo;
+    (void)offset;
+    (void)size;
+    (void)numaNodeId;
+}
+
 static void releaseImportedSystemAddress(MEMORY_DESCRIPTOR* pMemDesc)
 {
     NvPlatformRmUnlockSystemAddress(pMemDesc->_pMemData);
