@@ -639,6 +639,15 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hyperv\hyperv.c">
       <Link>upstream\hypervisor\hyperv.c</Link>
     </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\kvm\kvm.c">
+      <Link>upstream\hypervisor\kvm.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\vmware\vmware.c">
+      <Link>upstream\hypervisor\vmware.c</Link>
+    </ClCompile>
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\xen\xen.c">
+      <Link>upstream\hypervisor\xen.c</Link>
+    </ClCompile>
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\common_vgpu_mgr.c">
       <Link>upstream\virtualization\common_vgpu_mgr.c</Link>
     </ClCompile>
@@ -655,7 +664,7 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\virtualization\vgpuconfigapi.c">
       <Link>upstream\virtualization\vgpuconfigapi.c</Link>
     </ClCompile>
-    <ClCompile Update="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hypervisor.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hypervisor_access.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hyperv\hyperv.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\kernel_hostvgpudeviceapi.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\vgpuconfigapi.c">
+    <ClCompile Update="$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hypervisor.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hypervisor_access.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\hyperv\hyperv.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\kvm\kvm.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\vmware\vmware.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\hypervisor\xen\xen.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\kernel_hostvgpudeviceapi.c;$(RepoRoot)src\nvidia\src\kernel\virtualization\vgpuconfigapi.c">
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>$(RepoRoot)src\common\nvlink\interface\nvlink.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
