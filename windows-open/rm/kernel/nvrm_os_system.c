@@ -182,6 +182,89 @@ NvS32 osImexChannelGet(NvU64 descriptor)
     return -1;
 }
 
+void osRmCapInitDescriptor(NvU64* capDescriptor)
+{
+    if (capDescriptor != NULL)
+    {
+        *capDescriptor = NV_U64_MAX;
+    }
+}
+
+NV_STATUS osRmCapAcquire(
+    OS_RM_CAPS* osRmCaps,
+    NvU32 rmCap,
+    NvU64 capDescriptor,
+    NvU64* duplicatedCapDescriptor)
+{
+    (void)osRmCaps;
+    (void)rmCap;
+    (void)capDescriptor;
+    osRmCapInitDescriptor(duplicatedCapDescriptor);
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+void osRmCapRelease(NvU64 duplicatedCapDescriptor)
+{
+    (void)duplicatedCapDescriptor;
+}
+
+NV_STATUS osRmCapRegisterSys(OS_RM_CAPS** osRmCaps)
+{
+    if (osRmCaps != NULL)
+    {
+        *osRmCaps = NULL;
+    }
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osRmCapRegisterGpu(
+    OS_GPU_INFO* osGpuInfo,
+    OS_RM_CAPS** osRmCaps)
+{
+    (void)osGpuInfo;
+    if (osRmCaps != NULL)
+    {
+        *osRmCaps = NULL;
+    }
+    return NV_OK;
+}
+
+NV_STATUS osRmCapRegisterSmcPartition(
+    OS_RM_CAPS* gpuOsRmCaps,
+    OS_RM_CAPS** partitionOsRmCaps,
+    NvU32 partitionId)
+{
+    (void)gpuOsRmCaps;
+    (void)partitionId;
+    if (partitionOsRmCaps != NULL)
+    {
+        *partitionOsRmCaps = NULL;
+    }
+    return NV_OK;
+}
+
+NV_STATUS osRmCapRegisterSmcExecutionPartition(
+    OS_RM_CAPS* partitionOsRmCaps,
+    OS_RM_CAPS** executionPartitionOsRmCaps,
+    NvU32 executionPartitionId)
+{
+    (void)partitionOsRmCaps;
+    (void)executionPartitionId;
+    if (executionPartitionOsRmCaps != NULL)
+    {
+        *executionPartitionOsRmCaps = NULL;
+    }
+    return NV_OK;
+}
+
+void osRmCapUnregister(OS_RM_CAPS** osRmCaps)
+{
+    if (osRmCaps != NULL)
+    {
+        *osRmCaps = NULL;
+    }
+}
+
 NvCgroupImpl osCgroupImplementation(void)
 {
     return CGROUP_IMPL_NONE;
@@ -278,6 +361,38 @@ void osCxlSetCaching(OBJGPU* pGpu, NvBool enableCache)
 {
     (void)pGpu;
     (void)enableCache;
+}
+
+NvBool osIsGridSupported(OBJGPU* pGpu)
+{
+    (void)pGpu;
+    return NV_FALSE;
+}
+
+NvU32 osGetGridCspSupport(void)
+{
+    return 0;
+}
+
+NvBool osIsNvswitchPresent(void)
+{
+    return NV_FALSE;
+}
+
+NV_STATUS osIsVgpuDeviceVmPresent(void)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NvBool osRemoveGpuSupported(void)
+{
+    return NV_FALSE;
+}
+
+NvBool osIsSwPreInitOnly(OS_GPU_INFO* pOsGpuInfo)
+{
+    (void)pOsGpuInfo;
+    return NV_FALSE;
 }
 
 NvBool osGpuSupportsAts(OBJGPU* pGpu)
