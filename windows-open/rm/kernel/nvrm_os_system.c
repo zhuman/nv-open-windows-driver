@@ -182,6 +182,17 @@ NvS32 osImexChannelGet(NvU64 descriptor)
     return -1;
 }
 
+NV_STATUS osQueueDrainP2PHandler(NvU8* pUuid)
+{
+    (void)pUuid;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+void osQueueResumeP2PHandler(NvU8* pUuid)
+{
+    (void)pUuid;
+}
+
 void osRmCapInitDescriptor(NvU64* capDescriptor)
 {
     if (capDescriptor != NULL)
