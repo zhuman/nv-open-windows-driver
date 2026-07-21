@@ -417,6 +417,14 @@ NvU32 osGetDynamicPowerSupportMask(void)
     return 0;
 }
 
+void osClientGcoffDisallowRefcount(
+    OS_GPU_INFO* pOsGpuInfo,
+    NvBool disallow)
+{
+    (void)pOsGpuInfo;
+    (void)disallow;
+}
+
 NV_STATUS osRefGpuAccessNeeded(OS_GPU_INFO* osGpuInfo)
 {
     (void)osGpuInfo;
