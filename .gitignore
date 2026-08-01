@@ -12,6 +12,21 @@ windows-open/kmdod/x64/
 windows-open/kmdod/ARM64/
 windows-open/platform/kernel/x64/
 windows-open/platform/kernel/ARM64/
+
+# Visual C++ and WDK projects may emit beside the project when built directly.
+windows-open/**/x64/
+windows-open/**/ARM64/
+*.Build.CppClean.log
+*.FileListAbsolute.txt
+*.lastbuildstate
+*.tlog
+*.recipe
+*.obj
+*.iobj
+*.ipdb
+*.pdb
+*.ilk
+*.cer
 *.user
 *.suo
 *.VC.db
