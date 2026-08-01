@@ -81,5 +81,15 @@
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
+  <Target Name="VerifyProductionRmDisconnected" BeforeTargets="Link">
+    <ItemGroup>
+      <_NvKmdodRmProjectReference
+        Include="@(ProjectReference)"
+        Condition="$([System.String]::Copy('%(Filename)').StartsWith('nvrm'))" />
+    </ItemGroup>
+    <Error
+      Condition="'@(_NvKmdodRmProjectReference)' != ''"
+      Text="Production KMDOD must remain disconnected from RM until the runtime activation gates pass." />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
