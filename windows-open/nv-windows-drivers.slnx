@@ -10,6 +10,7 @@
   <Project Path="nvport/kernel/nvport-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="695d7a36-27e0-4d57-a593-4b52e93a67b0" />
   <Project Path="platform/kernel/nvplatform-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="9c8369b9-fb13-4deb-b215-9c4b4b77e5da" />
   <Project Path="rm/core/nvrm-core-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="5b71846e-dbed-493b-b59f-df739fa90a55" />
+  <Project Path="rm/diagnostic/nvrm-diagnostic.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="a7843ce1-c062-4c87-820e-96a95d8d4429" />
   <Project Path="rm/kernel/nvrm-os-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="b37ec62f-f957-4eed-b69d-87e9df43f0a7" />
   <Properties Name="Visual Studio">
     <Property Name="MinimumVersion" Value="18.0.0.0" />
