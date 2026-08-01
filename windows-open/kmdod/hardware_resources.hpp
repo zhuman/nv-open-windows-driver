@@ -1,30 +1,18 @@
 #pragma once
 
+#include "nvplatform_resources.h"
 #include "wdk.hpp"
 
 namespace nv::kmdod {
 
-struct MemoryRange final
-{
-    PHYSICAL_ADDRESS physicalAddress;
-    SIZE_T length;
-    USHORT flags;
-};
-
-struct InterruptResource final
-{
-    ULONG vector;
-    ULONG level;
-    KAFFINITY affinity;
-    USHORT flags;
-    bool messageSignaled;
-};
+using MemoryRange = NV_PLATFORM_MEMORY_RESOURCE;
+using InterruptResource = NV_PLATFORM_INTERRUPT_RESOURCE;
 
 class HardwareResources final
 {
 public:
-    static constexpr ULONG MaximumMemoryRangeCount = 16;
-    static constexpr ULONG MaximumInterruptCount = 32;
+    static constexpr ULONG MaximumMemoryRangeCount = NV_PLATFORM_MAX_MEMORY_RESOURCE_COUNT;
+    static constexpr ULONG MaximumInterruptCount = NV_PLATFORM_MAX_INTERRUPT_RESOURCE_COUNT;
 
     HardwareResources() noexcept;
 
@@ -37,21 +25,7 @@ public:
     [[nodiscard]] const InterruptResource* InterruptAt(_In_ ULONG index) const noexcept;
 
 private:
-    NTSTATUS AddMemoryRange(
-        _In_ const CM_PARTIAL_RESOURCE_DESCRIPTOR& descriptor) noexcept;
-
-    static NTSTATUS DecodeMemoryRange(
-        _In_ const CM_PARTIAL_RESOURCE_DESCRIPTOR& descriptor,
-        _Out_ PHYSICAL_ADDRESS* physicalAddress,
-        _Out_ SIZE_T* length) noexcept;
-
-    NTSTATUS AddInterrupt(
-        _In_ const CM_PARTIAL_RESOURCE_DESCRIPTOR& descriptor) noexcept;
-
-    MemoryRange memoryRanges_[MaximumMemoryRangeCount];
-    ULONG memoryRangeCount_;
-    InterruptResource interrupts_[MaximumInterruptCount];
-    ULONG interruptCount_;
+    NV_PLATFORM_TRANSLATED_RESOURCES resources_;
 };
 
 } // namespace nv::kmdod

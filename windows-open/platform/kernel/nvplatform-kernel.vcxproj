@@ -43,6 +43,7 @@
     <ClCompile Include="nvplatform_pci.cpp" />
     <ClCompile Include="nvplatform_process_rm.cpp" />
     <ClCompile Include="nvplatform_registry.cpp" />
+    <ClCompile Include="nvplatform_resources.cpp" />
     <ClCompile Include="nvplatform_sync.cpp" />
     <ClCompile Include="nvplatform_system_rm.cpp" />
     <ClCompile Include="nvplatform_thread.cpp" />
@@ -62,6 +63,7 @@
     <ClInclude Include="nvplatform_process_rm.h" />
     <ClInclude Include="nvplatform_registry.h" />
     <ClInclude Include="nvplatform_registry_rm.h" />
+    <ClInclude Include="nvplatform_resources.h" />
     <ClInclude Include="nvplatform_sync.h" />
     <ClInclude Include="nvplatform_system.h" />
     <ClInclude Include="nvplatform_system_rm.h" />
