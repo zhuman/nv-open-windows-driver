@@ -1,5 +1,6 @@
 #include <ntddk.h>
 
+#include "nvplatform_mmio.h"
 #include "nvplatform_resources.h"
 #include "nvplatform_system.h"
 
@@ -9,6 +10,11 @@ extern "C" NV_STATUS coreInitializeRm(void);
 extern "C" void coreShutdownRm(void);
 
 namespace {
+
+constexpr USHORT NvidiaVendorId = 0x10DE;
+constexpr SIZE_T PmcBoot0Offset = 0x00000000;
+constexpr SIZE_T PmcBoot42Offset = 0x00000A00;
+constexpr SIZE_T RequiredIdentityLength = PmcBoot42Offset + sizeof(ULONG);
 
 constexpr ULONG RemoveLockTag =
     static_cast<ULONG>('N') |
@@ -21,6 +27,9 @@ struct DeviceExtension
     PDEVICE_OBJECT lowerDevice;
     IO_REMOVE_LOCK removeLock;
     NV_PLATFORM_TRANSLATED_RESOURCES resources;
+    NV_PLATFORM_MMIO_MAPPING registerMapping;
+    ULONG boot0;
+    ULONG boot42;
     BOOLEAN started;
 };
 
@@ -82,6 +91,147 @@ NTSTATUS StartCompletion(
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+NTSTATUS SynchronousRequestCompletion(
+    _In_ PDEVICE_OBJECT,
+    _In_ PIRP irp,
+    _In_ void* context) noexcept
+{
+    UNREFERENCED_PARAMETER(irp);
+    KeSetEvent(static_cast<PKEVENT>(context), IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+NTSTATUS ReadPciConfiguration(
+    _In_ PDEVICE_OBJECT lowerDevice,
+    _Out_ PCI_COMMON_CONFIG* configuration) noexcept
+{
+    RtlZeroMemory(configuration, sizeof(*configuration));
+
+    PIRP request = IoAllocateIrp(lowerDevice->StackSize, FALSE);
+    if (request == nullptr)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    KEVENT event;
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+    request->IoStatus.Status = STATUS_NOT_SUPPORTED;
+
+    IO_STACK_LOCATION* stack = IoGetNextIrpStackLocation(request);
+    stack->MajorFunction = IRP_MJ_PNP;
+    stack->MinorFunction = IRP_MN_READ_CONFIG;
+    stack->Parameters.ReadWriteConfig.WhichSpace = PCI_WHICHSPACE_CONFIG;
+    stack->Parameters.ReadWriteConfig.Buffer = configuration;
+    stack->Parameters.ReadWriteConfig.Offset = 0;
+    stack->Parameters.ReadWriteConfig.Length = PCI_COMMON_HDR_LENGTH;
+    IoSetCompletionRoutine(
+        request,
+        SynchronousRequestCompletion,
+        &event,
+        TRUE,
+        TRUE,
+        TRUE);
+
+    NTSTATUS status = IoCallDriver(lowerDevice, request);
+    if (status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, nullptr);
+    }
+    status = request->IoStatus.Status;
+    IoFreeIrp(request);
+    return status;
+}
+
+void ResetDeviceHardware(_Inout_ DeviceExtension* extension) noexcept
+{
+    extension->started = FALSE;
+    NvPlatformUnmapMmio(&extension->registerMapping);
+    extension->boot0 = 0;
+    extension->boot42 = 0;
+    RtlZeroMemory(&extension->resources, sizeof(extension->resources));
+}
+
+NTSTATUS ValidateRegisterAperture(_Inout_ DeviceExtension* extension) noexcept
+{
+    PCI_COMMON_CONFIG configuration = {};
+    NTSTATUS status = ReadPciConfiguration(
+        extension->lowerDevice,
+        &configuration);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    if (configuration.VendorID == 0 || configuration.VendorID == PCI_INVALID_VENDORID)
+    {
+        return STATUS_DEVICE_DOES_NOT_EXIST;
+    }
+    if (configuration.VendorID != NvidiaVendorId)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    const ULONG barLow = configuration.u.type0.BaseAddresses[0];
+    if (barLow == 0 || (barLow & PCI_ADDRESS_IO_SPACE) != 0)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ULONGLONG registerBarAddress = barLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK;
+    if ((barLow & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT)
+    {
+        registerBarAddress |= static_cast<ULONGLONG>(
+            configuration.u.type0.BaseAddresses[1]) << 32;
+    }
+    if (registerBarAddress > MAXLONGLONG)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    const NV_PLATFORM_MEMORY_RESOURCE* registerRange = nullptr;
+    for (ULONG index = 0; index < extension->resources.memoryCount; ++index)
+    {
+        const NV_PLATFORM_MEMORY_RESOURCE& range = extension->resources.memory[index];
+        if (range.physicalAddress.QuadPart ==
+            static_cast<LONGLONG>(registerBarAddress))
+        {
+            registerRange = &range;
+            break;
+        }
+    }
+    if (registerRange == nullptr || registerRange->length < RequiredIdentityLength)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    status = NvPlatformMapMmio(
+        registerRange->physicalAddress,
+        RequiredIdentityLength,
+        &extension->registerMapping);
+    if (NT_SUCCESS(status))
+    {
+        status = NvPlatformReadMmio32(
+            &extension->registerMapping,
+            PmcBoot0Offset,
+            &extension->boot0);
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = NvPlatformReadMmio32(
+            &extension->registerMapping,
+            PmcBoot42Offset,
+            &extension->boot42);
+    }
+    if (!NT_SUCCESS(status) ||
+        (extension->boot0 == MAXULONG && extension->boot42 == MAXULONG))
+    {
+        ResetDeviceHardware(extension);
+        return NT_SUCCESS(status) ? STATUS_DEVICE_DOES_NOT_EXIST : status;
+    }
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS ForwardStartSynchronously(
     _In_ PDEVICE_OBJECT deviceObject,
     _Inout_ PIRP irp) noexcept
@@ -108,6 +258,7 @@ NTSTATUS StartDevice(
     _In_ const IO_STACK_LOCATION& stack) noexcept
 {
     DeviceExtension* extension = GetExtension(deviceObject);
+    ResetDeviceHardware(extension);
     NTSTATUS status = IoAcquireRemoveLock(&extension->removeLock, irp);
     if (!NT_SUCCESS(status))
     {
@@ -124,6 +275,10 @@ NTSTATUS StartDevice(
         {
             status = STATUS_DEVICE_CONFIGURATION_ERROR;
         }
+        if (NT_SUCCESS(status))
+        {
+            status = ValidateRegisterAperture(extension);
+        }
     }
 
     if (NT_SUCCESS(status))
@@ -132,13 +287,15 @@ NTSTATUS StartDevice(
         DbgPrintEx(
             DPFLTR_IHVVIDEO_ID,
             DPFLTR_INFO_LEVEL,
-            "NVRM diagnostic: start has %lu memory and %lu interrupt resources\n",
+            "NVRM diagnostic: start has %lu memory and %lu interrupt resources, boot0=%08lx boot42=%08lx\n",
             extension->resources.memoryCount,
-            extension->resources.interruptCount);
+            extension->resources.interruptCount,
+            extension->boot0,
+            extension->boot42);
     }
     else
     {
-        RtlZeroMemory(&extension->resources, sizeof(extension->resources));
+        ResetDeviceHardware(extension);
     }
 
     IoReleaseRemoveLock(&extension->removeLock, irp);
@@ -150,8 +307,7 @@ NTSTATUS RemoveDevice(
     _Inout_ PIRP irp) noexcept
 {
     DeviceExtension* extension = GetExtension(deviceObject);
-    extension->started = FALSE;
-    RtlZeroMemory(&extension->resources, sizeof(extension->resources));
+    ResetDeviceHardware(extension);
 
     IoReleaseRemoveLockAndWait(&extension->removeLock, irp);
     IoSkipCurrentIrpStackLocation(irp);
@@ -189,8 +345,7 @@ NTSTATUS DispatchPnp(
     case IRP_MN_SURPRISE_REMOVAL:
     {
         DeviceExtension* extension = GetExtension(deviceObject);
-        extension->started = FALSE;
-        RtlZeroMemory(&extension->resources, sizeof(extension->resources));
+        ResetDeviceHardware(extension);
         return ForwardWithRemoveLock(deviceObject, irp, FALSE);
     }
 
