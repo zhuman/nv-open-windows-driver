@@ -27,6 +27,7 @@ struct NV_PLATFORM_RM_GPU_CONTEXT
     volatile LONG state;
     volatile LONG lost;
     volatile LONG shutdown;
+    volatile LONG clientCleanupRequired;
 };
 
 extern "C" NV_STATUS NvPlatformRmGpuContextCreate(
@@ -59,6 +60,7 @@ extern "C" NV_STATUS NvPlatformRmGpuContextCreate(
     (*gpuContext)->state = static_cast<LONG>(GpuContextState::Available);
     (*gpuContext)->lost = FALSE;
     (*gpuContext)->shutdown = FALSE;
+    (*gpuContext)->clientCleanupRequired = FALSE;
     return NV_OK;
 }
 
@@ -200,6 +202,27 @@ extern "C" NvBool NvPlatformRmGpuIsShutdown(
     return gpuContext != nullptr &&
         InterlockedCompareExchange(
             const_cast<volatile LONG*>(&gpuContext->shutdown),
+            TRUE,
+            TRUE) != FALSE
+        ? NV_TRUE
+        : NV_FALSE;
+}
+
+extern "C" void NvPlatformRmGpuRequireClientCleanup(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    if (gpuContext != nullptr)
+    {
+        InterlockedExchange(&gpuContext->clientCleanupRequired, TRUE);
+    }
+}
+
+extern "C" NvBool NvPlatformRmGpuNeedsClientCleanup(
+    const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    return gpuContext != nullptr &&
+        InterlockedCompareExchange(
+            const_cast<volatile LONG*>(&gpuContext->clientCleanupRequired),
             TRUE,
             TRUE) != FALSE
         ? NV_TRUE

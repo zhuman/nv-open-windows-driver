@@ -37,6 +37,7 @@ NvBool NvPlatformIsRaisedExecutionLevel(void);
 NvBool NvPlatformIsInterruptExecutionLevel(void);
 void NvPlatformProcessorPause(void);
 NvBool NvPlatformFlushCpuCaches(void);
+void NvPlatformFlushCpuCacheRange(void* address, NvU64 size);
 void NvPlatformFlushWriteBuffer(void);
 void NvPlatformDelayMilliseconds(NvU32 milliseconds);
 NvU64 NvPlatformDisablePreemption(void);

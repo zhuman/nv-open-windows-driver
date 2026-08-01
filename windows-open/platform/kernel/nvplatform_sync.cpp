@@ -290,6 +290,22 @@ extern "C" NvBool NvPlatformFlushCpuCaches(void)
 #endif
 }
 
+extern "C" void NvPlatformFlushCpuCacheRange(void* address, NvU64 size)
+{
+    auto* currentAddress = static_cast<UCHAR*>(address);
+
+    while (size != 0)
+    {
+        const ULONG chunkSize = size > MAXULONG
+            ? MAXULONG
+            : static_cast<ULONG>(size);
+
+        KeInvalidateRangeAllCaches(currentAddress, chunkSize);
+        currentAddress += chunkSize;
+        size -= chunkSize;
+    }
+}
+
 extern "C" void NvPlatformFlushWriteBuffer(void)
 {
     KeFlushWriteBuffer();

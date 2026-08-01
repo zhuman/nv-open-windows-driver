@@ -1,10 +1,26 @@
 #include "nvplatform_common.h"
 #include "nvplatform_memory_rm.h"
 #include "nvplatform_mmio_rm.h"
+#include "nvplatform_sync.h"
 #include "g_os_nvoc.h"
 #include "g_mem_desc_nvoc.h"
 #include "gpu/gpu.h"
 #include "kernel/os/nv_memory_type.h"
+
+void osDmaSetAddressSize(OS_GPU_INFO* osGpuInfo, NvU32 bits)
+{
+    (void)osGpuInfo;
+    (void)bits;
+}
+
+void osFlushGpuCoherentCpuCacheRange(
+    OS_GPU_INFO* pOsGpuInfo,
+    NvU64 cpuVirtual,
+    NvU64 size)
+{
+    (void)pOsGpuInfo;
+    NvPlatformFlushCpuCacheRange((void*)(NvUPtr)cpuVirtual, size);
+}
 
 void osInternalReserveAllocCallback(
     NvU64 offset,
@@ -258,6 +274,27 @@ NV_STATUS osUnmapViewFromSection(
     }
 
     return NvPlatformRmUnmapSectionView(pAddress);
+}
+
+NV_STATUS osCreateMemFromOsDescriptor(
+    OBJGPU* pGpu,
+    NvP64 descriptor,
+    NvHandle client,
+    NvU32 flags,
+    NvU64* limit,
+    MEMORY_DESCRIPTOR** ppMemDesc,
+    NvU32 descriptorType,
+    RS_PRIV_LEVEL privilegeLevel)
+{
+    (void)pGpu;
+    (void)descriptor;
+    (void)client;
+    (void)flags;
+    (void)limit;
+    (void)ppMemDesc;
+    (void)descriptorType;
+    (void)privilegeLevel;
+    return NV_ERR_NOT_SUPPORTED;
 }
 
 NV_STATUS osCreateMemFromOsDescriptorInternal(

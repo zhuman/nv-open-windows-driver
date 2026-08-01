@@ -14,6 +14,12 @@ void osDestroyOSHwInfo(OBJGPU* pGpu)
     NV_ASSERT(pGpu->pOsGpuInfo == NULL);
 }
 
+void osAllocatedRmClient(void* pOsInfo)
+{
+    NvPlatformRmGpuRequireClientCleanup(
+        (NV_PLATFORM_RM_GPU_CONTEXT*)pOsInfo);
+}
+
 NV_STATUS osDpcAttachGpu(OBJGPU* pGpu, void* pOsGpuInfo)
 {
     NV_STATUS status = NvPlatformRmGpuReserve(pOsGpuInfo, pGpu);

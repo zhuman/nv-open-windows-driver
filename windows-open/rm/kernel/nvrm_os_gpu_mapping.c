@@ -2,6 +2,37 @@
 #include "g_os_nvoc.h"
 #include "gpu/gpu.h"
 
+NV_STATUS osMapPciMemoryAreaUser(
+    OS_GPU_INFO* pOsGpuInfo,
+    MemoryArea memArea,
+    NvU32 protect,
+    NvU32 mode,
+    NvP64* pVirtualAddress,
+    NvP64* pPriv)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS osMapPciMemoryUser(
+    OS_GPU_INFO* pOsGpuInfo,
+    RmPhysAddr busAddress,
+    NvU64 length,
+    NvU32 protect,
+    NvP64* pVirtualAddress,
+    NvP64* pPriv,
+    NvU32 mode)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+void osUnmapPciMemoryUser(
+    OS_GPU_INFO* pOsGpuInfo,
+    NvP64 virtualAddress,
+    NvU64 length,
+    NvP64 priv)
+{
+}
+
 NV_STATUS osMapGPU(
     OBJGPU* pGpu,
     RS_PRIV_LEVEL privLevel,

@@ -1,6 +1,12 @@
 #include "core/thread_state.h"
+#include "g_os_nvoc.h"
 #include "g_hal_register.h"
 #include "nvplatform_system_rm.h"
+
+NV_STATUS osInitMapping(OBJGPU* pGpu)
+{
+    return pGpu != NULL ? NV_OK : NV_ERR_INVALID_ARGUMENT;
+}
 
 NV_STATUS osRmInitRm(void)
 {

@@ -2,6 +2,7 @@
 #include "nvport/nvport.h"
 
 typedef struct OBJGPU OBJGPU;
+struct nvlink_link_handlers;
 
 NV_STATUS osDelay(NvU32 milliseconds);
 void osAssertFailed(void);
@@ -65,4 +66,9 @@ NV_STATUS osGetPlatformNvlinkLinerate(
     (void)pGpu;
     (void)lineRate;
     return NV_ERR_NOT_SUPPORTED;
+}
+
+const struct nvlink_link_handlers* osGetNvlinkLinkCallbacks(void)
+{
+    return NULL;
 }

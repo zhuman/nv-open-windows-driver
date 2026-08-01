@@ -22,6 +22,12 @@ NV_STATUS NvPlatformRmGetAcpiTable(
 	void* table,
 	NvU32 tableSize,
 	NvU32* returnSize);
+NV_STATUS NvPlatformRmGetSmbiosTable(
+	void** table,
+	NvU64* tableSize,
+	NvU64* structureCount,
+	NvU32* version);
+void NvPlatformRmPutSmbiosTable(void* table);
 NV_STATUS NvPlatformRmGetDriverImageInfo(
 	void** imageBase,
 	NvU8 debugIdentifier[16],

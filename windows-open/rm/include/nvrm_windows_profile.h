@@ -1,0 +1,9 @@
+#pragma once
+
+#include "rmconfig.h"
+
+#undef RMCFG_MODULE_GRIDDISPLAYLESS
+#define RMCFG_MODULE_GRIDDISPLAYLESS 0
+
+#undef RMCFG_MODULE_DCECLIENTRM
+#define RMCFG_MODULE_DCECLIENTRM 0

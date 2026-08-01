@@ -5,11 +5,6 @@
 
 typedef NvU64 OS_THREAD_HANDLE;
 
-NvU32 osGetMaximumCoreCount(void)
-{
-    return NvPlatformGetRmCpuCount();
-}
-
 NV_STATUS osGetCurrentThread(OS_THREAD_HANDLE* threadId)
 {
     if (threadId == NULL)

@@ -6,6 +6,8 @@
 extern "C" {
 #endif
 
+void NvPlatformRmCpuInitialize(void);
+
 int NvPlatformRmCpuId(
     int operation,
     int suboperation,

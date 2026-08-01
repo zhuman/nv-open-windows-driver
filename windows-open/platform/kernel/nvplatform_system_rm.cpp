@@ -6,6 +6,7 @@ extern "C" {
 
 #include "nvplatform_system.h"
 #include "nvplatform_system_rm.h"
+#include "nvplatform_cpu_rm.h"
 #include "nvplatform_mmio.h"
 #include "nvplatform_pci.h"
 
@@ -19,6 +20,17 @@ constexpr ULONG RmBugCheckCode = 0xE2;
 constexpr ULONG_PTR RmBugCheckSignature = 'MRVN';
 constexpr ULONG MaximumAssertionFrames = 16;
 constexpr USHORT MaximumFirmwareVariableNameLength = 255;
+constexpr ULONG SmbiosPoolTag = 'sRvN';
+
+struct RawSmbiosData
+{
+    UCHAR used20CallingMethod;
+    UCHAR majorVersion;
+    UCHAR minorVersion;
+    UCHAR dmiRevision;
+    ULONG length;
+    UCHAR tableData[1];
+};
 
 struct SystemWorkItem
 {
@@ -118,6 +130,46 @@ void SystemWorkRoutine(
     ExReleaseRundownProtection(&systemWorkRundown);
 }
 
+NV_STATUS CountSmbiosStructures(
+    const UCHAR* table,
+    ULONG tableSize,
+    NvU64* structureCount)
+{
+    ULONG offset = 0;
+    NvU64 count = 0;
+
+    while (offset < tableSize)
+    {
+        if (tableSize - offset < 4 || table[offset + 1] < 4 ||
+            table[offset + 1] > tableSize - offset)
+        {
+            return NV_ERR_INVALID_DATA;
+        }
+
+        const UCHAR type = table[offset];
+        offset += table[offset + 1];
+        while (offset + 1 < tableSize &&
+               (table[offset] != 0 || table[offset + 1] != 0))
+        {
+            offset++;
+        }
+        if (offset + 1 >= tableSize)
+        {
+            return NV_ERR_INVALID_DATA;
+        }
+
+        offset += 2;
+        count++;
+        if (type == 127)
+        {
+            break;
+        }
+    }
+
+    *structureCount = count;
+    return NV_OK;
+}
+
 } // namespace
 
 NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
@@ -166,6 +218,7 @@ NTSTATUS NvPlatformSystemInitialize(_In_ PDRIVER_OBJECT driverObject) noexcept
     }
 
     KeInitializeSemaphore(&rmSema, 1, 1);
+    NvPlatformRmCpuInitialize();
     ExInitializeRundownProtection(&gpuWorkRundown);
     InitializeListHead(&crashLogRecords);
     KeInitializeSpinLock(&crashLogLock);
@@ -296,6 +349,91 @@ extern "C" NV_STATUS NvPlatformRmGetAcpiTable(
         return NV_ERR_OBJECT_NOT_FOUND;
     }
     return NV_ERR_OPERATING_SYSTEM;
+}
+
+extern "C" NV_STATUS NvPlatformRmGetSmbiosTable(
+    void** table,
+    NvU64* tableSize,
+    NvU64* structureCount,
+    NvU32* version)
+{
+    if (table == nullptr || tableSize == nullptr || structureCount == nullptr ||
+        version == nullptr || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    *table = nullptr;
+    *tableSize = 0;
+    *structureCount = 0;
+    *version = 0;
+
+    ULONG allocationSize = 0;
+    NTSTATUS status = AuxKlibGetSystemFirmwareTable(
+        'RSMB',
+        0,
+        nullptr,
+        0,
+        &allocationSize);
+    if (status != STATUS_BUFFER_TOO_SMALL && status != STATUS_BUFFER_OVERFLOW)
+    {
+        return status == STATUS_NOT_FOUND || status == STATUS_OBJECT_NAME_NOT_FOUND
+            ? NV_ERR_OBJECT_NOT_FOUND
+            : NV_ERR_OPERATING_SYSTEM;
+    }
+    if (allocationSize < FIELD_OFFSET(RawSmbiosData, tableData))
+    {
+        return NV_ERR_INVALID_DATA;
+    }
+
+    auto* rawData = static_cast<RawSmbiosData*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        allocationSize,
+        SmbiosPoolTag));
+    if (rawData == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    ULONG returnedSize = 0;
+    status = AuxKlibGetSystemFirmwareTable(
+        'RSMB',
+        0,
+        rawData,
+        allocationSize,
+        &returnedSize);
+    if (!NT_SUCCESS(status) ||
+        returnedSize < FIELD_OFFSET(RawSmbiosData, tableData) ||
+        rawData->length > returnedSize - FIELD_OFFSET(RawSmbiosData, tableData))
+    {
+        ExFreePoolWithTag(rawData, SmbiosPoolTag);
+        return NT_SUCCESS(status) ? NV_ERR_INVALID_DATA : NV_ERR_OPERATING_SYSTEM;
+    }
+
+    const NV_STATUS countStatus = CountSmbiosStructures(
+        rawData->tableData,
+        rawData->length,
+        structureCount);
+    if (countStatus != NV_OK)
+    {
+        ExFreePoolWithTag(rawData, SmbiosPoolTag);
+        return countStatus;
+    }
+
+    *table = rawData->tableData;
+    *tableSize = rawData->length;
+    *version = (static_cast<NvU32>(rawData->majorVersion) << 8) |
+        rawData->minorVersion;
+    return NV_OK;
+}
+
+extern "C" void NvPlatformRmPutSmbiosTable(void* table)
+{
+    if (table != nullptr)
+    {
+        auto* rawData = CONTAINING_RECORD(table, RawSmbiosData, tableData);
+        ExFreePoolWithTag(rawData, SmbiosPoolTag);
+    }
 }
 
 extern "C" NV_STATUS NvPlatformRmGetDriverImageInfo(

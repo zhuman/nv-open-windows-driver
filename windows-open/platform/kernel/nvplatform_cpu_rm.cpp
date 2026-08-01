@@ -6,6 +6,47 @@ extern "C" {
 
 #include <intrin.h>
 
+namespace {
+
+#if defined(_M_ARM64)
+constexpr int Arm64MidrEl1 = 0x4000;
+constexpr int Arm64CcsidrEl1 = 0x4800;
+constexpr int Arm64CsselrEl1 = 0x5000;
+KSPIN_LOCK cacheRegisterLock;
+KIRQL cacheRegisterOldIrql;
+#endif
+
+} // namespace
+
+extern "C" void NvPlatformRmCpuInitialize(void)
+{
+#if defined(_M_ARM64)
+    KeInitializeSpinLock(&cacheRegisterLock);
+#endif
+}
+
+#if defined(_M_ARM64)
+extern "C" NvU32 CP_READ_MIDR_REGISTER(void)
+{
+    return static_cast<NvU32>(_ReadStatusReg(Arm64MidrEl1));
+}
+
+extern "C" void CP_WRITE_CSSELR_REGISTER(NvU32 value)
+{
+    KeAcquireSpinLock(&cacheRegisterLock, &cacheRegisterOldIrql);
+    _WriteStatusReg(Arm64CsselrEl1, value);
+    __isb(_ARM64_BARRIER_SY);
+}
+
+extern "C" NvU32 CP_READ_CCSIDR_REGISTER(void)
+{
+    const NvU32 value = static_cast<NvU32>(
+        _ReadStatusReg(Arm64CcsidrEl1));
+    KeReleaseSpinLock(&cacheRegisterLock, cacheRegisterOldIrql);
+    return value;
+}
+#endif
+
 extern "C" int NvPlatformRmCpuId(
     int operation,
     int suboperation,

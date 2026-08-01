@@ -20,11 +20,14 @@
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <NvRmFilteredRoot>$(IntDir)windows-rm-profile</NvRmFilteredRoot>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <CompileAs>CompileAsC</CompileAs>
       <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)rm\include;$(RepoRoot)src\common\inc\swref;$(RepoRoot)src\common\inc\swref\published;$(RepoRoot)src\common\nvlink\inband\interface;$(RepoRoot)src\common\shared\inc;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc;$(RepoRoot)src\nvidia\inc;$(RepoRoot)src\nvidia\inc\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\generated;$(RepoRoot)src\nvidia\interface;$(RepoRoot)src\nvidia\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <ForcedIncludeFiles>$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>$(WindowsOpenRoot)rm\include\nvrm_windows_profile.h;$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <AdditionalOptions>/clang:-Wno-gnu-folding-constant /clang:-Wno-missing-field-initializers /clang:-Wno-unused-but-set-variable /clang:-Wno-unused-parameter %(AdditionalOptions)</AdditionalOptions>
       <OmitDefaultLibName>true</OmitDefaultLibName>
       <PreprocessorDefinitions>$(NvArchitectureDefinitions);_KERNEL_MODE;NV_KERNEL_MODE;_LANGUAGE_C;__NO_CTYPE;NVRM;LOCK_VAL_ENABLED=0;PORT_ATOMIC_64_BIT_SUPPORTED=1;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=1;PORT_MODULE_core=1;PORT_MODULE_cpu=1;PORT_MODULE_crypto=1;PORT_MODULE_debug=1;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=1;PORT_MODULE_string=1;PORT_MODULE_sync=1;PORT_MODULE_thread=1;PORT_MODULE_time=1;PORT_MODULE_util=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -756,7 +759,59 @@
       <ForcedIncludeFiles>$(IntDir)nvrm_version.h;$(RepoRoot)src\common\nvlink\interface\nvlink.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <AdditionalOptions>/clang:-Wno-sign-compare %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
+    <ClCompile Remove="$(RepoRoot)src\nvidia\generated\g_objgriddisplayless_nvoc.c;$(RepoRoot)src\nvidia\generated\g_dce_client_nvoc.c;$(RepoRoot)src\nvidia\src\libraries\libspdm\nvidia\nvspdm_rsa.c;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\library\spdm_crypt_lib\libspdm_crypt_asym.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\resource_desc.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rpc_common.c;$(RepoRoot)src\nvidia\src\kernel\vgpu\rpc.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\numa.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator_util.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\ada\kern_gpu_ad102.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\ampere\kern_gpu_ga100.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\blackwell\kern_gpu_gb100.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\blackwell\kern_gpu_gb10b.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\blackwell\kern_gpu_gb202.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\blackwell\kern_gpu_gb20b.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\hopper\kern_gpu_gh100.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\maxwell\kern_gpu_gm107.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\pascal\kern_gpu_gp100.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\rubin\kern_gpu_gr100.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\rubin\kern_gpu_gr102.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\t23x\kern_gpu_t234d.c;$(RepoRoot)src\nvidia\src\kernel\gpu\arch\turing\kern_gpu_tu102.c" />
+    <ClCompile Include="$(NvRmFilteredRoot)\gpu\mem_mgr\phys_mem_allocator\numa.c;$(NvRmFilteredRoot)\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator.c;$(NvRmFilteredRoot)\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator_util.c">
+      <Link>windows-rm-profile\gpu\mem_mgr\phys_mem_allocator\%(Filename)%(Extension)</Link>
+      <ObjectFileName>$(IntDir)windows-rm-profile-obj\%(Filename).obj</ObjectFileName>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include\hal;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\cryptlib_null;$(RepoRoot)src\nvidia\src\libraries\libspdm\nvidia;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(WindowsOpenRoot)rm\include\os_custom.h;$(IntDir)nvrm_version.h;$(RepoRoot)src\common\nvlink\interface\nvlink.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <PreprocessorDefinitions>INCLUDE_NVLINK_LIB;LIBSPDM_CONFIG=&lt;nvspdm_rmconfig.h&gt;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/clang:-Wno-bitfield-constant-conversion /clang:-Wno-implicit-enum-enum-cast /clang:-Wno-sign-compare /clang:-Wno-unused-but-set-parameter /clang:-Wno-unused-variable %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(NvRmFilteredRoot)\gpu\arch\ada\kern_gpu_ad102.c;$(NvRmFilteredRoot)\gpu\arch\ampere\kern_gpu_ga100.c;$(NvRmFilteredRoot)\gpu\arch\blackwell\kern_gpu_gb100.c;$(NvRmFilteredRoot)\gpu\arch\blackwell\kern_gpu_gb10b.c;$(NvRmFilteredRoot)\gpu\arch\blackwell\kern_gpu_gb202.c;$(NvRmFilteredRoot)\gpu\arch\blackwell\kern_gpu_gb20b.c;$(NvRmFilteredRoot)\gpu\arch\hopper\kern_gpu_gh100.c;$(NvRmFilteredRoot)\gpu\arch\maxwell\kern_gpu_gm107.c;$(NvRmFilteredRoot)\gpu\arch\pascal\kern_gpu_gp100.c;$(NvRmFilteredRoot)\gpu\arch\rubin\kern_gpu_gr100.c;$(NvRmFilteredRoot)\gpu\arch\rubin\kern_gpu_gr102.c;$(NvRmFilteredRoot)\gpu\arch\t23x\kern_gpu_t234d.c;$(NvRmFilteredRoot)\gpu\arch\turing\kern_gpu_tu102.c">
+      <Link>windows-rm-profile\gpu\arch\%(Filename)%(Extension)</Link>
+      <ObjectFileName>$(IntDir)windows-rm-profile-obj\%(Filename).obj</ObjectFileName>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include\hal;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\cryptlib_null;$(RepoRoot)src\nvidia\src\libraries\libspdm\nvidia;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(WindowsOpenRoot)rm\include\os_custom.h;$(IntDir)nvrm_version.h;$(RepoRoot)src\common\nvlink\interface\nvlink.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <PreprocessorDefinitions>INCLUDE_NVLINK_LIB;LIBSPDM_CONFIG=&lt;nvspdm_rmconfig.h&gt;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/clang:-Wno-bitfield-constant-conversion /clang:-Wno-implicit-enum-enum-cast /clang:-Wno-sign-compare /clang:-Wno-unused-but-set-parameter /clang:-Wno-unused-variable %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(NvRmFilteredRoot)\rmapi\resource_desc.c">
+      <Link>windows-rm-profile\rmapi\resource_desc.c</Link>
+      <ObjectFileName>$(IntDir)windows-rm-profile-obj\resource_desc.obj</ObjectFileName>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\nvidia\src\kernel\rmapi;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="$(NvRmFilteredRoot)\rmapi\rpc_common.c">
+      <Link>windows-rm-profile\rmapi\rpc_common.c</Link>
+      <ObjectFileName>$(IntDir)windows-rm-profile-obj\rpc_common.obj</ObjectFileName>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;$(RepoRoot)src\nvidia\src\kernel\rmapi;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(WindowsOpenRoot)rm\include\os_custom.h;$(IntDir)nvrm_version.h;$(RepoRoot)src\common\nvlink\interface\nvlink.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(NvRmFilteredRoot)\vgpu\rpc.c">
+      <Link>windows-rm-profile\vgpu\rpc.c</Link>
+      <ObjectFileName>$(IntDir)windows-rm-profile-obj\rpc.obj</ObjectFileName>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(IntDir)nvrm_version.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <AdditionalOptions>/clang:-Wno-unused-variable %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(NvRmFilteredRoot)\libspdm\nvidia\nvspdm_rsa.c">
+      <Link>windows-rm-profile\libspdm\nvspdm_rsa.c</Link>
+      <ObjectFileName>$(IntDir)windows-rm-profile-obj\nvspdm_rsa.obj</ObjectFileName>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include\hal;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\cryptlib_null;$(RepoRoot)src\nvidia\src\libraries\libspdm\nvidia;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>LIBSPDM_CONFIG=&lt;nvspdm_rmconfig.h&gt;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/clang:-Wno-unused-variable %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="$(NvRmFilteredRoot)\libspdm\nvidia\libspdm_crypt_asym.c">
+      <Link>windows-rm-profile\libspdm\libspdm_crypt_asym.c</Link>
+      <ObjectFileName>$(IntDir)windows-rm-profile-obj\libspdm_crypt_asym.obj</ObjectFileName>
+      <AdditionalIncludeDirectories>$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include\hal;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\nvidia;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>LIBSPDM_CONFIG=&lt;nvspdm_rmconfig.h&gt;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/clang:-Wno-unused-parameter %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
   </ItemGroup>
+  <Target Name="GenerateWindowsRmProfile" BeforeTargets="ClCompile">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(WindowsOpenRoot)rm\Generate-WindowsRmProfile.ps1&quot; -RepositoryRoot &quot;$(MSBuildProjectDirectory)\..\..\..&quot; -OutputRoot &quot;$(NvRmFilteredRoot)&quot;" />
+  </Target>
   <Target Name="GenerateNvRmVersionHeader" BeforeTargets="ClCompile">
     <WriteLinesToFile
       File="$(IntDir)nvrm_version.h"

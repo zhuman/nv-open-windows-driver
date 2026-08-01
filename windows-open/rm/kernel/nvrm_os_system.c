@@ -400,6 +400,13 @@ NvBool osRemoveGpuSupported(void)
     return NV_FALSE;
 }
 
+void osRemoveGpu(NvU32 domain, NvU8 bus, NvU8 device)
+{
+    (void)domain;
+    (void)bus;
+    (void)device;
+}
+
 NvBool osIsSwPreInitOnly(OS_GPU_INFO* pOsGpuInfo)
 {
     (void)pOsGpuInfo;
@@ -526,6 +533,34 @@ NV_STATUS osIsVfioPciCorePresent(void)
     return NV_ERR_NOT_SUPPORTED;
 }
 
+void osWakeRemoveVgpu(NvU32 gpuId, NvU32 returnStatus)
+{
+    (void)gpuId;
+    (void)returnStatus;
+}
+
+void osModifyGpuSwStatePersistence(OS_GPU_INFO* osGpuInfo, NvBool enable)
+{
+    (void)osGpuInfo;
+    (void)enable;
+}
+
+NV_STATUS osGC6PowerControl(
+    OBJGPU* pGpu,
+    NvU32 function,
+    NvU32* result)
+{
+    (void)pGpu;
+    (void)function;
+    (void)result;
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+void osDisableConsoleManagement(OBJGPU* pGpu)
+{
+    (void)pGpu;
+}
+
 NV_STATUS hypervisorInjectInterrupt_IMPL(
     void* pHypervisor,
     void* pVgpuNsIntr)
@@ -596,6 +631,25 @@ NV_STATUS osGetUefiVariable(
 NV_STATUS osInitGetAcpiTable(void)
 {
     return NV_OK;
+}
+
+NV_STATUS osGetSmbiosTable(
+    void** ppBaseVAddr,
+    NvU64* pLength,
+    NvU64* pNumSubTypes,
+    NvU32* pVersion)
+{
+    return NvPlatformRmGetSmbiosTable(
+        ppBaseVAddr,
+        pLength,
+        pNumSubTypes,
+        pVersion);
+}
+
+void osPutSmbiosTable(void* pBaseVAddr, NvU64 length)
+{
+    (void)length;
+    NvPlatformRmPutSmbiosTable(pBaseVAddr);
 }
 
 NV_STATUS osGetAcpiTable(
