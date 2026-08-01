@@ -56,6 +56,7 @@ void NvPlatformRmGpuMarkShutdown(NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 NvBool NvPlatformRmGpuIsShutdown(const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 void NvPlatformRmGpuRequireClientCleanup(NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 NvBool NvPlatformRmGpuNeedsClientCleanup(const NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
+void NvPlatformRmGpuCompleteClientCleanup(NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 
 #ifdef __cplusplus
 }

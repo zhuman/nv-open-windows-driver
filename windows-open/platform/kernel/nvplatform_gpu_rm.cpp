@@ -73,6 +73,7 @@ extern "C" void NvPlatformRmGpuContextDestroy(
     }
 
     NT_ASSERT(gpuContext->state == static_cast<LONG>(GpuContextState::Available));
+    NT_ASSERT(!NvPlatformRmGpuNeedsClientCleanup(gpuContext));
     ExFreePoolWithTag(gpuContext, GpuContextPoolTag);
 }
 
@@ -123,6 +124,11 @@ extern "C" NV_STATUS NvPlatformRmGpuGetPublishedRmGpu(
     if (gpuContext == nullptr || rmGpu == nullptr)
     {
         return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (NvPlatformRmGpuIsShutdown(gpuContext))
+    {
+        return NV_ERR_INVALID_STATE;
     }
 
     if (InterlockedCompareExchange(
@@ -227,4 +233,13 @@ extern "C" NvBool NvPlatformRmGpuNeedsClientCleanup(
             TRUE) != FALSE
         ? NV_TRUE
         : NV_FALSE;
+}
+
+extern "C" void NvPlatformRmGpuCompleteClientCleanup(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    if (gpuContext != nullptr)
+    {
+        InterlockedExchange(&gpuContext->clientCleanupRequired, FALSE);
+    }
 }

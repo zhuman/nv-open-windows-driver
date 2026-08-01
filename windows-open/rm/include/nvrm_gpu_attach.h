@@ -18,6 +18,9 @@ NV_STATUS NvRmDetachGpuContext(
     NvU32 gpuInstance,
     NvU32 gpuId);
 
+NV_STATUS NvRmCleanupGpuClients(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
+
 #ifdef __cplusplus
 }
 #endif

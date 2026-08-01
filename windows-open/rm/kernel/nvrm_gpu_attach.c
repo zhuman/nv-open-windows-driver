@@ -2,6 +2,7 @@
 #include "gpu/gpu.h"
 #include "gpu_mgr/gpu_mgr.h"
 #include "rmapi/rmapi.h"
+#include "g_rs_server_nvoc.h"
 #include "nvrm_gpu_attach.h"
 
 NV_STATUS NvRmAttachGpuContext(
@@ -86,6 +87,14 @@ NV_STATUS NvRmDetachGpuContext(
         return NV_ERR_INVALID_ARGUMENT;
     }
 
+    NvPlatformRmGpuMarkShutdown(gpuContext);
+
+    status = NvRmCleanupGpuClients(gpuContext);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
     status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_NONE, RM_LOCK_MODULES_INIT);
     if (status != NV_OK)
     {
@@ -99,5 +108,78 @@ NV_STATUS NvRmDetachGpuContext(
     }
 
     rmapiLockRelease();
+    return status;
+}
+
+NV_STATUS NvRmCleanupGpuClients(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    RM_API* pRmApi;
+    NvHandle* pClientHandles = NULL;
+    NvU32 clientCount = 0;
+    NV_STATUS status;
+
+    if (gpuContext == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (!NvPlatformRmGpuNeedsClientCleanup(gpuContext))
+    {
+        return NV_OK;
+    }
+
+    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_NONE, RM_LOCK_MODULES_CLIENT);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = rmapiGetClientHandlesFromOSInfo(
+        gpuContext,
+        &pClientHandles,
+        &clientCount);
+    if (status == NV_WARN_NOTHING_TO_DO)
+    {
+        status = NV_OK;
+    }
+    else if (status == NV_OK)
+    {
+        pRmApi = rmapiGetInterface(RMAPI_API_LOCK_INTERNAL);
+        status = pRmApi->DisableClients(pRmApi, pClientHandles, clientCount);
+        if (status == NV_OK)
+        {
+            status = serverFreeDisabledClients(
+                &g_resServ,
+                RM_LOCK_STATES_API_LOCK_ACQUIRED,
+                0);
+        }
+    }
+
+    portMemFree(pClientHandles);
+
+    if (status == NV_OK)
+    {
+        NvHandle* pRemainingHandles = NULL;
+        NvU32 remainingCount = 0;
+        NV_STATUS verifyStatus = rmapiGetClientHandlesFromOSInfo(
+            gpuContext,
+            &pRemainingHandles,
+            &remainingCount);
+
+        portMemFree(pRemainingHandles);
+        if (verifyStatus != NV_WARN_NOTHING_TO_DO)
+        {
+            status = verifyStatus == NV_OK ? NV_ERR_IN_USE : verifyStatus;
+        }
+    }
+
+    rmapiLockRelease();
+
+    if (status == NV_OK)
+    {
+        NvPlatformRmGpuCompleteClientCleanup(gpuContext);
+    }
+
     return status;
 }
