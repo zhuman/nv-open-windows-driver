@@ -1,6 +1,10 @@
 #pragma once
 
+#if defined(NV_USER_MODE)
+#include <windows.h>
+#else
 #include <ntddk.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

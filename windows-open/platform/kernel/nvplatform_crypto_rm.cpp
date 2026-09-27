@@ -1,9 +1,27 @@
+#if defined(NV_USER_MODE)
+#include <windows.h>
+#else
 #include <ntddk.h>
+#endif
 #include <bcrypt.h>
 
 #include "nvplatform_crypto_rm.h"
 
+#if defined(NV_USER_MODE)
+#pragma comment(lib, "bcrypt.lib")
+#define ExAllocatePool2(flags, size, tag) \
+    ((void)(flags), (void)(tag), HeapAlloc(GetProcessHeap(), 0, (size)))
+#define ExFreePoolWithTag(allocation, tag) \
+    ((void)(tag), HeapFree(GetProcessHeap(), 0, (allocation)))
+#define POOL_FLAG_NON_PAGED 0
+#define PASSIVE_LEVEL 0
+#define KeGetCurrentIrql() PASSIVE_LEVEL
+#define NT_SUCCESS(status) (static_cast<NTSTATUS>(status) >= 0)
+#define STATUS_INSUFFICIENT_RESOURCES static_cast<NTSTATUS>(0xC000009AL)
+#define MAXULONG 0xffffffffUL
+#else
 #pragma comment(lib, "cng.lib")
+#endif
 
 namespace {
 

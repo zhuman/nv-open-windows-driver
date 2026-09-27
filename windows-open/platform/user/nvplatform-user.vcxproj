@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64"><Configuration>Debug</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{1B28EB92-65C5-4C7F-B5A6-0F36626D6C72}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>NvPlatformUser</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>ClangCL</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)..\src\nvidia\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ExceptionHandling>false</ExceptionHandling>
+      <LanguageStandard>stdcpp23</LanguageStandard>
+      <PreprocessorDefinitions>NV_USER_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="nvplatform_common.cpp" />
+    <ClCompile Include="..\kernel\nvplatform_crypto_rm.cpp" />
+    <ClCompile Include="nvplatform_cpu_rm.cpp" />
+    <ClCompile Include="nvplatform_event.cpp" />
+    <ClCompile Include="nvplatform_file_rm.cpp" />
+    <ClCompile Include="nvplatform_gpu_rm.cpp" />
+    <ClCompile Include="nvplatform_memory.cpp" />
+    <ClCompile Include="nvplatform_memory_rm.cpp" />
+    <ClCompile Include="nvplatform_mmio_rm.cpp" />
+    <ClCompile Include="nvplatform_pci.cpp" />
+    <ClCompile Include="nvplatform_process_rm.cpp" />
+    <ClCompile Include="nvplatform_registry_rm.cpp" />
+    <ClCompile Include="nvplatform_sync.cpp" />
+    <ClCompile Include="nvplatform_system_rm.cpp" />
+    <ClCompile Include="nvplatform_system_work.cpp" />
+    <ClCompile Include="nvplatform_thread.cpp" />
+    <ClCompile Include="nvplatform_time_rm.cpp" />
+    <ClCompile Include="nvplatform_wait_rm.cpp" />
+  </ItemGroup>
+  <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
+    <ItemGroup>
+      <DriverProjectAttributes Include="$(ProjectGuid)">
+        <DriverType>Library</DriverType>
+        <PlatformToolset>$(PlatformToolset)</PlatformToolset>
+        <IsKernelModeToolset>false</IsKernelModeToolset>
+        <IsUserModeToolset>false</IsUserModeToolset>
+        <ProjectPath>$(MSBuildProjectFullPath)</ProjectPath>
+      </DriverProjectAttributes>
+    </ItemGroup>
+  </Target>
+  <Target Name="GetPackageFiles" Returns="@(PackageFiles)" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

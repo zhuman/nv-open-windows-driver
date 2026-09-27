@@ -7,9 +7,9 @@
     <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{B37EC62F-F957-4EED-B69D-87E9DF43F0A7}</ProjectGuid>
+    <ProjectGuid Condition="'$(ProjectGuid)' == ''">{B37EC62F-F957-4EED-B69D-87E9DF43F0A7}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>NvRmOsKernel</RootNamespace>
+    <RootNamespace Condition="'$(RootNamespace)' == ''">NvRmOsKernel</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -27,8 +27,10 @@
       <ForcedIncludeFiles>$(WindowsOpenRoot)rm\include\nvrm_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <OmitDefaultLibName>true</OmitDefaultLibName>
       <PreprocessorDefinitions>$(NvArchitectureDefinitions);_KERNEL_MODE;NV_KERNEL_MODE;_LANGUAGE_C;NVRM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
-      <RuntimeLibrary Condition="'$(Configuration)' == 'Release'">MultiThreaded</RuntimeLibrary>
+      <AdditionalOptions Condition="'$(NvRmUserModeBuild)' == 'true'">/U_KERNEL_MODE /UNV_KERNEL_MODE /UPORT_IS_KERNEL_BUILD /DPORT_IS_KERNEL_BUILD=0 /DNV_USER_MODE %(AdditionalOptions)</AdditionalOptions>
+      <RuntimeLibrary Condition="'$(NvRmUserModeBuild)' == 'true'">MultiThreaded</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(NvRmUserModeBuild)' != 'true' and '$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(NvRmUserModeBuild)' != 'true' and '$(Configuration)' == 'Release'">MultiThreaded</RuntimeLibrary>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -153,8 +155,17 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\platform\kernel\nvplatform-kernel.vcxproj">
+    <ProjectReference Include="..\..\platform\kernel\nvplatform-kernel.vcxproj" Condition="'$(NvRmUserModeBuild)' != 'true'">
       <Project>{9C8369B9-FB13-4DEB-B215-9C4B4B77E5DA}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\platform\user\nvplatform-user.vcxproj" Condition="'$(NvRmUserModeBuild)' == 'true'">
+      <Project>{1B28EB92-65C5-4C7F-B5A6-0F36626D6C72}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\nvport\user\nvport-user.vcxproj" Condition="'$(NvRmUserModeBuild)' == 'true'">
+      <Project>{85929975-D645-46C4-91E5-875CCFB3227D}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\core\nvrm-core-user.vcxproj" Condition="'$(NvRmUserModeBuild)' == 'true'">
+      <Project>{98A9AA62-CB4A-4BBA-9A80-A761D2398910}</Project>
     </ProjectReference>
   </ItemGroup>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
