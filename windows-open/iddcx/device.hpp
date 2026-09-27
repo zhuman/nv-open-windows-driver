@@ -7,6 +7,11 @@
 #include "adapter.hpp"
 #include "common_services.hpp"
 #include "hardware_services.hpp"
+#include "nvplatform_gpu_rm.h"
+#include "nvplatform_memory_user.h"
+#include "nvplatform_mmio_user.h"
+#include "nvplatform_pci.h"
+#include "nvport_windows.h"
 
 namespace nv::iddcx {
 
@@ -15,9 +20,14 @@ struct DeviceContext final
     NV_COMMON_HOST_CONTEXT commonHost;
     Adapter adapter;
     ConfigSpace configSpace;
+    void* pciConfigRegistration;
     RegisterAperture registerAperture;
+    void* mmioRegistration;
     DmaEngine dmaEngine;
+    void* dmaRegistration;
     Interrupt interrupt;
+    NV_PLATFORM_RM_GPU_CONTEXT* rmGpuContext;
+    bool nvPortInitialized;
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DeviceContext, GetDeviceContext);

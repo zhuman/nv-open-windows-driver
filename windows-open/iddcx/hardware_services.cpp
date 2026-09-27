@@ -376,6 +376,11 @@ bool RegisterAperture::IsMapped() const noexcept
     return address_ != nullptr;
 }
 
+volatile void* RegisterAperture::Address() const noexcept
+{
+    return address_;
+}
+
 SIZE_T RegisterAperture::Length() const noexcept
 {
     return length_;
@@ -466,6 +471,11 @@ NTSTATUS Interrupt::Initialize(
         {
             Reset();
         }
+        else
+        {
+            vector_ = translated->u.Interrupt.Vector;
+            count_ = 1;
+        }
 
         return status;
     }
@@ -480,11 +490,23 @@ void Interrupt::Reset() noexcept
         WdfObjectDelete(handle_);
         handle_ = nullptr;
     }
+    vector_ = 0;
+    count_ = 0;
 }
 
 WDFINTERRUPT Interrupt::Handle() const noexcept
 {
     return handle_;
+}
+
+ULONG Interrupt::Vector() const noexcept
+{
+    return vector_;
+}
+
+ULONG Interrupt::Count() const noexcept
+{
+    return count_;
 }
 
 _Use_decl_annotations_

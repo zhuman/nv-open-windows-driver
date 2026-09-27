@@ -76,6 +76,7 @@ public:
     NTSTATUS Read32(_In_ SIZE_T offset, _Out_ ULONG* value) const noexcept;
 
     [[nodiscard]] bool IsMapped() const noexcept;
+    [[nodiscard]] volatile void* Address() const noexcept;
     [[nodiscard]] SIZE_T Length() const noexcept;
     [[nodiscard]] const BootIdentity* Identity() const noexcept;
 
@@ -109,12 +110,16 @@ public:
     void Reset() noexcept;
 
     [[nodiscard]] WDFINTERRUPT Handle() const noexcept;
+    [[nodiscard]] ULONG Vector() const noexcept;
+    [[nodiscard]] ULONG Count() const noexcept;
 
 private:
     static EVT_WDF_INTERRUPT_ISR Isr;
     static EVT_WDF_INTERRUPT_DPC Dpc;
 
     WDFINTERRUPT handle_;
+    ULONG vector_;
+    ULONG count_;
 };
 
 } // namespace nv::iddcx
