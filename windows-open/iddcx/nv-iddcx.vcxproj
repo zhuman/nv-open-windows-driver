@@ -29,7 +29,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <DisableSpecificWarnings>4471;4505;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-      <AdditionalIncludeDirectories>$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)nvport\kernel;$(WindowsOpenRoot)rm\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)nvport\kernel;$(WindowsOpenRoot)rm\include;$(WindowsOpenRoot)modeset;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>false</ExceptionHandling>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <PreprocessorDefinitions>UMDF_DRIVER;NV_USER_MODE;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=10;IDDCX_MINIMUM_VERSION_REQUIRED=10;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -76,6 +76,9 @@
     </ProjectReference>
     <ProjectReference Include="..\rm\kernel\nvrm-os-user.vcxproj" Condition="'$(NvRmUserLinkProbe)' == 'true'">
       <Project>{68F23533-123F-4483-8909-B5FA4532DC3E}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\modeset\nvkms-user.vcxproj" Condition="'$(NvRmUserLinkProbe)' == 'true'">
+      <Project>{845C8A81-EF0D-4B2E-A34A-69AB1B69D55C}</Project>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

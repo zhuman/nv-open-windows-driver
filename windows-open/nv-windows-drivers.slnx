@@ -7,6 +7,7 @@
   <Project Path="common/user/nvcommon-user.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="20d7d8a6-432f-4dfa-8dba-7affd8aa1e61" />
   <Project Path="iddcx/nv-iddcx.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="9269e1a1-9305-4ba4-894c-4d31bd78060e" />
   <Project Path="kmdod/nv-kmdod.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="efd07f6e-f079-4910-b2d3-4192344c9911" />
+  <Project Path="modeset/nvkms-user.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="845c8a81-ef0d-4b2e-a34a-69ab1b69d55c" />
   <Project Path="nvport/kernel/nvport-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="695d7a36-27e0-4d57-a593-4b52e93a67b0" />
   <Project Path="nvport/user/nvport-user.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="85929975-d645-46c4-91e5-875ccfb3227d" />
   <Project Path="platform/kernel/nvplatform-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="9c8369b9-fb13-4deb-b215-9c4b4b77e5da" />

@@ -4,6 +4,7 @@
 #if defined(NV_RM_USER_LINK_PROBE)
 #include "nvrm_gpu_attach.h"
 #include "nvplatform_mmio_rm.h"
+#include "nvkms_windows.h"
 #include "rmosxfac.h"
 #endif
 
@@ -756,6 +757,31 @@ NTSTATUS PrepareHardware(
         "NvRmInitializeGpuFirmware: 0x%08X",
         firmwareStatus);
     if (firmwareStatus != NV_OK)
+    {
+        DestroyRmGpuContext(context);
+        context->interrupt.Reset();
+        NvPlatformUnregisterDmaProvider(context->dmaRegistration);
+        context->dmaRegistration = nullptr;
+        context->dmaEngine.Reset();
+        NvPlatformUnregisterMmioAperture(context->mmioRegistration);
+        context->mmioRegistration = nullptr;
+        context->registerAperture.Reset();
+        NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
+        context->pciConfigRegistration = nullptr;
+        context->configSpace.Reset();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+
+    NvHandle modesetClientHandle = 0;
+    const NV_STATUS modesetProbeStatus = NvKmsWindowsProbeRmClient(
+        &modesetClientHandle);
+    TraceEvents(
+        modesetProbeStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "NvKmsWindowsProbeRmClient: 0x%08X client=0x%08X",
+        modesetProbeStatus,
+        modesetClientHandle);
+    if (modesetProbeStatus != NV_OK)
     {
         DestroyRmGpuContext(context);
         context->interrupt.Reset();
