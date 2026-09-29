@@ -287,6 +287,7 @@ void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
 
     if (context->rmGpuAttached)
     {
+        NvKmsWindowsUnregisterGpu(context->rmGpuId);
         const NV_STATUS status = NvRmDetachGpuContext(
             context->rmGpuContext,
             context->rmGpuInstance,
@@ -772,6 +773,21 @@ NTSTATUS PrepareHardware(
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
+    const NV_STATUS modesetRegisterStatus = identity != nullptr
+        ? NvKmsWindowsRegisterGpu(
+            context->rmGpuId,
+            identity->domain,
+            identity->bus,
+            identity->device,
+            identity->function,
+            context->rmGpuContext)
+        : NV_ERR_INVALID_STATE;
+    if (modesetRegisterStatus != NV_OK)
+    {
+        DestroyRmGpuContext(context);
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+
     NvHandle modesetClientHandle = 0;
     const NV_STATUS modesetProbeStatus = NvKmsWindowsProbeRmClient(
         &modesetClientHandle);
@@ -794,6 +810,26 @@ NTSTATUS PrepareHardware(
         NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
         context->pciConfigRegistration = nullptr;
         context->configSpace.Reset();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+
+    NV_KMS_WINDOWS_GPU_INFO modesetGpuInfo = {};
+    const NV_STATUS modesetEnumerationStatus =
+        NvKmsWindowsProbeGpuEnumeration(&modesetGpuInfo);
+    TraceEvents(
+        modesetEnumerationStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "NvKmsWindowsProbeGpuEnumeration: 0x%08X count=%u gpuId=0x%08X pci=%04X:%02X:%02X.%u",
+        modesetEnumerationStatus,
+        modesetGpuInfo.count,
+        modesetGpuInfo.gpuId,
+        modesetGpuInfo.domain,
+        modesetGpuInfo.bus,
+        modesetGpuInfo.slot,
+        modesetGpuInfo.function);
+    if (modesetEnumerationStatus != NV_OK)
+    {
+        DestroyRmGpuContext(context);
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 

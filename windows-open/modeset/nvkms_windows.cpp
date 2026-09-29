@@ -1,9 +1,19 @@
 #include "nvkms_windows.h"
 
 #include "nv-kernel-rmapi-ops.h"
+#include "nv-gpu-info.h"
 #include "nvkms-rmapi.h"
 
 #include <class/cl0000.h>
+#include <windows.h>
+
+namespace {
+
+SRWLOCK gpuRegistryLock = SRWLOCK_INIT;
+nv_gpu_info_t registeredGpu = {};
+NvBool gpuRegistered = NV_FALSE;
+
+}
 
 extern "C" {
 void Nv01FreeKernel(NVOS00_PARAMETERS*);
@@ -98,4 +108,90 @@ extern "C" NV_STATUS NvKmsWindowsProbeRmClient(NvHandle* clientHandle)
 
     status = nvRmApiFree(*clientHandle, *clientHandle, *clientHandle);
     return status;
+}
+
+extern "C" NV_STATUS NvKmsWindowsRegisterGpu(
+    NvU32 gpuId,
+    NvU32 domain,
+    NvU8 bus,
+    NvU8 slot,
+    NvU8 function,
+    void* osDevice)
+{
+    if (gpuId == 0 || osDevice == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    AcquireSRWLockExclusive(&gpuRegistryLock);
+    NV_STATUS status = NV_OK;
+    if (gpuRegistered && registeredGpu.gpu_id != gpuId)
+    {
+        status = NV_ERR_IN_USE;
+    }
+    else
+    {
+        registeredGpu.gpu_id = gpuId;
+        registeredGpu.pci_info.domain = domain;
+        registeredGpu.pci_info.bus = bus;
+        registeredGpu.pci_info.slot = slot;
+        registeredGpu.pci_info.function = function;
+        registeredGpu.needs_numa_setup = NV_FALSE;
+        registeredGpu.is_soc_disp = NV_FALSE;
+        registeredGpu.os_device_ptr = osDevice;
+        gpuRegistered = NV_TRUE;
+    }
+    ReleaseSRWLockExclusive(&gpuRegistryLock);
+    return status;
+}
+
+extern "C" void NvKmsWindowsUnregisterGpu(NvU32 gpuId)
+{
+    AcquireSRWLockExclusive(&gpuRegistryLock);
+    if (gpuRegistered && registeredGpu.gpu_id == gpuId)
+    {
+        registeredGpu = {};
+        gpuRegistered = NV_FALSE;
+    }
+    ReleaseSRWLockExclusive(&gpuRegistryLock);
+}
+
+extern "C" NvU32 nvkms_enumerate_gpus(nv_gpu_info_t* gpuInfo)
+{
+    if (gpuInfo == nullptr)
+    {
+        return 0;
+    }
+
+    AcquireSRWLockShared(&gpuRegistryLock);
+    const NvU32 count = gpuRegistered ? 1 : 0;
+    if (gpuRegistered)
+    {
+        gpuInfo[0] = registeredGpu;
+    }
+    ReleaseSRWLockShared(&gpuRegistryLock);
+    return count;
+}
+
+extern "C" NV_STATUS NvKmsWindowsProbeGpuEnumeration(
+    NV_KMS_WINDOWS_GPU_INFO* gpuInfo)
+{
+    if (gpuInfo == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    nv_gpu_info_t enumeratedGpus[NV_MAX_GPUS] = {};
+    gpuInfo->count = nvkms_enumerate_gpus(enumeratedGpus);
+    if (gpuInfo->count == 0)
+    {
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+
+    gpuInfo->gpuId = enumeratedGpus[0].gpu_id;
+    gpuInfo->domain = enumeratedGpus[0].pci_info.domain;
+    gpuInfo->bus = enumeratedGpus[0].pci_info.bus;
+    gpuInfo->slot = enumeratedGpus[0].pci_info.slot;
+    gpuInfo->function = enumeratedGpus[0].pci_info.function;
+    return NV_OK;
 }
