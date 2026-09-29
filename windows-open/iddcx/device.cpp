@@ -3,6 +3,7 @@
 
 #if defined(NV_RM_USER_LINK_PROBE)
 #include "nvrm_gpu_attach.h"
+#include "nvplatform_mmio_rm.h"
 #include "rmosxfac.h"
 #endif
 
@@ -190,6 +191,21 @@ NTSTATUS CreateRmGpuContext(
 void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
 {
 #if defined(NV_RM_USER_LINK_PROBE)
+    if (context->rmDeviceOpened)
+    {
+        const NV_STATUS status = NvRmCloseGpuDevice(context->rmClientHandle);
+        TraceEvents(
+            status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "NvRmCloseGpuDevice: 0x%08X client=0x%08X",
+            status,
+            context->rmClientHandle);
+        context->rmDeviceOpened = false;
+        context->rmClientHandle = 0;
+        context->rmDeviceHandle = 0;
+        context->rmSubdeviceHandle = 0;
+    }
+
     if (context->rmGpuAttached)
     {
         const NV_STATUS status = NvRmDetachGpuContext(
@@ -607,6 +623,19 @@ NTSTATUS PrepareHardware(
     }
 
 #if defined(NV_RM_USER_LINK_PROBE)
+    constexpr SIZE_T PmcBoot1Offset = 0x00000004;
+    const ULONG directBoot1 =
+        context->registerAperture.ReadRegister32(PmcBoot1Offset);
+    const ULONG routedBoot1 = NvPlatformRmReadRegister32(
+        static_cast<const volatile UCHAR*>(
+            context->registerAperture.Address()) + PmcBoot1Offset);
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "RM pre-attach BOOT_1: direct=0x%08X routed=0x%08X",
+        directBoot1,
+        routedBoot1);
+
     context->rmGpuInstance = NV_U32_MAX;
     context->rmDeviceInstance = NV_U32_MAX;
     context->rmGpuId = 0;
@@ -639,6 +668,41 @@ NTSTATUS PrepareHardware(
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
     context->rmGpuAttached = true;
+
+    NV_RM_GPU_OPEN_STAGE openStage = NV_RM_GPU_OPEN_STAGE_ROOT_CLIENT;
+    const NV_STATUS openStatus = NvRmOpenGpuDevice(
+        context->rmGpuContext,
+        context->rmGpuId,
+        context->rmDeviceInstance,
+        &context->rmClientHandle,
+        &context->rmDeviceHandle,
+        &context->rmSubdeviceHandle,
+        &openStage);
+    TraceEvents(
+        openStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "NvRmOpenGpuDevice: 0x%08X stage=%u client=0x%08X device=0x%08X subdevice=0x%08X",
+        openStatus,
+        static_cast<unsigned>(openStage),
+        context->rmClientHandle,
+        context->rmDeviceHandle,
+        context->rmSubdeviceHandle);
+    if (openStatus != NV_OK)
+    {
+        DestroyRmGpuContext(context);
+        context->interrupt.Reset();
+        NvPlatformUnregisterDmaProvider(context->dmaRegistration);
+        context->dmaRegistration = nullptr;
+        context->dmaEngine.Reset();
+        NvPlatformUnregisterMmioAperture(context->mmioRegistration);
+        context->mmioRegistration = nullptr;
+        context->registerAperture.Reset();
+        NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
+        context->pciConfigRegistration = nullptr;
+        context->configSpace.Reset();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+    context->rmDeviceOpened = true;
 #endif
 
     return STATUS_SUCCESS;

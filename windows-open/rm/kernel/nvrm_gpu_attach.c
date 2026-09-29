@@ -6,6 +6,12 @@
 #include "g_rs_server_nvoc.h"
 #include "nvrm_gpu_attach.h"
 
+#include <class/cl0000.h>
+#include <class/cl0080.h>
+#include <class/cl2080.h>
+#include <ctrl/ctrl0000/ctrl0000gpu.h>
+#include <ctrl/ctrl0080/ctrl0080gpu.h>
+
 NV_STATUS NvRmAttachGpuContext(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     NvU32* gpuInstance,
@@ -53,6 +59,7 @@ NV_STATUS NvRmAttachGpuContext(
     attachArg.pOsAttachArg = gpuContext;
     attachArg.iovaspaceId = NV_U32_MAX;
     attachArg.cpuNumaNodeId = NV0000_CTRL_NO_NUMA_NODE;
+    attachArg.bRequestFwClientRm = NV_TRUE;
 
     status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_NONE, RM_LOCK_MODULES_INIT);
     if (status != NV_OK)
@@ -151,6 +158,154 @@ NV_STATUS NvRmDetachGpuContext(
     gpumgrThreadDisableExpandedGpuVisibility();
     rmapiLockRelease();
     return status;
+}
+
+NV_STATUS NvRmOpenGpuDevice(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    NvU32 gpuId,
+    NvU32 expectedDeviceInstance,
+    NvHandle* clientHandle,
+    NvHandle* deviceHandle,
+    NvHandle* subdeviceHandle,
+    NV_RM_GPU_OPEN_STAGE* openStage)
+{
+    API_SECURITY_INFO securityInfo = {0};
+    NvHandle allocatedClientHandle = NV01_NULL_OBJECT;
+    NV0000_CTRL_GPU_GET_ID_INFO_V2_PARAMS idInfoParams = {0};
+    NV0080_ALLOC_PARAMETERS deviceAllocParams = {0};
+    NV0080_CTRL_GPU_GET_NUM_SUBDEVICES_PARAMS subdeviceCountParams = {0};
+    NV2080_ALLOC_PARAMETERS subdeviceAllocParams = {0};
+    RM_API* pRmApi;
+    NV_STATUS status;
+
+    if (gpuContext == NULL || clientHandle == NULL ||
+        deviceHandle == NULL || subdeviceHandle == NULL || openStage == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    *clientHandle = NV01_NULL_OBJECT;
+    *deviceHandle = NV01_NULL_OBJECT;
+    *subdeviceHandle = NV01_NULL_OBJECT;
+    *openStage = NV_RM_GPU_OPEN_STAGE_ROOT_CLIENT;
+
+    securityInfo.privLevel = RS_PRIV_LEVEL_KERNEL;
+    securityInfo.paramLocation = PARAM_LOCATION_KERNEL;
+    securityInfo.gpuOsInfo = gpuContext;
+    securityInfo.clientOSInfo = gpuContext;
+
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    pRmApi = rmapiGetInterface(RMAPI_EXTERNAL_KERNEL);
+    status = pRmApi->AllocWithSecInfo(
+        pRmApi,
+        NV01_NULL_OBJECT,
+        NV01_NULL_OBJECT,
+        clientHandle,
+        NV01_ROOT,
+        NV_PTR_TO_NvP64(&allocatedClientHandle),
+        sizeof(allocatedClientHandle),
+        RMAPI_ALLOC_FLAGS_NONE,
+        NvP64_NULL,
+        &securityInfo);
+    if (status != NV_OK)
+    {
+        goto done;
+    }
+    if (allocatedClientHandle != *clientHandle)
+    {
+        status = NV_ERR_INVALID_STATE;
+        goto failed;
+    }
+
+    *openStage = NV_RM_GPU_OPEN_STAGE_GPU_ID;
+    idInfoParams.gpuId = gpuId;
+    status = pRmApi->Control(
+        pRmApi,
+        *clientHandle,
+        *clientHandle,
+        NV0000_CTRL_CMD_GPU_GET_ID_INFO_V2,
+        &idInfoParams,
+        sizeof(idInfoParams));
+    if (status != NV_OK || idInfoParams.deviceInstance != expectedDeviceInstance)
+    {
+        status = status == NV_OK ? NV_ERR_INVALID_STATE : status;
+        goto failed;
+    }
+
+    *openStage = NV_RM_GPU_OPEN_STAGE_DEVICE;
+    deviceAllocParams.deviceId = idInfoParams.deviceInstance;
+    deviceAllocParams.hClientShare = *clientHandle;
+    status = pRmApi->Alloc(
+        pRmApi,
+        *clientHandle,
+        *clientHandle,
+        deviceHandle,
+        NV01_DEVICE_0,
+        &deviceAllocParams,
+        sizeof(deviceAllocParams));
+    if (status != NV_OK)
+    {
+        goto failed;
+    }
+
+    *openStage = NV_RM_GPU_OPEN_STAGE_SUBDEVICE_COUNT;
+    status = pRmApi->Control(
+        pRmApi,
+        *clientHandle,
+        *deviceHandle,
+        NV0080_CTRL_CMD_GPU_GET_NUM_SUBDEVICES,
+        &subdeviceCountParams,
+        sizeof(subdeviceCountParams));
+    if (status != NV_OK || subdeviceCountParams.numSubDevices != 1)
+    {
+        status = status == NV_OK ? NV_ERR_NOT_SUPPORTED : status;
+        goto failed;
+    }
+
+    *openStage = NV_RM_GPU_OPEN_STAGE_SUBDEVICE;
+    subdeviceAllocParams.subDeviceId = 0;
+    status = pRmApi->Alloc(
+        pRmApi,
+        *clientHandle,
+        *deviceHandle,
+        subdeviceHandle,
+        NV20_SUBDEVICE_0,
+        &subdeviceAllocParams,
+        sizeof(subdeviceAllocParams));
+    if (status == NV_OK)
+    {
+        *openStage = NV_RM_GPU_OPEN_STAGE_COMPLETE;
+        goto done;
+    }
+
+failed:
+    pRmApi->Free(pRmApi, *clientHandle, *clientHandle);
+    *clientHandle = NV01_NULL_OBJECT;
+    *deviceHandle = NV01_NULL_OBJECT;
+    *subdeviceHandle = NV01_NULL_OBJECT;
+
+done:
+    gpumgrThreadDisableExpandedGpuVisibility();
+    return status;
+}
+
+NV_STATUS NvRmCloseGpuDevice(
+    NvHandle clientHandle)
+{
+    RM_API* pRmApi;
+
+    if (clientHandle == NV01_NULL_OBJECT)
+    {
+        return NV_OK;
+    }
+
+    pRmApi = rmapiGetInterface(RMAPI_EXTERNAL_KERNEL);
+    return pRmApi->Free(pRmApi, clientHandle, clientHandle);
 }
 
 NV_STATUS NvRmCleanupGpuClients(

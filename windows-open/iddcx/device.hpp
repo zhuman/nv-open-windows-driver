@@ -30,6 +30,10 @@ struct DeviceContext final
     NvU32 rmGpuInstance;
     NvU32 rmDeviceInstance;
     NvU32 rmGpuId;
+    NvHandle rmClientHandle;
+    NvHandle rmDeviceHandle;
+    NvHandle rmSubdeviceHandle;
+    bool rmDeviceOpened;
     bool rmGpuAttached;
     bool rmInitialized;
     bool nvPortInitialized;
