@@ -813,14 +813,33 @@
       <AdditionalOptions>/clang:-Wno-unused-parameter %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemGroup>
-  <Target Name="GenerateWindowsRmProfile" BeforeTargets="ClCompile">
+  <ItemGroup>
+    <NvRmProfileInput Include="$(WindowsOpenRoot)rm\Generate-WindowsRmProfile.ps1" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\gpu\arch\**\*.c" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\resource_list.h" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\resource_desc.c" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\rpc_common.c" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpc.c" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\libraries\libspdm\nvidia\nvspdm_rsa.c" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\library\spdm_crypt_lib\libspdm_crypt_asym.c" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\numa.c" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator.c" />
+    <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator_util.c" />
+  </ItemGroup>
+  <Target
+    Name="GenerateWindowsRmProfile"
+    BeforeTargets="ClCompile"
+    Inputs="@(NvRmProfileInput)"
+    Outputs="$(NvRmFilteredRoot)\profile.stamp">
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(WindowsOpenRoot)rm\Generate-WindowsRmProfile.ps1&quot; -RepositoryRoot &quot;$(MSBuildProjectDirectory)\..\..\..&quot; -OutputRoot &quot;$(NvRmFilteredRoot)&quot;" />
+    <Touch Files="$(NvRmFilteredRoot)\profile.stamp" AlwaysCreate="true" />
   </Target>
   <Target Name="GenerateNvRmVersionHeader" BeforeTargets="ClCompile">
     <WriteLinesToFile
       File="$(IntDir)nvrm_version.h"
       Lines="#ifndef NVRM_VERSION_H;#define NVRM_VERSION_H;#define NV_VERSION_STRING &quot;$(NvidiaVersion)&quot;;#endif"
-      Overwrite="true" />
+      Overwrite="true"
+      WriteOnlyWhenDifferent="true" />
   </Target>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
     <ItemGroup>
