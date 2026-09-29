@@ -37,6 +37,7 @@ public:
     static constexpr ULONG MaximumMemoryBarCount = 3;
 
     NTSTATUS Initialize(_In_ WDFDEVICE device) noexcept;
+    NTSTATUS EnableMemorySpace() noexcept;
     void Reset() noexcept;
 
     NTSTATUS Read(
@@ -61,6 +62,7 @@ private:
     PHYSICAL_ADDRESS memoryBarAddresses_[MaximumMemoryBarCount];
     ULONG memoryBarCount_;
     bool identityValid_;
+    bool memorySpaceEnabledByDriver_;
 };
 
 class RegisterAperture final

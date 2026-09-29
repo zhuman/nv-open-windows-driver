@@ -2,13 +2,18 @@
 #include <wdmguid.h>
 
 #include "hardware_services.hpp"
+#include "trace.h"
 
 #include <devpkey.h>
+
+#include "hardware_services.tmh"
 
 namespace {
 
 constexpr USHORT BusInterfaceVersion = 1;
 constexpr USHORT NvidiaVendorId = 0x10DE;
+constexpr ULONG PciCommandOffset = 0x04;
+constexpr USHORT PciCommandMemorySpace = 0x0002;
 constexpr size_t MaximumDmaTransferLength = 0xFFFFFFFFull;
 constexpr ULONG PmcBoot0Offset = 0x00000000;
 constexpr ULONG PmcBoot42Offset = 0x00000A00;
@@ -82,6 +87,11 @@ namespace nv::iddcx {
 NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
 {
     Reset();
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_PCI,
+        "PCI config initialization started: device=%p",
+        device);
 
     ULONG segmentBus = 0;
     NTSTATUS status = QueryUint32Property(
@@ -90,6 +100,12 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
         &segmentBus);
     if (!NT_SUCCESS(status) || (segmentBus & PciSegmentBusReservedMask) != 0)
     {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_PCI,
+            "Bus property query failed: status=%!STATUS! value=0x%08X",
+            status,
+            segmentBus);
         Reset();
         return NT_SUCCESS(status) ? STATUS_DEVICE_CONFIGURATION_ERROR : status;
     }
@@ -101,6 +117,12 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
         &slot);
     if (!NT_SUCCESS(status) || (slot & PciSlotReservedMask) != 0)
     {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_PCI,
+            "Address property query failed: status=%!STATUS! value=0x%08X",
+            status,
+            slot);
         Reset();
         return NT_SUCCESS(status) ? STATUS_DEVICE_CONFIGURATION_ERROR : status;
     }
@@ -112,6 +134,15 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
         sizeof(interface_),
         BusInterfaceVersion,
         nullptr);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI,
+        "BUS_INTERFACE_STANDARD query: status=%!STATUS! version=%u size=%u get=%p set=%p",
+        status,
+        interface_.Version,
+        interface_.Size,
+        interface_.GetBusData,
+        interface_.SetBusData);
     if (!NT_SUCCESS(status))
     {
         Reset();
@@ -120,12 +151,34 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
 
     if (interface_.GetBusData == nullptr || interface_.SetBusData == nullptr)
     {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_PCI,
+            "BUS_INTERFACE_STANDARD omitted PCI config callbacks");
         Reset();
         return STATUS_NOT_SUPPORTED;
     }
 
     PciCommonHeader header = {};
     status = Read(0, &header, sizeof(header));
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI,
+        "PCI common-header read: status=%!STATUS! vendor=0x%04X device=0x%04X command=0x%04X",
+        status,
+        header.vendorId,
+        header.deviceId,
+        header.command);
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_PCI,
+        "PCI BARs: %08X %08X %08X %08X %08X %08X",
+        header.baseAddresses[0],
+        header.baseAddresses[1],
+        header.baseAddresses[2],
+        header.baseAddresses[3],
+        header.baseAddresses[4],
+        header.baseAddresses[5]);
     if (!NT_SUCCESS(status))
     {
         Reset();
@@ -202,11 +255,70 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
     memoryBarCount_ = memoryBarCount;
     identityValid_ = true;
 
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_PCI,
+        "PCI config ready: segment=%u bus=%u device=%u function=%u subsystem=0x%04X:0x%04X bars=%u",
+        identity_.domain,
+        identity_.bus,
+        identity_.device,
+        identity_.function,
+        identity_.subsystemVendorId,
+        identity_.subsystemId,
+        memoryBarCount_);
+
     return STATUS_SUCCESS;
+}
+
+NTSTATUS ConfigSpace::EnableMemorySpace() noexcept
+{
+    USHORT command = 0;
+    NTSTATUS status = Read(PciCommandOffset, &command, sizeof(command));
+    if (!NT_SUCCESS(status) || (command & PciCommandMemorySpace) != 0)
+    {
+        return status;
+    }
+
+    command |= PciCommandMemorySpace;
+    status = Write(PciCommandOffset, &command, sizeof(command));
+    if (NT_SUCCESS(status))
+    {
+        memorySpaceEnabledByDriver_ = true;
+
+        USHORT verifiedCommand = 0;
+        status = Read(
+            PciCommandOffset,
+            &verifiedCommand,
+            sizeof(verifiedCommand));
+        if (NT_SUCCESS(status) &&
+            (verifiedCommand & PciCommandMemorySpace) == 0)
+        {
+            status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+
+        TraceEvents(
+            NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_PCI,
+            "PCI memory decode enable: status=%!STATUS! command=0x%04X",
+            status,
+            verifiedCommand);
+    }
+
+    return status;
 }
 
 void ConfigSpace::Reset() noexcept
 {
+    if (memorySpaceEnabledByDriver_ && IsAvailable())
+    {
+        USHORT command = 0;
+        if (NT_SUCCESS(Read(PciCommandOffset, &command, sizeof(command))))
+        {
+            command &= ~PciCommandMemorySpace;
+            Write(PciCommandOffset, &command, sizeof(command));
+        }
+    }
+
     if (interface_.InterfaceDereference != nullptr)
     {
         interface_.InterfaceDereference(interface_.Context);
@@ -217,6 +329,7 @@ void ConfigSpace::Reset() noexcept
     RtlZeroMemory(memoryBarAddresses_, sizeof(memoryBarAddresses_));
     memoryBarCount_ = 0;
     identityValid_ = false;
+    memorySpaceEnabledByDriver_ = false;
 }
 
 NTSTATUS ConfigSpace::Read(
@@ -311,6 +424,15 @@ NTSTATUS RegisterAperture::Initialize(
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_PCI,
+        "BAR0 resource: config=0x%llX translated=0x%llX length=0x%X flags=0x%X",
+        registerBarAddress.QuadPart,
+        registerRange->u.Memory.Start.QuadPart,
+        registerRange->u.Memory.Length,
+        registerRange->Flags);
+
     NTSTATUS status = WdfDeviceMapIoSpace(
         device,
         registerRange->u.Memory.Start,
@@ -319,6 +441,13 @@ NTSTATUS RegisterAperture::Initialize(
         &address_);
     if (!NT_SUCCESS(status))
     {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_PCI,
+            "BAR0 map failed: status=%!STATUS! start=0x%llX length=0x%X",
+            status,
+            registerRange->u.Memory.Start.QuadPart,
+            registerRange->u.Memory.Length);
         Reset();
         return status;
     }
@@ -330,6 +459,15 @@ NTSTATUS RegisterAperture::Initialize(
     {
         status = Read32(PmcBoot42Offset, &identity_.boot42);
     }
+
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI,
+        "BAR0 identity: status=%!STATUS! boot0=0x%08X boot42=0x%08X length=0x%llX",
+        status,
+        identity_.boot0,
+        identity_.boot42,
+        static_cast<ULONGLONG>(length_));
 
     if (!NT_SUCCESS(status) ||
         (identity_.boot0 == InvalidRegisterValue &&

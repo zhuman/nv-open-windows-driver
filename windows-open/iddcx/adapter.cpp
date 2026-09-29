@@ -1,4 +1,7 @@
 #include "adapter.hpp"
+#include "trace.h"
+
+#include "adapter.tmh"
 
 namespace {
 
@@ -60,6 +63,12 @@ NTSTATUS Adapter::EnterD0(_In_ WDFDEVICE device) noexcept
 
     IDARG_OUT_ADAPTER_INIT output = {};
     const NTSTATUS status = IddCxAdapterInitAsync(&input, &output);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "IddCxAdapterInitAsync: %!STATUS! adapter=%p",
+        status,
+        output.AdapterObject);
     if (!NT_SUCCESS(status))
     {
         powered_ = false;
@@ -105,6 +114,13 @@ NTSTATUS Adapter::CompleteInitialization(
     }
 
     initializationStatus_ = arguments->AdapterInitStatus;
+    TraceEvents(
+        NT_SUCCESS(initializationStatus_)
+            ? TRACE_LEVEL_INFORMATION
+            : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "AdapterInitFinished: %!STATUS!",
+        initializationStatus_);
     state_ = NT_SUCCESS(initializationStatus_) ? State::Ready : State::Failed;
     return STATUS_SUCCESS;
 }
@@ -155,6 +171,59 @@ NTSTATUS AdapterCommitModes(
     return context->owner == nullptr
         ? STATUS_INVALID_DEVICE_STATE
         : context->owner->CommitModes(adapter, arguments);
+}
+
+_Use_decl_annotations_
+NTSTATUS ParseMonitorDescription(
+    const IDARG_IN_PARSEMONITORDESCRIPTION* input,
+    IDARG_OUT_PARSEMONITORDESCRIPTION* output)
+{
+    UNREFERENCED_PARAMETER(input);
+    output->MonitorModeBufferOutputCount = 0;
+    output->PreferredMonitorModeIdx = 0;
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS GetDefaultDescriptionModes(
+    IDDCX_MONITOR monitor,
+    const IDARG_IN_GETDEFAULTDESCRIPTIONMODES* input,
+    IDARG_OUT_GETDEFAULTDESCRIPTIONMODES* output)
+{
+    UNREFERENCED_PARAMETER(monitor);
+    UNREFERENCED_PARAMETER(input);
+    output->DefaultMonitorModeBufferOutputCount = 0;
+    output->PreferredMonitorModeIdx = 0;
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS QueryTargetModes(
+    IDDCX_MONITOR monitor,
+    const IDARG_IN_QUERYTARGETMODES* input,
+    IDARG_OUT_QUERYTARGETMODES* output)
+{
+    UNREFERENCED_PARAMETER(monitor);
+    UNREFERENCED_PARAMETER(input);
+    output->TargetModeBufferOutputCount = 0;
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS AssignSwapChain(
+    IDDCX_MONITOR monitor,
+    const IDARG_IN_SETSWAPCHAIN* input)
+{
+    UNREFERENCED_PARAMETER(monitor);
+    UNREFERENCED_PARAMETER(input);
+    return STATUS_NOT_SUPPORTED;
+}
+
+_Use_decl_annotations_
+NTSTATUS UnassignSwapChain(IDDCX_MONITOR monitor)
+{
+    UNREFERENCED_PARAMETER(monitor);
+    return STATUS_SUCCESS;
 }
 
 } // namespace nv::iddcx

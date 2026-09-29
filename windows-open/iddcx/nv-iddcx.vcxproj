@@ -21,7 +21,7 @@
     <UMDF_VERSION_MAJOR>2</UMDF_VERSION_MAJOR>
     <UMDF_VERSION_MINOR>35</UMDF_VERSION_MINOR>
     <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
-    <IDDCX_VERSION_MINOR>11</IDDCX_VERSION_MINOR>
+    <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
   </PropertyGroup>
@@ -34,6 +34,10 @@
       <LanguageStandard>stdcpp23</LanguageStandard>
       <PreprocessorDefinitions>UMDF_DRIVER;NV_USER_MODE;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=4;IDDCX_MINIMUM_VERSION_REQUIRED=4;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(NvRmUserLinkProbe)' == 'true'">NV_RM_USER_LINK_PROBE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <WppEnabled>true</WppEnabled>
+      <WppPreprocessorDefinitions>WPP_MACRO_USE_KM_VERSION_FOR_UM=1;%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
+      <WppRecorderEnabled>true</WppRecorderEnabled>
+      <WppScanConfigurationData>trace.h</WppScanConfigurationData>
     </ClCompile>
     <Link>
       <AdditionalDependencies>OneCoreUAP.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -55,6 +59,7 @@
     <ClInclude Include="common_services.hpp" />
     <ClInclude Include="device.hpp" />
     <ClInclude Include="hardware_services.hpp" />
+    <ClInclude Include="trace.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\common\user\nvcommon-user.vcxproj">

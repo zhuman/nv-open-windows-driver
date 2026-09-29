@@ -1,10 +1,13 @@
 #include "device.hpp"
+#include "trace.h"
 
 #if defined(NV_RM_USER_LINK_PROBE)
 #include "rmosxfac.h"
 #endif
 
 #include <new>
+
+#include "device.tmh"
 
 namespace nv::iddcx {
 
@@ -123,7 +126,13 @@ NTSTATUS CreateRmGpuContext(
 
         if (barRange == nullptr)
         {
-            return STATUS_DEVICE_CONFIGURATION_ERROR;
+            TraceEvents(
+                TRACE_LEVEL_WARNING,
+                TRACE_PCI,
+                "RM attach BAR unassigned: index=%u config=0x%llX",
+                barIndex,
+                barAddress.QuadPart);
+            continue;
         }
 
         attachInfo.apertures[barIndex].physicalAddress =
@@ -160,15 +169,27 @@ _Use_decl_annotations_
 NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
 {
     UNREFERENCED_PARAMETER(driver);
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "DeviceAdd");
 
     IDD_CX_CLIENT_CONFIG iddConfiguration;
     IDD_CX_CLIENT_CONFIG_INIT(&iddConfiguration);
     iddConfiguration.EvtIddCxAdapterInitFinished = AdapterInitFinished;
     iddConfiguration.EvtIddCxAdapterCommitModes = AdapterCommitModes;
+    iddConfiguration.EvtIddCxParseMonitorDescription = ParseMonitorDescription;
+    iddConfiguration.EvtIddCxMonitorGetDefaultDescriptionModes =
+        GetDefaultDescriptionModes;
+    iddConfiguration.EvtIddCxMonitorQueryTargetModes = QueryTargetModes;
+    iddConfiguration.EvtIddCxMonitorAssignSwapChain = AssignSwapChain;
+    iddConfiguration.EvtIddCxMonitorUnassignSwapChain = UnassignSwapChain;
 
     NTSTATUS status = IddCxDeviceInitConfig(deviceInit, &iddConfiguration);
     if (!NT_SUCCESS(status))
     {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "IddCxDeviceInitConfig failed: %!STATUS!",
+            status);
         return status;
     }
 
@@ -188,6 +209,11 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     status = WdfDeviceCreate(&deviceInit, &attributes, &device);
     if (!NT_SUCCESS(status))
     {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "WdfDeviceCreate failed: %!STATUS!",
+            status);
         return status;
     }
 
@@ -233,7 +259,13 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     RmDestroyRm();
 #endif
 
-    return IddCxDeviceInitialize(device);
+    status = IddCxDeviceInitialize(device);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "IddCxDeviceInitialize: %!STATUS!",
+        status);
+    return status;
 }
 
 _Use_decl_annotations_
@@ -259,6 +291,11 @@ NTSTATUS PrepareHardware(
 {
     DeviceContext* context = GetDeviceContext(device);
     const ULONG resourceCount = WdfCmResourceListGetCount(resourcesTranslated);
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "PrepareHardware: resources=%u",
+        resourceCount);
 
     if (resourceCount == 0)
     {
@@ -266,6 +303,11 @@ NTSTATUS PrepareHardware(
     }
 
     NTSTATUS status = context->configSpace.Initialize(device);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI,
+        "ConfigSpace::Initialize: %!STATUS!",
+        status);
     if (!NT_SUCCESS(status))
     {
         return status;
@@ -296,10 +338,29 @@ NTSTATUS PrepareHardware(
         return status;
     }
 
+    status = context->configSpace.EnableMemorySpace();
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI,
+        "ConfigSpace::EnableMemorySpace: %!STATUS!",
+        status);
+    if (!NT_SUCCESS(status))
+    {
+        NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
+        context->pciConfigRegistration = nullptr;
+        context->configSpace.Reset();
+        return status;
+    }
+
     status = context->registerAperture.Initialize(
         device,
         resourcesTranslated,
         context->configSpace);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI,
+        "RegisterAperture::Initialize: %!STATUS!",
+        status);
     if (!NT_SUCCESS(status))
     {
         NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
@@ -314,6 +375,11 @@ NTSTATUS PrepareHardware(
         context->registerAperture.Address(),
         context->registerAperture.Length(),
         &context->mmioRegistration);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI,
+        "NvPlatformRegisterMmioAperture: %!STATUS!",
+        status);
     if (!NT_SUCCESS(status))
     {
         context->registerAperture.Reset();
@@ -324,6 +390,11 @@ NTSTATUS PrepareHardware(
     }
 
     status = context->dmaEngine.Initialize(device);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "DmaEngine::Initialize: %!STATUS!",
+        status);
     if (!NT_SUCCESS(status))
     {
         NvPlatformUnregisterMmioAperture(context->mmioRegistration);
@@ -342,6 +413,11 @@ NTSTATUS PrepareHardware(
     };
     const NV_STATUS dmaStatus = NvPlatformRegisterDmaProvider(
         &dmaProvider, &context->dmaRegistration);
+    TraceEvents(
+        dmaStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "NvPlatformRegisterDmaProvider: 0x%08X",
+        dmaStatus);
     if (dmaStatus != NV_OK)
     {
         context->dmaEngine.Reset();
@@ -354,10 +430,49 @@ NTSTATUS PrepareHardware(
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
+#if defined(NV_RM_USER_LINK_PROBE)
+    void* dmaAllocation = nullptr;
+    void* dmaAddress = nullptr;
+    NvU64 dmaLogicalAddress = 0;
+    const NV_STATUS dmaProbeStatus = AllocateDmaBuffer(
+        &context->dmaEngine,
+        4096,
+        4096,
+        &dmaAllocation,
+        &dmaAddress,
+        &dmaLogicalAddress);
+    TraceEvents(
+        dmaProbeStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "DMA common-buffer probe: status=0x%08X cpu=%p logical=0x%llX",
+        dmaProbeStatus,
+        dmaAddress,
+        dmaLogicalAddress);
+    FreeDmaBuffer(&context->dmaEngine, dmaAllocation);
+    if (dmaProbeStatus != NV_OK)
+    {
+        NvPlatformUnregisterDmaProvider(context->dmaRegistration);
+        context->dmaRegistration = nullptr;
+        context->dmaEngine.Reset();
+        NvPlatformUnregisterMmioAperture(context->mmioRegistration);
+        context->mmioRegistration = nullptr;
+        context->registerAperture.Reset();
+        NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
+        context->pciConfigRegistration = nullptr;
+        context->configSpace.Reset();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+#endif
+
     status = context->interrupt.Initialize(
         device,
         resourcesRaw,
         resourcesTranslated);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "Interrupt::Initialize: %!STATUS!",
+        status);
     if (!NT_SUCCESS(status))
     {
         NvPlatformUnregisterDmaProvider(context->dmaRegistration);
@@ -373,6 +488,11 @@ NTSTATUS PrepareHardware(
     }
 
     status = CreateRmGpuContext(context, resourcesTranslated);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "CreateRmGpuContext: %!STATUS!",
+        status);
     if (!NT_SUCCESS(status))
     {
         context->interrupt.Reset();
@@ -417,7 +537,14 @@ _Use_decl_annotations_
 NTSTATUS EnterD0(WDFDEVICE device, WDF_POWER_DEVICE_STATE previousState)
 {
     UNREFERENCED_PARAMETER(previousState);
-    return GetDeviceContext(device)->adapter.EnterD0(device);
+    const NTSTATUS status = GetDeviceContext(device)->adapter.EnterD0(device);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "EnterD0: %!STATUS! previous=%u",
+        status,
+        previousState);
+    return status;
 }
 
 _Use_decl_annotations_
