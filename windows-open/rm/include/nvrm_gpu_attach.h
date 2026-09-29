@@ -11,11 +11,13 @@ extern "C" {
 NV_STATUS NvRmAttachGpuContext(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     NvU32* gpuInstance,
+    NvU32* deviceInstance,
     NvU32* gpuId);
 
 NV_STATUS NvRmDetachGpuContext(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     NvU32 gpuInstance,
+    NvU32 deviceInstance,
     NvU32 gpuId);
 
 NV_STATUS NvRmCleanupGpuClients(

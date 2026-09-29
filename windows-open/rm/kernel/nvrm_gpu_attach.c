@@ -1,4 +1,5 @@
 #include "core/core.h"
+#include "core/locks.h"
 #include "gpu/gpu.h"
 #include "gpu_mgr/gpu_mgr.h"
 #include "rmapi/rmapi.h"
@@ -8,6 +9,7 @@
 NV_STATUS NvRmAttachGpuContext(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     NvU32* gpuInstance,
+    NvU32* deviceInstance,
     NvU32* gpuId)
 {
     NV_PLATFORM_RM_GPU_ATTACH_INFO info;
@@ -15,7 +17,8 @@ NV_STATUS NvRmAttachGpuContext(
     NvU64 domainBusDevice;
     NV_STATUS status;
 
-    if (gpuContext == NULL || gpuInstance == NULL || gpuId == NULL)
+    if (gpuContext == NULL || gpuInstance == NULL ||
+        deviceInstance == NULL || gpuId == NULL)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
@@ -57,6 +60,13 @@ NV_STATUS NvRmAttachGpuContext(
         return status;
     }
 
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status != NV_OK)
+    {
+        rmapiLockRelease();
+        return status;
+    }
+
     status = gpumgrRegisterGpuId(*gpuId, domainBusDevice);
     if (status == NV_OK)
     {
@@ -64,13 +74,34 @@ NV_STATUS NvRmAttachGpuContext(
     }
     if (status == NV_OK)
     {
+        status = rmGpuLockAlloc(*gpuInstance);
+    }
+    if (status == NV_OK)
+    {
+        status = gpumgrCreateDevice(
+            deviceInstance,
+            NVBIT(*gpuInstance),
+            NULL);
+        if (status != NV_OK)
+        {
+            rmGpuLockFree(*gpuInstance);
+        }
+    }
+    if (status == NV_OK)
+    {
         status = gpumgrAttachGpu(*gpuInstance, &attachArg);
+        if (status != NV_OK)
+        {
+            gpumgrDestroyDevice(*deviceInstance);
+            rmGpuLockFree(*gpuInstance);
+        }
     }
     if (status != NV_OK)
     {
         (void)gpumgrUnregisterGpuId(*gpuId);
     }
 
+    gpumgrThreadDisableExpandedGpuVisibility();
     rmapiLockRelease();
     return status;
 }
@@ -78,6 +109,7 @@ NV_STATUS NvRmAttachGpuContext(
 NV_STATUS NvRmDetachGpuContext(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     NvU32 gpuInstance,
+    NvU32 deviceInstance,
     NvU32 gpuId)
 {
     NV_STATUS status;
@@ -101,12 +133,22 @@ NV_STATUS NvRmDetachGpuContext(
         return status;
     }
 
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status != NV_OK)
+    {
+        rmapiLockRelease();
+        return status;
+    }
+
     status = gpumgrDetachGpu(gpuInstance);
     if (status == NV_OK)
     {
+        gpumgrDestroyDevice(deviceInstance);
+        rmGpuLockFree(gpuInstance);
         status = gpumgrUnregisterGpuId(gpuId);
     }
 
+    gpumgrThreadDisableExpandedGpuVisibility();
     rmapiLockRelease();
     return status;
 }

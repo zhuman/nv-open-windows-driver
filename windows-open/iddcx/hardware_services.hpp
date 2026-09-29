@@ -75,6 +75,12 @@ public:
 
     void Reset() noexcept;
 
+    UCHAR ReadRegister8(_In_ SIZE_T offset) const noexcept;
+    USHORT ReadRegister16(_In_ SIZE_T offset) const noexcept;
+    ULONG ReadRegister32(_In_ SIZE_T offset) const noexcept;
+    void WriteRegister8(_In_ SIZE_T offset, _In_ UCHAR value) const noexcept;
+    void WriteRegister16(_In_ SIZE_T offset, _In_ USHORT value) const noexcept;
+    void WriteRegister32(_In_ SIZE_T offset, _In_ ULONG value) const noexcept;
     NTSTATUS Read32(_In_ SIZE_T offset, _Out_ ULONG* value) const noexcept;
 
     [[nodiscard]] bool IsMapped() const noexcept;

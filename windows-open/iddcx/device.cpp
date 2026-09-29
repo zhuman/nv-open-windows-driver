@@ -2,6 +2,7 @@
 #include "trace.h"
 
 #if defined(NV_RM_USER_LINK_PROBE)
+#include "nvrm_gpu_attach.h"
 #include "rmosxfac.h"
 #endif
 
@@ -88,6 +89,36 @@ void FreeDmaBuffer(void*, void* providerAllocation)
     }
 }
 
+UCHAR ReadMmio8(void* context, SIZE_T offset)
+{
+    return static_cast<RegisterAperture*>(context)->ReadRegister8(offset);
+}
+
+USHORT ReadMmio16(void* context, SIZE_T offset)
+{
+    return static_cast<RegisterAperture*>(context)->ReadRegister16(offset);
+}
+
+ULONG ReadMmio32(void* context, SIZE_T offset)
+{
+    return static_cast<RegisterAperture*>(context)->ReadRegister32(offset);
+}
+
+void WriteMmio8(void* context, SIZE_T offset, UCHAR value)
+{
+    static_cast<RegisterAperture*>(context)->WriteRegister8(offset, value);
+}
+
+void WriteMmio16(void* context, SIZE_T offset, USHORT value)
+{
+    static_cast<RegisterAperture*>(context)->WriteRegister16(offset, value);
+}
+
+void WriteMmio32(void* context, SIZE_T offset, ULONG value)
+{
+    static_cast<RegisterAperture*>(context)->WriteRegister32(offset, value);
+}
+
 NTSTATUS CreateRmGpuContext(
     _Inout_ DeviceContext* context,
     _In_ WDFCMRESLIST resourcesTranslated) noexcept
@@ -158,6 +189,29 @@ NTSTATUS CreateRmGpuContext(
 
 void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
 {
+#if defined(NV_RM_USER_LINK_PROBE)
+    if (context->rmGpuAttached)
+    {
+        const NV_STATUS status = NvRmDetachGpuContext(
+            context->rmGpuContext,
+            context->rmGpuInstance,
+            context->rmDeviceInstance,
+            context->rmGpuId);
+        TraceEvents(
+            status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "NvRmDetachGpuContext: 0x%08X instance=%u device=%u gpuId=0x%08X",
+            status,
+            context->rmGpuInstance,
+            context->rmDeviceInstance,
+            context->rmGpuId);
+        context->rmGpuAttached = false;
+        context->rmGpuInstance = NV_U32_MAX;
+        context->rmDeviceInstance = NV_U32_MAX;
+        context->rmGpuId = 0;
+    }
+#endif
+
     NvPlatformRmGpuMarkShutdown(context->rmGpuContext);
     NvPlatformRmGpuContextDestroy(context->rmGpuContext);
     context->rmGpuContext = nullptr;
@@ -181,6 +235,33 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     iddConfiguration.EvtIddCxMonitorQueryTargetModes = QueryTargetModes;
     iddConfiguration.EvtIddCxMonitorAssignSwapChain = AssignSwapChain;
     iddConfiguration.EvtIddCxMonitorUnassignSwapChain = UnassignSwapChain;
+
+        if (IDD_IS_FIELD_AVAILABLE(
+            IDD_CX_CLIENT_CONFIG,
+            EvtIddCxParseMonitorDescription2))
+        {
+        iddConfiguration.EvtIddCxParseMonitorDescription2 =
+            ParseMonitorDescription2;
+        }
+        if (IDD_IS_FIELD_AVAILABLE(
+            IDD_CX_CLIENT_CONFIG,
+            EvtIddCxAdapterQueryTargetInfo))
+        {
+        iddConfiguration.EvtIddCxAdapterQueryTargetInfo =
+            AdapterQueryTargetInfo;
+        }
+        if (IDD_IS_FIELD_AVAILABLE(
+            IDD_CX_CLIENT_CONFIG,
+            EvtIddCxAdapterCommitModes2))
+        {
+        iddConfiguration.EvtIddCxAdapterCommitModes2 = AdapterCommitModes2;
+        }
+        if (IDD_IS_FIELD_AVAILABLE(
+            IDD_CX_CLIENT_CONFIG,
+            EvtIddCxMonitorQueryTargetModes2))
+        {
+        iddConfiguration.EvtIddCxMonitorQueryTargetModes2 = QueryTargetModes2;
+        }
 
     NTSTATUS status = IddCxDeviceInitConfig(deviceInit, &iddConfiguration);
     if (!NT_SUCCESS(status))
@@ -256,7 +337,7 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
         WdfObjectDelete(device);
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
-    RmDestroyRm();
+    context->rmInitialized = true;
 #endif
 
     status = IddCxDeviceInitialize(device);
@@ -273,6 +354,13 @@ void DeviceCleanup(WDFOBJECT deviceObject)
 {
     DeviceContext* context = GetDeviceContext(deviceObject);
     context->adapter.Reset();
+#if defined(NV_RM_USER_LINK_PROBE)
+    if (context->rmInitialized)
+    {
+        RmDestroyRm();
+        context->rmInitialized = false;
+    }
+#endif
     if (context->nvPortInitialized)
     {
         nvPortWindowsShutdown(&context->commonHost);
@@ -369,11 +457,21 @@ NTSTATUS PrepareHardware(
         return status;
     }
 
+    const NV_PLATFORM_MMIO_ACCESS mmioAccess = {
+        &context->registerAperture,
+        ReadMmio8,
+        ReadMmio16,
+        ReadMmio32,
+        WriteMmio8,
+        WriteMmio16,
+        WriteMmio32,
+    };
     status = NvPlatformRegisterMmioAperture(
         static_cast<ULONGLONG>(
             context->configSpace.RegisterBarAddress().QuadPart),
         context->registerAperture.Address(),
         context->registerAperture.Length(),
+        &mmioAccess,
         &context->mmioRegistration);
     TraceEvents(
         NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
@@ -507,6 +605,41 @@ NTSTATUS PrepareHardware(
         context->configSpace.Reset();
         return status;
     }
+
+#if defined(NV_RM_USER_LINK_PROBE)
+    context->rmGpuInstance = NV_U32_MAX;
+    context->rmDeviceInstance = NV_U32_MAX;
+    context->rmGpuId = 0;
+    const NV_STATUS attachStatus = NvRmAttachGpuContext(
+        context->rmGpuContext,
+        &context->rmGpuInstance,
+        &context->rmDeviceInstance,
+        &context->rmGpuId);
+    TraceEvents(
+        attachStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "NvRmAttachGpuContext: 0x%08X instance=%u device=%u gpuId=0x%08X",
+        attachStatus,
+        context->rmGpuInstance,
+        context->rmDeviceInstance,
+        context->rmGpuId);
+    if (attachStatus != NV_OK)
+    {
+        DestroyRmGpuContext(context);
+        context->interrupt.Reset();
+        NvPlatformUnregisterDmaProvider(context->dmaRegistration);
+        context->dmaRegistration = nullptr;
+        context->dmaEngine.Reset();
+        NvPlatformUnregisterMmioAperture(context->mmioRegistration);
+        context->mmioRegistration = nullptr;
+        context->registerAperture.Reset();
+        NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
+        context->pciConfigRegistration = nullptr;
+        context->configSpace.Reset();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+    context->rmGpuAttached = true;
+#endif
 
     return STATUS_SUCCESS;
 }

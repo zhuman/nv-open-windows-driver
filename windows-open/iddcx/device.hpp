@@ -27,6 +27,11 @@ struct DeviceContext final
     void* dmaRegistration;
     Interrupt interrupt;
     NV_PLATFORM_RM_GPU_CONTEXT* rmGpuContext;
+    NvU32 rmGpuInstance;
+    NvU32 rmDeviceInstance;
+    NvU32 rmGpuId;
+    bool rmGpuAttached;
+    bool rmInitialized;
     bool nvPortInitialized;
 };
 

@@ -15,6 +15,7 @@ struct Aperture
     NvU64 physicalAddress;
     volatile NvU8* address;
     SIZE_T length;
+    NV_PLATFORM_MMIO_ACCESS access;
     bool registered;
 };
 
@@ -40,15 +41,45 @@ bool IsSupportedProtection(NvU32 protect, NvU32 cacheType) noexcept
          cacheType == NV_MEMORY_UNCACHED_WEAK);
 }
 
+Aperture* FindAperture(
+    const volatile void* address,
+    SIZE_T width,
+    SIZE_T* offset) noexcept
+{
+    const ULONG_PTR value = reinterpret_cast<ULONG_PTR>(address);
+    for (auto& aperture : apertures)
+    {
+        const ULONG_PTR base = reinterpret_cast<ULONG_PTR>(aperture.address);
+        if (!aperture.registered || value < base)
+        {
+            continue;
+        }
+
+        const ULONG_PTR candidateOffset = value - base;
+        if (candidateOffset <= aperture.length &&
+            width <= aperture.length - candidateOffset)
+        {
+            *offset = static_cast<SIZE_T>(candidateOffset);
+            return &aperture;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 extern "C" NTSTATUS NvPlatformRegisterMmioAperture(
     ULONGLONG physicalAddress,
     volatile void* address,
     SIZE_T length,
+    const NV_PLATFORM_MMIO_ACCESS* access,
     void** registration) noexcept
 {
     if (physicalAddress == 0 || address == nullptr || length == 0 ||
+        access == nullptr || access->context == nullptr ||
+        access->read8 == nullptr || access->read16 == nullptr ||
+        access->read32 == nullptr || access->write8 == nullptr ||
+        access->write16 == nullptr || access->write32 == nullptr ||
         registration == nullptr)
     {
         return StatusInvalidParameter;
@@ -69,6 +100,7 @@ extern "C" NTSTATUS NvPlatformRegisterMmioAperture(
         available->physicalAddress = physicalAddress;
         available->address = static_cast<volatile NvU8*>(address);
         available->length = length;
+        available->access = *access;
         available->registered = true;
         *registration = available;
     }
@@ -126,42 +158,72 @@ extern "C" void NvPlatformRmUnmapPhysical(void*)
 
 extern "C" void NvPlatformRmWriteRegister8(volatile void* address, NvU8 value)
 {
-    MemoryBarrier();
-    *static_cast<volatile NvU8*>(address) = value;
-    MemoryBarrier();
+    AcquireSRWLockShared(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(address, sizeof(value), &offset);
+    if (aperture != nullptr)
+    {
+        aperture->access.write8(aperture->access.context, offset, value);
+    }
+    ReleaseSRWLockShared(&apertureLock);
 }
 
 extern "C" void NvPlatformRmWriteRegister16(volatile void* address, NvU16 value)
 {
-    MemoryBarrier();
-    *static_cast<volatile NvU16*>(address) = value;
-    MemoryBarrier();
+    AcquireSRWLockShared(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(address, sizeof(value), &offset);
+    if (aperture != nullptr)
+    {
+        aperture->access.write16(aperture->access.context, offset, value);
+    }
+    ReleaseSRWLockShared(&apertureLock);
 }
 
 extern "C" void NvPlatformRmWriteRegister32(volatile void* address, NvU32 value)
 {
-    MemoryBarrier();
-    *static_cast<volatile NvU32*>(address) = value;
-    MemoryBarrier();
+    AcquireSRWLockShared(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(address, sizeof(value), &offset);
+    if (aperture != nullptr)
+    {
+        aperture->access.write32(aperture->access.context, offset, value);
+    }
+    ReleaseSRWLockShared(&apertureLock);
 }
 
 extern "C" NvU8 NvPlatformRmReadRegister8(const volatile void* address)
 {
-    const NvU8 value = *static_cast<const volatile NvU8*>(address);
-    MemoryBarrier();
+    AcquireSRWLockShared(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(address, sizeof(NvU8), &offset);
+    const NvU8 value = aperture != nullptr
+        ? aperture->access.read8(aperture->access.context, offset)
+        : NV_U8_MAX;
+    ReleaseSRWLockShared(&apertureLock);
     return value;
 }
 
 extern "C" NvU16 NvPlatformRmReadRegister16(const volatile void* address)
 {
-    const NvU16 value = *static_cast<const volatile NvU16*>(address);
-    MemoryBarrier();
+    AcquireSRWLockShared(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(address, sizeof(NvU16), &offset);
+    const NvU16 value = aperture != nullptr
+        ? aperture->access.read16(aperture->access.context, offset)
+        : NV_U16_MAX;
+    ReleaseSRWLockShared(&apertureLock);
     return value;
 }
 
 extern "C" NvU32 NvPlatformRmReadRegister32(const volatile void* address)
 {
-    const NvU32 value = *static_cast<const volatile NvU32*>(address);
-    MemoryBarrier();
+    AcquireSRWLockShared(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(address, sizeof(NvU32), &offset);
+    const NvU32 value = aperture != nullptr
+        ? aperture->access.read32(aperture->access.context, offset)
+        : NV_U32_MAX;
+    ReleaseSRWLockShared(&apertureLock);
     return value;
 }

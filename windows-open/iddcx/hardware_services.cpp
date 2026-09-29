@@ -493,6 +493,57 @@ void RegisterAperture::Reset() noexcept
     RtlZeroMemory(&identity_, sizeof(identity_));
 }
 
+UCHAR RegisterAperture::ReadRegister8(_In_ SIZE_T offset) const noexcept
+{
+    return WDF_READ_REGISTER_UCHAR(
+        device_,
+        static_cast<UCHAR*>(address_) + offset);
+}
+
+USHORT RegisterAperture::ReadRegister16(_In_ SIZE_T offset) const noexcept
+{
+    return WDF_READ_REGISTER_USHORT(
+        device_,
+        reinterpret_cast<USHORT*>(static_cast<UCHAR*>(address_) + offset));
+}
+
+ULONG RegisterAperture::ReadRegister32(_In_ SIZE_T offset) const noexcept
+{
+    return WDF_READ_REGISTER_ULONG(
+        device_,
+        reinterpret_cast<ULONG*>(static_cast<UCHAR*>(address_) + offset));
+}
+
+void RegisterAperture::WriteRegister8(
+    _In_ SIZE_T offset,
+    _In_ UCHAR value) const noexcept
+{
+    WDF_WRITE_REGISTER_UCHAR(
+        device_,
+        static_cast<UCHAR*>(address_) + offset,
+        value);
+}
+
+void RegisterAperture::WriteRegister16(
+    _In_ SIZE_T offset,
+    _In_ USHORT value) const noexcept
+{
+    WDF_WRITE_REGISTER_USHORT(
+        device_,
+        reinterpret_cast<USHORT*>(static_cast<UCHAR*>(address_) + offset),
+        value);
+}
+
+void RegisterAperture::WriteRegister32(
+    _In_ SIZE_T offset,
+    _In_ ULONG value) const noexcept
+{
+    WDF_WRITE_REGISTER_ULONG(
+        device_,
+        reinterpret_cast<ULONG*>(static_cast<UCHAR*>(address_) + offset),
+        value);
+}
+
 NTSTATUS RegisterAperture::Read32(
     _In_ SIZE_T offset,
     _Out_ ULONG* value) const noexcept
@@ -503,9 +554,7 @@ NTSTATUS RegisterAperture::Read32(
         return STATUS_INVALID_PARAMETER;
     }
 
-    *value = WDF_READ_REGISTER_ULONG(
-        device_,
-        reinterpret_cast<PULONG>(static_cast<UCHAR*>(address_) + offset));
+    *value = ReadRegister32(offset);
     return STATUS_SUCCESS;
 }
 
