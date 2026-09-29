@@ -1,16 +1,22 @@
 #include "core/core.h"
 #include "core/locks.h"
 #include "gpu/gpu.h"
+#include "gpu/gsp/kernel_gsp.h"
 #include "gpu_mgr/gpu_mgr.h"
+#include "nvplatform_mmio_rm.h"
 #include "rmapi/rmapi.h"
 #include "g_rs_server_nvoc.h"
 #include "nvrm_gpu_attach.h"
+
+#include "published/turing/tu102/dev_ext_devices.h"
 
 #include <class/cl0000.h>
 #include <class/cl0080.h>
 #include <class/cl2080.h>
 #include <ctrl/ctrl0000/ctrl0000gpu.h>
 #include <ctrl/ctrl0080/ctrl0080gpu.h>
+
+#define NV_RM_PROM_SIZE 0x100000U
 
 NV_STATUS NvRmAttachGpuContext(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
@@ -153,6 +159,68 @@ NV_STATUS NvRmDetachGpuContext(
         gpumgrDestroyDevice(deviceInstance);
         rmGpuLockFree(gpuInstance);
         status = gpumgrUnregisterGpuId(gpuId);
+    }
+
+    gpumgrThreadDisableExpandedGpuVisibility();
+    rmapiLockRelease();
+    return status;
+}
+
+NV_STATUS NvRmInitializeGpuFirmware(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    const void* firmware,
+    NvU32 firmwareSize)
+{
+    GSP_FIRMWARE gspFirmware = {0};
+    OBJGPU* pGpu = NULL;
+    DEVICE_MAPPING* pGpuMapping = NULL;
+    volatile void* pPromAddress = NULL;
+    void* publishedGpu = NULL;
+    NvU32 previousGpuInstance = NV_U32_MAX;
+    NV_STATUS status;
+
+    if (gpuContext == NULL || firmware == NULL || firmwareSize == 0)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_NONE, RM_LOCK_MODULES_INIT);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status != NV_OK)
+    {
+        rmapiLockRelease();
+        return status;
+    }
+
+    status = NvPlatformRmGpuGetPublishedRmGpu(gpuContext, &publishedGpu);
+    if (status == NV_OK)
+    {
+        pGpu = (OBJGPU*)publishedGpu;
+        previousGpuInstance = gpumgrSetCurrentGpuInstance(pGpu->gpuInstance);
+        pGpuMapping = gpuGetDeviceMapping(pGpu, DEVICE_INDEX_GPU, 0);
+        if (pGpuMapping == NULL || pGpuMapping->gpuNvAddr == NULL)
+        {
+            status = NV_ERR_INVALID_STATE;
+        }
+        else
+        {
+            pPromAddress = (volatile NvU8*)pGpuMapping->gpuNvAddr + NV_PROM_DATA(0);
+            status = NvPlatformRmBeginRegisterCache32(
+                pPromAddress, NV_RM_PROM_SIZE / sizeof(NvU32));
+        }
+        if (status == NV_OK)
+        {
+            gspFirmware.pBuf = firmware;
+            gspFirmware.size = firmwareSize;
+            status = kgspInitRm(pGpu, GPU_GET_KERNEL_GSP(pGpu), &gspFirmware);
+            NvPlatformRmEndRegisterCache32(pPromAddress);
+        }
+        gpumgrSetCurrentGpuInstance(previousGpuInstance);
     }
 
     gpumgrThreadDisableExpandedGpuVisibility();

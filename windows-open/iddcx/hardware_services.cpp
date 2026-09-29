@@ -514,6 +514,26 @@ ULONG RegisterAperture::ReadRegister32(_In_ SIZE_T offset) const noexcept
         reinterpret_cast<ULONG*>(static_cast<UCHAR*>(address_) + offset));
 }
 
+void RegisterAperture::ReadRegisterBuffer32(
+    _In_ SIZE_T offset,
+    _Out_writes_(count) ULONG* buffer,
+    _In_ ULONG count) const noexcept
+{
+    constexpr ULONG MaximumTransferCount = 64;
+    while (count != 0)
+    {
+        const ULONG transferCount = min(count, MaximumTransferCount);
+        WDF_READ_REGISTER_BUFFER_ULONG(
+            device_,
+            reinterpret_cast<ULONG*>(static_cast<UCHAR*>(address_) + offset),
+            buffer,
+            transferCount);
+        offset += static_cast<SIZE_T>(transferCount) * sizeof(*buffer);
+        buffer += transferCount;
+        count -= transferCount;
+    }
+}
+
 void RegisterAperture::WriteRegister8(
     _In_ SIZE_T offset,
     _In_ UCHAR value) const noexcept

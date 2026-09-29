@@ -20,6 +20,11 @@ NV_STATUS NvRmDetachGpuContext(
     NvU32 deviceInstance,
     NvU32 gpuId);
 
+NV_STATUS NvRmInitializeGpuFirmware(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    const void* firmware,
+    NvU32 firmwareSize);
+
 typedef enum NV_RM_GPU_OPEN_STAGE
 {
     NV_RM_GPU_OPEN_STAGE_ROOT_CLIENT,

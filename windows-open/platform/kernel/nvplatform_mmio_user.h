@@ -12,6 +12,11 @@ typedef struct NV_PLATFORM_MMIO_ACCESS
     UCHAR (*read8)(void* context, SIZE_T offset);
     USHORT (*read16)(void* context, SIZE_T offset);
     ULONG (*read32)(void* context, SIZE_T offset);
+    void (*read32Buffer)(
+        void* context,
+        SIZE_T offset,
+        ULONG* buffer,
+        ULONG count);
     void (*write8)(void* context, SIZE_T offset, UCHAR value);
     void (*write16)(void* context, SIZE_T offset, USHORT value);
     void (*write32)(void* context, SIZE_T offset, ULONG value);

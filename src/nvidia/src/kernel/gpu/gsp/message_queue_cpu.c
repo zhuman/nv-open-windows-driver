@@ -344,6 +344,9 @@ NV_STATUS GspStatusQueueInit(OBJGPU *pGpu, MESSAGE_QUEUE_INFO **ppMQI)
     RMTIMEOUT  timeout;
     NvU32      timeoutUs = 4000000;
     NvU32      timeoutFlags = GPU_TIMEOUT_FLAGS_DEFAULT;
+#if defined(NV_RM_USER_LINK_PROBE)
+    timeoutFlags |= GPU_TIMEOUT_FLAGS_BYPASS_THREAD_STATE;
+#endif
     KernelGsp *pKernelGsp = GPU_GET_KERNEL_GSP(pGpu);
 
     // GSP-RM in emulation/simulation environment is extremely slow

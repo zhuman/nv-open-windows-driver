@@ -167,10 +167,6 @@ NV_STATUS osPackageRegistry(
         *tableSize = requiredSize;
         return NV_OK;
     }
-    if (package.entryIndex == 0)
-    {
-        return NV_WARN_NOTHING_TO_DO;
-    }
     if (*tableSize < requiredSize)
     {
         *tableSize = requiredSize;

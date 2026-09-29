@@ -15,6 +15,74 @@ namespace nv::iddcx {
 
 namespace {
 
+#if defined(NV_RM_USER_LINK_PROBE)
+constexpr wchar_t GspFirmwareDirectory[] = L"ProgramData";
+constexpr wchar_t GspFirmwareSuffix[] = L"\\nv-iddcx\\gsp_ga10x.bin";
+
+NV_STATUS InitializeRmGpuFirmware(
+    _In_ NV_PLATFORM_RM_GPU_CONTEXT* gpuContext) noexcept
+{
+    wchar_t firmwarePath[MAX_PATH] = {};
+    const DWORD directoryLength = GetEnvironmentVariableW(
+        GspFirmwareDirectory,
+        firmwarePath,
+        ARRAYSIZE(firmwarePath));
+    if (directoryLength == 0 ||
+        directoryLength >= ARRAYSIZE(firmwarePath) ||
+        wcscat_s(firmwarePath, GspFirmwareSuffix) != 0)
+    {
+        return NV_ERR_INVALID_PATH;
+    }
+
+    const HANDLE firmwareFile = CreateFile2(
+        firmwarePath,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        OPEN_EXISTING,
+        nullptr);
+    if (firmwareFile == INVALID_HANDLE_VALUE)
+    {
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+
+    LARGE_INTEGER firmwareSize = {};
+    if (!GetFileSizeEx(firmwareFile, &firmwareSize) ||
+        firmwareSize.QuadPart <= 0 ||
+        firmwareSize.QuadPart > NV_U32_MAX)
+    {
+        CloseHandle(firmwareFile);
+        return NV_ERR_INVALID_DATA;
+    }
+
+    void* firmware = HeapAlloc(
+        GetProcessHeap(),
+        0,
+        static_cast<SIZE_T>(firmwareSize.QuadPart));
+    if (firmware == nullptr)
+    {
+        CloseHandle(firmwareFile);
+        return NV_ERR_NO_MEMORY;
+    }
+
+    DWORD bytesRead = 0;
+    NV_STATUS status = ReadFile(
+        firmwareFile,
+        firmware,
+        static_cast<DWORD>(firmwareSize.QuadPart),
+        &bytesRead,
+        nullptr) && bytesRead == firmwareSize.QuadPart
+        ? NvRmInitializeGpuFirmware(
+            gpuContext,
+            firmware,
+            static_cast<NvU32>(firmwareSize.QuadPart))
+        : NV_ERR_OPERATING_SYSTEM;
+
+    HeapFree(GetProcessHeap(), 0, firmware);
+    CloseHandle(firmwareFile);
+    return status;
+}
+#endif
+
 NTSTATUS ReadPciConfig(
     void* context,
     void* buffer,
@@ -103,6 +171,16 @@ USHORT ReadMmio16(void* context, SIZE_T offset)
 ULONG ReadMmio32(void* context, SIZE_T offset)
 {
     return static_cast<RegisterAperture*>(context)->ReadRegister32(offset);
+}
+
+void ReadMmioBuffer32(
+    void* context,
+    SIZE_T offset,
+    ULONG* buffer,
+    ULONG count)
+{
+    static_cast<RegisterAperture*>(context)->ReadRegisterBuffer32(
+        offset, buffer, count);
 }
 
 void WriteMmio8(void* context, SIZE_T offset, UCHAR value)
@@ -478,6 +556,7 @@ NTSTATUS PrepareHardware(
         ReadMmio8,
         ReadMmio16,
         ReadMmio32,
+        ReadMmioBuffer32,
         WriteMmio8,
         WriteMmio16,
         WriteMmio32,
@@ -668,6 +747,29 @@ NTSTATUS PrepareHardware(
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
     context->rmGpuAttached = true;
+
+    const NV_STATUS firmwareStatus = InitializeRmGpuFirmware(
+        context->rmGpuContext);
+    TraceEvents(
+        firmwareStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "NvRmInitializeGpuFirmware: 0x%08X",
+        firmwareStatus);
+    if (firmwareStatus != NV_OK)
+    {
+        DestroyRmGpuContext(context);
+        context->interrupt.Reset();
+        NvPlatformUnregisterDmaProvider(context->dmaRegistration);
+        context->dmaRegistration = nullptr;
+        context->dmaEngine.Reset();
+        NvPlatformUnregisterMmioAperture(context->mmioRegistration);
+        context->mmioRegistration = nullptr;
+        context->registerAperture.Reset();
+        NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
+        context->pciConfigRegistration = nullptr;
+        context->configSpace.Reset();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
 
     NV_RM_GPU_OPEN_STAGE openStage = NV_RM_GPU_OPEN_STAGE_ROOT_CLIENT;
     const NV_STATUS openStatus = NvRmOpenGpuDevice(

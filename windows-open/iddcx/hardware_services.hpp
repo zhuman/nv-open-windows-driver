@@ -78,6 +78,10 @@ public:
     UCHAR ReadRegister8(_In_ SIZE_T offset) const noexcept;
     USHORT ReadRegister16(_In_ SIZE_T offset) const noexcept;
     ULONG ReadRegister32(_In_ SIZE_T offset) const noexcept;
+    void ReadRegisterBuffer32(
+        _In_ SIZE_T offset,
+        _Out_writes_(count) ULONG* buffer,
+        _In_ ULONG count) const noexcept;
     void WriteRegister8(_In_ SIZE_T offset, _In_ UCHAR value) const noexcept;
     void WriteRegister16(_In_ SIZE_T offset, _In_ USHORT value) const noexcept;
     void WriteRegister32(_In_ SIZE_T offset, _In_ ULONG value) const noexcept;

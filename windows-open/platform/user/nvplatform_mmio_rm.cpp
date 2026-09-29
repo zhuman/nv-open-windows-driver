@@ -16,6 +16,9 @@ struct Aperture
     volatile NvU8* address;
     SIZE_T length;
     NV_PLATFORM_MMIO_ACCESS access;
+    ULONG* read32Cache;
+    SIZE_T read32CacheOffset;
+    NvU32 read32CacheCount;
     bool registered;
 };
 
@@ -78,7 +81,8 @@ extern "C" NTSTATUS NvPlatformRegisterMmioAperture(
     if (physicalAddress == 0 || address == nullptr || length == 0 ||
         access == nullptr || access->context == nullptr ||
         access->read8 == nullptr || access->read16 == nullptr ||
-        access->read32 == nullptr || access->write8 == nullptr ||
+        access->read32 == nullptr || access->read32Buffer == nullptr ||
+        access->write8 == nullptr ||
         access->write16 == nullptr || access->write32 == nullptr ||
         registration == nullptr)
     {
@@ -116,6 +120,7 @@ extern "C" void NvPlatformUnregisterMmioAperture(void* registration) noexcept
         return;
     }
     AcquireSRWLockExclusive(&apertureLock);
+    HeapFree(GetProcessHeap(), 0, aperture->read32Cache);
     ZeroMemory(aperture, sizeof(*aperture));
     ReleaseSRWLockExclusive(&apertureLock);
 }
@@ -221,9 +226,80 @@ extern "C" NvU32 NvPlatformRmReadRegister32(const volatile void* address)
     AcquireSRWLockShared(&apertureLock);
     SIZE_T offset = 0;
     Aperture* aperture = FindAperture(address, sizeof(NvU32), &offset);
-    const NvU32 value = aperture != nullptr
-        ? aperture->access.read32(aperture->access.context, offset)
-        : NV_U32_MAX;
+    NvU32 value = NV_U32_MAX;
+    if (aperture != nullptr)
+    {
+        if (aperture->read32Cache != nullptr &&
+            offset >= aperture->read32CacheOffset &&
+            (offset - aperture->read32CacheOffset) % sizeof(NvU32) == 0)
+        {
+            const SIZE_T index =
+                (offset - aperture->read32CacheOffset) / sizeof(NvU32);
+            value = index < aperture->read32CacheCount
+                ? aperture->read32Cache[index]
+                : aperture->access.read32(aperture->access.context, offset);
+        }
+        else
+        {
+            value = aperture->access.read32(aperture->access.context, offset);
+        }
+    }
     ReleaseSRWLockShared(&apertureLock);
     return value;
+}
+
+extern "C" NV_STATUS NvPlatformRmBeginRegisterCache32(
+    const volatile void* address,
+    NvU32 count)
+{
+    if (count == 0)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    ULONG* cache = static_cast<ULONG*>(HeapAlloc(
+        GetProcessHeap(), 0, static_cast<SIZE_T>(count) * sizeof(ULONG)));
+    if (cache == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    NV_STATUS status = NV_ERR_INVALID_ADDRESS;
+    AcquireSRWLockExclusive(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(
+        address, static_cast<SIZE_T>(count) * sizeof(NvU32), &offset);
+    if (aperture != nullptr && aperture->read32Cache == nullptr)
+    {
+        aperture->access.read32Buffer(
+            aperture->access.context, offset, cache, count);
+        aperture->read32Cache = cache;
+        aperture->read32CacheOffset = offset;
+        aperture->read32CacheCount = count;
+        cache = nullptr;
+        status = NV_OK;
+    }
+    else if (aperture != nullptr)
+    {
+        status = NV_ERR_STATE_IN_USE;
+    }
+    ReleaseSRWLockExclusive(&apertureLock);
+
+    HeapFree(GetProcessHeap(), 0, cache);
+    return status;
+}
+
+extern "C" void NvPlatformRmEndRegisterCache32(const volatile void* address)
+{
+    AcquireSRWLockExclusive(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(address, sizeof(NvU32), &offset);
+    if (aperture != nullptr && offset == aperture->read32CacheOffset)
+    {
+        HeapFree(GetProcessHeap(), 0, aperture->read32Cache);
+        aperture->read32Cache = nullptr;
+        aperture->read32CacheOffset = 0;
+        aperture->read32CacheCount = 0;
+    }
+    ReleaseSRWLockExclusive(&apertureLock);
 }
