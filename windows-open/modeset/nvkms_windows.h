@@ -27,6 +27,8 @@ NV_STATUS NvKmsWindowsRegisterGpu(
 void NvKmsWindowsUnregisterGpu(NvU32 gpuId);
 NV_STATUS NvKmsWindowsProbeGpuEnumeration(NV_KMS_WINDOWS_GPU_INFO* gpuInfo);
 NV_STATUS NvKmsWindowsProbeRmClient(NvHandle* clientHandle);
+NV_STATUS NvKmsWindowsInitialize(void);
+void NvKmsWindowsShutdown(void);
 
 #ifdef __cplusplus
 }

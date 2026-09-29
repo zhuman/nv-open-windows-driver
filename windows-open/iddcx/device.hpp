@@ -35,6 +35,7 @@ struct DeviceContext final
     NvHandle rmSubdeviceHandle;
     bool rmDeviceOpened;
     bool rmGpuAttached;
+    bool nvKmsInitialized;
     bool rmInitialized;
     bool nvPortInitialized;
 };

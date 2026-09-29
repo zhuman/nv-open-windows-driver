@@ -270,6 +270,12 @@ NTSTATUS CreateRmGpuContext(
 void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
 {
 #if defined(NV_RM_USER_LINK_PROBE)
+    if (context->nvKmsInitialized)
+    {
+        NvKmsWindowsShutdown();
+        context->nvKmsInitialized = false;
+    }
+
     if (context->rmDeviceOpened)
     {
         const NV_STATUS status = NvRmCloseGpuDevice(context->rmClientHandle);
@@ -788,15 +794,12 @@ NTSTATUS PrepareHardware(
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
-    NvHandle modesetClientHandle = 0;
-    const NV_STATUS modesetProbeStatus = NvKmsWindowsProbeRmClient(
-        &modesetClientHandle);
+    const NV_STATUS modesetProbeStatus = NvKmsWindowsInitialize();
     TraceEvents(
         modesetProbeStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,
-        "NvKmsWindowsProbeRmClient: 0x%08X client=0x%08X",
-        modesetProbeStatus,
-        modesetClientHandle);
+        "NvKmsWindowsInitialize: 0x%08X",
+        modesetProbeStatus);
     if (modesetProbeStatus != NV_OK)
     {
         DestroyRmGpuContext(context);
@@ -812,6 +815,7 @@ NTSTATUS PrepareHardware(
         context->configSpace.Reset();
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
+    context->nvKmsInitialized = true;
 
     NV_KMS_WINDOWS_GPU_INFO modesetGpuInfo = {};
     const NV_STATUS modesetEnumerationStatus =
