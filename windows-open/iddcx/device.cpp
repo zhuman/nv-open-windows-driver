@@ -49,6 +49,22 @@ extern "C" void NvKmsWindowsTraceStateLoadEngine(
         name != nullptr ? name : "<unknown>");
 }
 
+extern "C" void NvKmsWindowsTraceStatePostLoadEngine(
+    unsigned int index,
+    unsigned int descriptor,
+    const char* name,
+    int begin)
+{
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "RM state post-load engine: phase=%s index=%u descriptor=0x%08X name=%s",
+        begin ? "begin" : "end",
+        index,
+        descriptor,
+        name != nullptr ? name : "<unknown>");
+}
+
 extern "C" void NvKmsWindowsTraceAssert(
     unsigned int lineNumber,
     unsigned long long returnAddress)

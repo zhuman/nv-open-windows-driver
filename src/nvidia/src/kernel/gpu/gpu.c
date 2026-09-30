@@ -34,6 +34,7 @@
 void NvKmsWindowsTraceMessage(const char *message);
 void NvKmsWindowsTraceStateInitEngine(NvU32 index, NvU32 descriptor, const char *name, NvBool begin);
 void NvKmsWindowsTraceStateLoadEngine(NvU32 index, NvU32 descriptor, const char *name, NvBool begin);
+void NvKmsWindowsTraceStatePostLoadEngine(NvU32 index, NvU32 descriptor, const char *name, NvBool begin);
 #endif
 #include "gpu/disp/kern_disp.h"
 #include "gpu/disp/inst_mem/disp_inst_mem.h"
@@ -3760,11 +3761,25 @@ gpuStatePostLoad
         rmStatus = gpuLoadFailurePathTest(pGpu, NV_REG_STR_GPU_LOAD_FAILURE_TEST_STAGE_POSTLOAD, curEngDescIdx, NV_FALSE);
         if (rmStatus == NV_OK)
         {
+#if defined(NV_RM_USER_LINK_PROBE)
+            NvKmsWindowsTraceStatePostLoadEngine(
+                curEngDescIdx,
+                curEngDescriptor,
+                engstateGetName(pEngstate),
+                NV_TRUE);
+#endif
             RMTRACE_ENGINE_PROFILE_EVENT("gpuStatePostLoadEngStart", curEngDescriptor, pGpu->registerAccess.regReadCount, pGpu->registerAccess.regWriteCount);
             engstateLogStateTransitionPre(pEngstate, ENGSTATE_STATE_POST_LOAD, &engTransitionData);
             rmStatus = engstateStatePostLoad(pGpu, pEngstate, flags);
             engstateLogStateTransitionPost(pEngstate, ENGSTATE_STATE_POST_LOAD, &engTransitionData);
             RMTRACE_ENGINE_PROFILE_EVENT("gpuStatePostLoadEngEnd", curEngDescriptor, pGpu->registerAccess.regReadCount, pGpu->registerAccess.regWriteCount);
+#if defined(NV_RM_USER_LINK_PROBE)
+            NvKmsWindowsTraceStatePostLoadEngine(
+                curEngDescIdx,
+                curEngDescriptor,
+                engstateGetName(pEngstate),
+                NV_FALSE);
+#endif
         }
         // RMCONFIG:  Bail on errors unless the feature/object/engine/class
         //            is simply unsupported
