@@ -14,6 +14,10 @@ constexpr USHORT BusInterfaceVersion = 1;
 constexpr USHORT NvidiaVendorId = 0x10DE;
 constexpr ULONG PciCommandOffset = 0x04;
 constexpr USHORT PciCommandMemorySpace = 0x0002;
+constexpr USHORT PciStatusCapabilitiesList = 0x0010;
+constexpr ULONG PciCapabilitiesPointerOffset = 0x34;
+constexpr UCHAR PciCapabilityMsi = 0x05;
+constexpr UCHAR PciCapabilityMsiX = 0x11;
 constexpr size_t MaximumDmaTransferLength = 0xFFFFFFFFull;
 constexpr ULONG PmcBoot0Offset = 0x00000000;
 constexpr ULONG PmcBoot42Offset = 0x00000A00;
@@ -195,6 +199,51 @@ NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
     {
         Reset();
         return STATUS_NOT_SUPPORTED;
+    }
+
+    if ((header.status & PciStatusCapabilitiesList) != 0)
+    {
+        UCHAR capabilityOffset = 0;
+        if (NT_SUCCESS(Read(
+                PciCapabilitiesPointerOffset,
+                &capabilityOffset,
+                sizeof(capabilityOffset))))
+        {
+            for (ULONG capabilityIndex = 0;
+                 capabilityOffset >= 0x40 && capabilityIndex < 48;
+                 ++capabilityIndex)
+            {
+                UCHAR capabilityHeader[2] = {};
+                if (!NT_SUCCESS(Read(
+                        capabilityOffset,
+                        capabilityHeader,
+                        sizeof(capabilityHeader))))
+                {
+                    break;
+                }
+
+                if (capabilityHeader[0] == PciCapabilityMsi ||
+                    capabilityHeader[0] == PciCapabilityMsiX)
+                {
+                    USHORT messageControl = 0;
+                    if (NT_SUCCESS(Read(
+                            capabilityOffset + 2,
+                            &messageControl,
+                            sizeof(messageControl))))
+                    {
+                        TraceEvents(
+                            TRACE_LEVEL_INFORMATION,
+                            TRACE_PCI,
+                            "PCI interrupt capability: id=0x%02X offset=0x%02X control=0x%04X",
+                            capabilityHeader[0],
+                            capabilityOffset,
+                            messageControl);
+                    }
+                }
+
+                capabilityOffset = capabilityHeader[1] & ~0x3U;
+            }
+        }
     }
 
     PHYSICAL_ADDRESS memoryBarAddresses[MaximumMemoryBarCount] = {};
@@ -721,6 +770,18 @@ NTSTATUS Interrupt::Initialize(
         WDF_INTERRUPT_CONFIG_INIT(&configuration, Isr, Dpc);
         configuration.InterruptRaw = raw;
         configuration.InterruptTranslated = translated;
+
+        TraceEvents(
+            TRACE_LEVEL_INFORMATION,
+            TRACE_DRIVER,
+            "Interrupt resource: rawFlags=0x%04X rawShare=%u translatedFlags=0x%04X translatedShare=%u level=%lu vector=%lu affinity=0x%llX",
+            raw->Flags,
+            raw->ShareDisposition,
+            translated->Flags,
+            translated->ShareDisposition,
+            translated->u.Interrupt.Level,
+            translated->u.Interrupt.Vector,
+            static_cast<unsigned long long>(translated->u.Interrupt.Affinity));
 
         const NTSTATUS status = WdfInterruptCreate(
             device,

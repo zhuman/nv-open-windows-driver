@@ -272,6 +272,7 @@ NTSTATUS CreateRmGpuContext(
 
     const ULONG resourceCount = WdfCmResourceListGetCount(resourcesTranslated);
     const ULONG barCount = context->configSpace.MemoryBarCount();
+    ULONG nextMemoryResource = 0;
     for (ULONG barIndex = 0; barIndex < barCount; ++barIndex)
     {
         const PHYSICAL_ADDRESS barAddress =
@@ -286,7 +287,35 @@ NTSTATUS CreateRmGpuContext(
                 candidate->u.Memory.Start.QuadPart == barAddress.QuadPart)
             {
                 barRange = candidate;
+                nextMemoryResource = resourceIndex + 1;
                 break;
+            }
+        }
+
+        if (barRange == nullptr)
+        {
+            for (ULONG resourceIndex = nextMemoryResource;
+                 resourceIndex < resourceCount;
+                 ++resourceIndex)
+            {
+                PCM_PARTIAL_RESOURCE_DESCRIPTOR candidate =
+                    WdfCmResourceListGetDescriptor(
+                        resourcesTranslated,
+                        resourceIndex);
+                if (candidate != nullptr &&
+                    candidate->Type == CmResourceTypeMemory)
+                {
+                    barRange = candidate;
+                    nextMemoryResource = resourceIndex + 1;
+                    TraceEvents(
+                        TRACE_LEVEL_INFORMATION,
+                        TRACE_PCI,
+                        "RM attach BAR translated fallback: index=%u config=0x%llX assigned=0x%llX",
+                        barIndex,
+                        barAddress.QuadPart,
+                        barRange->u.Memory.Start.QuadPart);
+                    break;
+                }
             }
         }
 
