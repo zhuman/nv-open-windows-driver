@@ -4,6 +4,7 @@
 
 #include <d3d11.h>
 #include <dxgi1_4.h>
+#include <cstring>
 #include <wrl/client.h>
 
 #include "adapter.tmh"
@@ -108,35 +109,58 @@ DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY GetOutputTechnology(
 }
 
 NTSTATUS GetDisplayState(
+    _In_ NvU32 connectedDisplayIndex,
     _Out_ NV_KMS_WINDOWS_DISPLAY_STATE* displayState) noexcept
 {
-    const NV_STATUS status = NvKmsWindowsGetPrimaryDisplay(displayState);
+    const NV_STATUS status =
+        NvKmsWindowsGetDisplay(connectedDisplayIndex, displayState);
     if (status != NV_OK)
     {
         TraceEvents(
             TRACE_LEVEL_ERROR,
             TRACE_DRIVER,
-            "NvKmsWindowsGetPrimaryDisplay failed: 0x%08X",
+            "NvKmsWindowsGetDisplay[%u] failed: 0x%08X",
+            connectedDisplayIndex,
             status);
         return STATUS_DEVICE_NOT_READY;
     }
     return STATUS_SUCCESS;
 }
 
+NTSTATUS GetDisplayState(
+    _In_ const IDDCX_MONITOR_DESCRIPTION& description,
+    _Out_ NV_KMS_WINDOWS_DISPLAY_STATE* displayState) noexcept
+{
+    NvU32 displayCount = 0;
+    if (description.pData == nullptr ||
+        NvKmsWindowsGetConnectedDisplayCount(&displayCount) != NV_OK)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    for (NvU32 index = 0; index < displayCount; ++index)
+    {
+        NV_KMS_WINDOWS_DISPLAY_STATE candidate = {};
+        if (NvKmsWindowsGetDisplay(index, &candidate) == NV_OK &&
+            candidate.edidBytes == description.DataSize &&
+            std::memcmp(candidate.edid, description.pData, candidate.edidBytes) == 0)
+        {
+            *displayState = candidate;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    return STATUS_NOT_FOUND;
+}
+
 NTSTATUS FillMonitorModeBuffer(
+    _In_ const NV_KMS_WINDOWS_DISPLAY_STATE& displayState,
     _In_ UINT inputCount,
     _Out_writes_opt_(inputCount) IDDCX_MONITOR_MODE* modes,
     _In_ IDDCX_MONITOR_MODE_ORIGIN origin,
     _Out_ UINT* outputCount,
     _Out_ UINT* preferredModeIndex) noexcept
 {
-    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
-    NTSTATUS status = GetDisplayState(&displayState);
-    if (!NT_SUCCESS(status))
-    {
-        return status;
-    }
-
     *outputCount = displayState.modeCount;
     *preferredModeIndex = displayState.preferredModeIndex < displayState.modeCount
         ? displayState.preferredModeIndex
@@ -162,18 +186,12 @@ NTSTATUS FillMonitorModeBuffer(
 }
 
 NTSTATUS FillMonitorMode2Buffer(
+    _In_ const NV_KMS_WINDOWS_DISPLAY_STATE& displayState,
     _In_ UINT inputCount,
     _Out_writes_opt_(inputCount) IDDCX_MONITOR_MODE2* modes,
     _Out_ UINT* outputCount,
     _Out_ UINT* preferredModeIndex) noexcept
 {
-    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
-    NTSTATUS status = GetDisplayState(&displayState);
-    if (!NT_SUCCESS(status))
-    {
-        return status;
-    }
-
     *outputCount = displayState.modeCount;
     *preferredModeIndex = displayState.preferredModeIndex < displayState.modeCount
         ? displayState.preferredModeIndex
@@ -198,6 +216,51 @@ NTSTATUS FillMonitorMode2Buffer(
             IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR);
     }
     return STATUS_SUCCESS;
+}
+
+const NV_KMS_WINDOWS_MODE* FindDisplayMode(
+    _In_ const NV_KMS_WINDOWS_DISPLAY_STATE& displayState,
+    _In_ const DISPLAYCONFIG_VIDEO_SIGNAL_INFO& signalInfo) noexcept
+{
+    for (NvU32 index = 0; index < displayState.modeCount; ++index)
+    {
+        const NV_KMS_WINDOWS_MODE& mode = displayState.modes[index];
+        if (mode.pixelClockHz == signalInfo.pixelRate &&
+            mode.hVisible == signalInfo.activeSize.cx &&
+            mode.vVisible == signalInfo.activeSize.cy &&
+            mode.hTotal == signalInfo.totalSize.cx &&
+            mode.vTotal == signalInfo.totalSize.cy)
+        {
+            return &mode;
+        }
+    }
+    return nullptr;
+}
+
+void FillGradient(
+    _Out_writes_bytes_(static_cast<size_t>(pitch) * height) void* pixels,
+    _In_ NvU32 pitch,
+    _In_ NvU32 width,
+    _In_ NvU32 height,
+    _In_ NvU32 outputIndex) noexcept
+{
+    std::memset(pixels, 0, static_cast<size_t>(pitch) * height);
+    auto* const bytes = static_cast<NvU8*>(pixels);
+    for (NvU32 y = 0; y < height; ++y)
+    {
+        auto* const row = reinterpret_cast<NvU32*>(bytes + (pitch * y));
+        const NvU32 green = height > 1 ? (255U * y) / (height - 1) : 0;
+        for (NvU32 x = 0; x < width; ++x)
+        {
+            const NvU32 red = width > 1 ? (255U * x) / (width - 1) : 0;
+            const NvU32 blue = 255U - ((red + green) / 2U);
+            const NvU32 marker = ((x / 64U) ^ (y / 64U) ^ outputIndex) & 1U;
+            row[x] = 0xff000000U |
+                ((marker ? red : red / 2U) << 16) |
+                ((marker ? green : green / 2U) << 8) |
+                blue;
+        }
+    }
 }
 
 HRESULT CreateSwapChainDevice(
@@ -253,18 +316,13 @@ namespace nv::iddcx {
 
 Adapter::Adapter() noexcept
     : handle_(nullptr),
-    monitor_(nullptr),
-    swapchain_(nullptr),
-            swapchainDevice_(nullptr),
-            swapchainThread_(nullptr),
-            swapchainStopEvent_(nullptr),
-            nextSurfaceEvent_(nullptr),
+    outputs_{},
+    outputCount_(0),
       initializationStatus_(STATUS_NOT_FOUND),
       state_(State::Stopped),
     powered_(false),
     displayReady_(0)
 {
-        InitializeSRWLock(&swapchainLock_);
 }
 
 NTSTATUS Adapter::EnterD0(_In_ WDFDEVICE device) noexcept
@@ -286,7 +344,7 @@ NTSTATUS Adapter::EnterD0(_In_ WDFDEVICE device) noexcept
     capabilities.Flags = IDDCX_ADAPTER_FLAGS_NONE;
     capabilities.MaxDisplayPipelineRate =
         static_cast<UINT64>(7680) * 4320 * 240;
-    capabilities.MaxMonitorsSupported = 1;
+    capabilities.MaxMonitorsSupported = MaxOutputs;
     capabilities.EndPointDiagnostics.Size =
         sizeof(capabilities.EndPointDiagnostics);
     capabilities.EndPointDiagnostics.TransmissionType =
@@ -335,7 +393,7 @@ NTSTATUS Adapter::EnterD0(_In_ WDFDEVICE device) noexcept
 NTSTATUS Adapter::NotifyDisplayReady() noexcept
 {
     InterlockedExchange(&displayReady_, 1);
-    return TryAnnounceMonitor();
+    return TryAnnounceMonitors();
 }
 
 void Adapter::ExitD0() noexcept
@@ -346,13 +404,7 @@ void Adapter::ExitD0() noexcept
 void Adapter::Reset() noexcept
 {
     powered_ = false;
-    StopSwapChain();
-
-    if (monitor_ != nullptr)
-    {
-        GetMonitorObjectContext(monitor_)->owner = nullptr;
-    }
-    monitor_ = nullptr;
+    ResetOutputs();
     if (handle_ != nullptr)
     {
         AdapterObjectContext* context = GetAdapterObjectContext(handle_);
@@ -390,7 +442,7 @@ NTSTATUS Adapter::CompleteInitialization(
     }
 
     state_ = State::Ready;
-    initializationStatus_ = TryAnnounceMonitor();
+    initializationStatus_ = TryAnnounceMonitors();
     if (!NT_SUCCESS(initializationStatus_))
     {
         state_ = State::Failed;
@@ -398,38 +450,77 @@ NTSTATUS Adapter::CompleteInitialization(
     return STATUS_SUCCESS;
 }
 
-NTSTATUS Adapter::TryAnnounceMonitor() noexcept
+NTSTATUS Adapter::TryAnnounceMonitors() noexcept
 {
     if (state_ != State::Ready ||
         !powered_ ||
-        monitor_ != nullptr ||
         InterlockedCompareExchange(&displayReady_, 0, 0) == 0)
     {
         return STATUS_SUCCESS;
     }
+    if (outputCount_ != 0)
+    {
+        return STATUS_SUCCESS;
+    }
 
-    return AnnounceMonitor();
+    NvU32 connectedCount = 0;
+    const NV_STATUS countStatus =
+        NvKmsWindowsGetConnectedDisplayCount(&connectedCount);
+    if (countStatus != NV_OK)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+    if (connectedCount > MaxOutputs)
+    {
+        connectedCount = MaxOutputs;
+    }
+
+    for (NvU32 index = 0; index < connectedCount; ++index)
+    {
+        auto* const output = static_cast<OutputState*>(
+            HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(OutputState)));
+        if (output == nullptr)
+        {
+            ResetOutputs();
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        output->owner = this;
+        InitializeSRWLock(&output->swapchainLock);
+        const NTSTATUS stateStatus = GetDisplayState(index, &output->displayState);
+        if (!NT_SUCCESS(stateStatus))
+        {
+            HeapFree(GetProcessHeap(), 0, output);
+            ResetOutputs();
+            return stateStatus;
+        }
+
+        outputs_[outputCount_++] = output;
+        const NTSTATUS arrivalStatus = AnnounceMonitor(output);
+        if (!NT_SUCCESS(arrivalStatus))
+        {
+            ResetOutputs();
+            return arrivalStatus;
+        }
+    }
+
+    return STATUS_SUCCESS;
 }
 
-NTSTATUS Adapter::AnnounceMonitor() noexcept
+NTSTATUS Adapter::AnnounceMonitor(_Inout_ OutputState* output) noexcept
 {
-    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
-    NTSTATUS status = GetDisplayState(&displayState);
-    if (!NT_SUCCESS(status))
-    {
-        return status;
-    }
+    NV_KMS_WINDOWS_DISPLAY_STATE& displayState = output->displayState;
 
     IDDCX_MONITOR_INFO monitorInfo = {};
     monitorInfo.Size = sizeof(monitorInfo);
     monitorInfo.MonitorType = GetOutputTechnology(displayState.connectorType);
-    monitorInfo.ConnectorIndex = 0;
+    monitorInfo.ConnectorIndex = displayState.connectorIndex;
     monitorInfo.MonitorDescription.Size = sizeof(monitorInfo.MonitorDescription);
     monitorInfo.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
     monitorInfo.MonitorDescription.DataSize = displayState.edidBytes;
     monitorInfo.MonitorDescription.pData = displayState.edid;
     monitorInfo.MonitorContainerId = {
-        0x1500c36c, 0x73e5, 0x4bd2,
+        0x1500c36c ^ displayState.displayHandle, 0x73e5, 0x4bd2,
         { 0x93, 0xa7, 0xe6, 0x8c, 0x59, 0xd4, 0xe7, 0x9c }
     };
 
@@ -440,21 +531,22 @@ NTSTATUS Adapter::AnnounceMonitor() noexcept
     input.ObjectAttributes = &attributes;
     input.pMonitorInfo = &monitorInfo;
 
-    IDARG_OUT_MONITORCREATE output = {};
-    status = IddCxMonitorCreate(handle_, &input, &output);
+    IDARG_OUT_MONITORCREATE createOutput = {};
+    NTSTATUS status = IddCxMonitorCreate(handle_, &input, &createOutput);
     TraceEvents(
         NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,
         "IddCxMonitorCreate: %!STATUS! monitor=%p",
         status,
-        output.MonitorObject);
+        createOutput.MonitorObject);
     if (!NT_SUCCESS(status))
     {
         return status;
     }
 
-    monitor_ = output.MonitorObject;
-    GetMonitorObjectContext(monitor_)->owner = this;
+    output->monitor = createOutput.MonitorObject;
+    GetMonitorObjectContext(output->monitor)->owner = this;
+    GetMonitorObjectContext(output->monitor)->output = output;
     TraceEvents(
         TRACE_LEVEL_INFORMATION,
         TRACE_DRIVER,
@@ -467,7 +559,7 @@ NTSTATUS Adapter::AnnounceMonitor() noexcept
         displayState.maxLayersPerHead,
         displayState.supportsMultiLayerFlip);
     IDARG_OUT_MONITORARRIVAL arrival = {};
-    status = IddCxMonitorArrival(monitor_, &arrival);
+    status = IddCxMonitorArrival(output->monitor, &arrival);
     TraceEvents(
         NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,
@@ -476,23 +568,27 @@ NTSTATUS Adapter::AnnounceMonitor() noexcept
         arrival.OsTargetId);
     if (!NT_SUCCESS(status))
     {
-        WdfObjectDelete(monitor_);
-        monitor_ = nullptr;
+        GetMonitorObjectContext(output->monitor)->owner = nullptr;
+        GetMonitorObjectContext(output->monitor)->output = nullptr;
+        WdfObjectDelete(output->monitor);
+        output->monitor = nullptr;
     }
 
     return status;
 }
 
 NTSTATUS Adapter::AssignSwapChain(
+    _Inout_ OutputState* output,
     _In_ IDDCX_MONITOR monitor,
     _In_ const IDARG_IN_SETSWAPCHAIN* arguments) noexcept
 {
-    if (monitor != monitor_ || arguments == nullptr || state_ != State::Ready)
+    if (output == nullptr || monitor != output->monitor ||
+        arguments == nullptr || state_ != State::Ready)
     {
         return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
     }
 
-    StopSwapChain();
+    StopSwapChain(output);
 
     IDXGIDevice* device = nullptr;
     HRESULT result = CreateSwapChainDevice(arguments->RenderAdapterLuid, &device);
@@ -527,22 +623,23 @@ NTSTATUS Adapter::AssignSwapChain(
         return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
     }
 
-    AcquireSRWLockExclusive(&swapchainLock_);
-    swapchain_ = arguments->hSwapChain;
-    swapchainDevice_ = device;
-    swapchainStopEvent_ = stopEvent;
-    nextSurfaceEvent_ = arguments->hNextSurfaceAvailable;
-    ReleaseSRWLockExclusive(&swapchainLock_);
+    AcquireSRWLockExclusive(&output->swapchainLock);
+    output->swapchain = arguments->hSwapChain;
+    output->swapchainDevice = device;
+    output->swapchainStopEvent = stopEvent;
+    output->nextSurfaceEvent = arguments->hNextSurfaceAvailable;
+    ReleaseSRWLockExclusive(&output->swapchainLock);
 
-    swapchainThread_ = CreateThread(nullptr, 0, SwapChainThread, this, 0, nullptr);
-    if (swapchainThread_ == nullptr)
+    output->swapchainThread =
+        CreateThread(nullptr, 0, SwapChainThread, output, 0, nullptr);
+    if (output->swapchainThread == nullptr)
     {
-        AcquireSRWLockExclusive(&swapchainLock_);
-        swapchain_ = nullptr;
-        swapchainDevice_ = nullptr;
-        swapchainStopEvent_ = nullptr;
-        nextSurfaceEvent_ = nullptr;
-        ReleaseSRWLockExclusive(&swapchainLock_);
+        AcquireSRWLockExclusive(&output->swapchainLock);
+        output->swapchain = nullptr;
+        output->swapchainDevice = nullptr;
+        output->swapchainStopEvent = nullptr;
+        output->nextSurfaceEvent = nullptr;
+        ReleaseSRWLockExclusive(&output->swapchainLock);
         CloseHandle(stopEvent);
         device->Release();
         return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
@@ -552,35 +649,38 @@ NTSTATUS Adapter::AssignSwapChain(
         TRACE_LEVEL_INFORMATION,
         TRACE_DRIVER,
         "AssignSwapChain: processing swapchain=%p",
-        swapchain_);
+        output->swapchain);
     return STATUS_SUCCESS;
 }
 
-NTSTATUS Adapter::UnassignSwapChain(_In_ IDDCX_MONITOR monitor) noexcept
+NTSTATUS Adapter::UnassignSwapChain(
+    _Inout_ OutputState* output,
+    _In_ IDDCX_MONITOR monitor) noexcept
 {
-    if (monitor != monitor_)
+    if (output == nullptr || monitor != output->monitor)
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
 
-    StopSwapChain();
+    StopSwapChain(output);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "UnassignSwapChain");
     return STATUS_SUCCESS;
 }
 
 DWORD WINAPI Adapter::SwapChainThread(_In_ void* context)
 {
-    static_cast<Adapter*>(context)->ProcessSwapChain();
+    auto* const output = static_cast<OutputState*>(context);
+    output->owner->ProcessSwapChain(output);
     return 0;
 }
 
-void Adapter::ProcessSwapChain() noexcept
+void Adapter::ProcessSwapChain(_Inout_ OutputState* output) noexcept
 {
-    AcquireSRWLockShared(&swapchainLock_);
-    IDDCX_SWAPCHAIN swapchain = swapchain_;
-    HANDLE stopEvent = swapchainStopEvent_;
-    HANDLE nextSurfaceEvent = nextSurfaceEvent_;
-    ReleaseSRWLockShared(&swapchainLock_);
+    AcquireSRWLockShared(&output->swapchainLock);
+    IDDCX_SWAPCHAIN swapchain = output->swapchain;
+    HANDLE stopEvent = output->swapchainStopEvent;
+    HANDLE nextSurfaceEvent = output->nextSurfaceEvent;
+    ReleaseSRWLockShared(&output->swapchainLock);
 
     const HANDLE waitHandles[] = { nextSurfaceEvent, stopEvent };
     HRESULT result = S_OK;
@@ -637,13 +737,13 @@ void Adapter::ProcessSwapChain() noexcept
     if (processingFailed)
     {
         bool deleteSwapChain = false;
-        AcquireSRWLockExclusive(&swapchainLock_);
-        if (swapchain_ == swapchain)
+        AcquireSRWLockExclusive(&output->swapchainLock);
+        if (output->swapchain == swapchain)
         {
-            swapchain_ = nullptr;
+            output->swapchain = nullptr;
             deleteSwapChain = true;
         }
-        ReleaseSRWLockExclusive(&swapchainLock_);
+        ReleaseSRWLockExclusive(&output->swapchainLock);
         if (deleteSwapChain)
         {
             WdfObjectDelete(swapchain);
@@ -651,28 +751,28 @@ void Adapter::ProcessSwapChain() noexcept
     }
 }
 
-void Adapter::StopSwapChain() noexcept
+void Adapter::StopSwapChain(_Inout_ OutputState* output) noexcept
 {
-    if (swapchainStopEvent_ != nullptr)
+    if (output->swapchainStopEvent != nullptr)
     {
-        SetEvent(swapchainStopEvent_);
+        SetEvent(output->swapchainStopEvent);
     }
-    if (swapchainThread_ != nullptr)
+    if (output->swapchainThread != nullptr)
     {
-        WaitForSingleObject(swapchainThread_, INFINITE);
-        CloseHandle(swapchainThread_);
-        swapchainThread_ = nullptr;
+        WaitForSingleObject(output->swapchainThread, INFINITE);
+        CloseHandle(output->swapchainThread);
+        output->swapchainThread = nullptr;
     }
 
-    AcquireSRWLockExclusive(&swapchainLock_);
-    IDDCX_SWAPCHAIN swapchain = swapchain_;
-    swapchain_ = nullptr;
-    IDXGIDevice* device = swapchainDevice_;
-    swapchainDevice_ = nullptr;
-    HANDLE stopEvent = swapchainStopEvent_;
-    swapchainStopEvent_ = nullptr;
-    nextSurfaceEvent_ = nullptr;
-    ReleaseSRWLockExclusive(&swapchainLock_);
+    AcquireSRWLockExclusive(&output->swapchainLock);
+    IDDCX_SWAPCHAIN swapchain = output->swapchain;
+    output->swapchain = nullptr;
+    IDXGIDevice* device = output->swapchainDevice;
+    output->swapchainDevice = nullptr;
+    HANDLE stopEvent = output->swapchainStopEvent;
+    output->swapchainStopEvent = nullptr;
+    output->nextSurfaceEvent = nullptr;
+    ReleaseSRWLockExclusive(&output->swapchainLock);
 
     if (swapchain != nullptr)
     {
@@ -688,28 +788,248 @@ void Adapter::StopSwapChain() noexcept
     }
 }
 
+void Adapter::ResetOutputs() noexcept
+{
+    if (outputCount_ != 0)
+    {
+        NvKmsWindowsSetDisplayModes(nullptr, 0);
+    }
+    while (outputCount_ != 0)
+    {
+        OutputState* const output = outputs_[--outputCount_];
+        outputs_[outputCount_] = nullptr;
+        StopSwapChain(output);
+        NvKmsWindowsDestroyScanoutSurface(output->scanoutSurface);
+        output->scanoutSurface = nullptr;
+        output->scanoutPixels = nullptr;
+        output->scanoutPitch = 0;
+        if (output->monitor != nullptr)
+        {
+            MonitorObjectContext* const context =
+                GetMonitorObjectContext(output->monitor);
+            context->owner = nullptr;
+            context->output = nullptr;
+            WdfObjectDelete(output->monitor);
+            output->monitor = nullptr;
+        }
+        HeapFree(GetProcessHeap(), 0, output);
+    }
+}
+
 NTSTATUS Adapter::CommitModes(
     _In_ IDDCX_ADAPTER adapter,
-    _In_ const IDARG_IN_COMMITMODES* arguments) const noexcept
+    _In_ const IDARG_IN_COMMITMODES* arguments) noexcept
 {
     if (adapter != handle_ || arguments == nullptr || state_ != State::Ready)
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
+    if (!powered_)
+    {
+        return STATUS_DEVICE_POWER_FAILURE;
+    }
+    if (arguments->PathCount > MaxOutputs ||
+        (arguments->PathCount != 0 && arguments->pPaths == nullptr))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
-    return powered_ ? STATUS_SUCCESS : STATUS_DEVICE_POWER_FAILURE;
+    ModePath paths[MaxOutputs] = {};
+    for (UINT index = 0; index < arguments->PathCount; ++index)
+    {
+        paths[index].monitor = arguments->pPaths[index].MonitorObject;
+        paths[index].flags = arguments->pPaths[index].Flags;
+        paths[index].signalInfo = arguments->pPaths[index].TargetVideoSignalInfo;
+    }
+    return CommitDisplayModes(paths, arguments->PathCount);
 }
 
 NTSTATUS Adapter::CommitModes2(
     _In_ IDDCX_ADAPTER adapter,
-    _In_ const IDARG_IN_COMMITMODES2* arguments) const noexcept
+    _In_ const IDARG_IN_COMMITMODES2* arguments) noexcept
 {
     if (adapter != handle_ || arguments == nullptr || state_ != State::Ready)
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
+    if (!powered_)
+    {
+        return STATUS_DEVICE_POWER_FAILURE;
+    }
+    if (arguments->PathCount > MaxOutputs ||
+        (arguments->PathCount != 0 && arguments->pPaths == nullptr))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
-    return powered_ ? STATUS_SUCCESS : STATUS_DEVICE_POWER_FAILURE;
+    ModePath paths[MaxOutputs] = {};
+    for (UINT index = 0; index < arguments->PathCount; ++index)
+    {
+        paths[index].monitor = arguments->pPaths[index].MonitorObject;
+        paths[index].flags = arguments->pPaths[index].Flags;
+        paths[index].signalInfo = arguments->pPaths[index].TargetVideoSignalInfo;
+    }
+    return CommitDisplayModes(paths, arguments->PathCount);
+}
+
+NTSTATUS Adapter::CommitDisplayModes(
+    _In_reads_(pathCount) const ModePath* paths,
+    _In_ UINT pathCount) noexcept
+{
+    bool active[MaxOutputs] = {};
+    NvU32 modeIndexes[MaxOutputs] = {};
+    NV_KMS_WINDOWS_SURFACE* surfaces[MaxOutputs] = {};
+    NV_KMS_WINDOWS_SURFACE* newSurfaces[MaxOutputs] = {};
+    void* newPixels[MaxOutputs] = {};
+    NvU32 newPitches[MaxOutputs] = {};
+    NV_KMS_WINDOWS_MODESET_OUTPUT requests[MaxOutputs] = {};
+    NvU32 requestOutputs[MaxOutputs] = {};
+    NvU32 requestCount = 0;
+
+    for (NvU32 index = 0; index < outputCount_; ++index)
+    {
+        active[index] = outputs_[index]->active;
+        modeIndexes[index] = outputs_[index]->activeModeIndex;
+        surfaces[index] = outputs_[index]->scanoutSurface;
+    }
+
+    NTSTATUS status = STATUS_SUCCESS;
+    for (UINT pathIndex = 0; pathIndex < pathCount; ++pathIndex)
+    {
+        MonitorObjectContext* const context =
+            GetMonitorObjectContext(paths[pathIndex].monitor);
+        if (context->owner != this || context->output == nullptr)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            goto cleanup;
+        }
+
+        NvU32 outputIndex = 0;
+        while (outputIndex < outputCount_ &&
+               outputs_[outputIndex] != context->output)
+        {
+            ++outputIndex;
+        }
+        if (outputIndex == outputCount_)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            goto cleanup;
+        }
+
+        active[outputIndex] =
+            (paths[pathIndex].flags & IDDCX_PATH_FLAGS_ACTIVE) != 0;
+        if (!active[outputIndex])
+        {
+            surfaces[outputIndex] = nullptr;
+            continue;
+        }
+
+        const NV_KMS_WINDOWS_MODE* const mode = FindDisplayMode(
+            context->output->displayState,
+            paths[pathIndex].signalInfo);
+        if (mode == nullptr)
+        {
+            status = STATUS_GRAPHICS_MODE_NOT_PINNED;
+            goto cleanup;
+        }
+
+        modeIndexes[outputIndex] = mode->kmsModeIndex;
+        const bool replaceSurface = context->output->scanoutSurface == nullptr ||
+            context->output->activeModeIndex != mode->kmsModeIndex;
+        if (replaceSurface)
+        {
+            const NV_STATUS createStatus = NvKmsWindowsCreateScanoutSurface(
+                mode->hVisible,
+                mode->vVisible,
+                &newSurfaces[outputIndex],
+                &newPixels[outputIndex],
+                &newPitches[outputIndex]);
+            if (createStatus != NV_OK)
+            {
+                status = createStatus == NV_ERR_NO_MEMORY ?
+                    STATUS_INSUFFICIENT_RESOURCES : STATUS_DEVICE_NOT_READY;
+                goto cleanup;
+            }
+            FillGradient(
+                newPixels[outputIndex],
+                newPitches[outputIndex],
+                mode->hVisible,
+                mode->vVisible,
+                outputIndex);
+            surfaces[outputIndex] = newSurfaces[outputIndex];
+        }
+    }
+
+    for (NvU32 index = 0; index < outputCount_; ++index)
+    {
+        if (!active[index])
+        {
+            continue;
+        }
+        if (surfaces[index] == nullptr)
+        {
+            status = STATUS_INVALID_DEVICE_STATE;
+            goto cleanup;
+        }
+
+        requests[requestCount].displayHandle =
+            outputs_[index]->displayState.displayHandle;
+        requests[requestCount].modeIndex = modeIndexes[index];
+        requests[requestCount].surface = surfaces[index];
+        requestOutputs[requestCount] = index;
+        ++requestCount;
+    }
+
+    {
+        const NV_STATUS modesetStatus =
+            NvKmsWindowsSetDisplayModes(requests, requestCount);
+        TraceEvents(
+            modesetStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "NvKmsWindowsSetDisplayModes: 0x%08X outputs=%u",
+            modesetStatus,
+            requestCount);
+        if (modesetStatus != NV_OK)
+        {
+            status = modesetStatus == NV_ERR_NOT_SUPPORTED ?
+                STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY : STATUS_DEVICE_NOT_READY;
+            goto cleanup;
+        }
+    }
+
+    for (NvU32 index = 0; index < outputCount_; ++index)
+    {
+        OutputState* const output = outputs_[index];
+        if (newSurfaces[index] != nullptr)
+        {
+            NvKmsWindowsDestroyScanoutSurface(output->scanoutSurface);
+            output->scanoutSurface = newSurfaces[index];
+            output->scanoutPixels = newPixels[index];
+            output->scanoutPitch = newPitches[index];
+            newSurfaces[index] = nullptr;
+        }
+        else if (!active[index] && output->scanoutSurface != nullptr)
+        {
+            NvKmsWindowsDestroyScanoutSurface(output->scanoutSurface);
+            output->scanoutSurface = nullptr;
+            output->scanoutPixels = nullptr;
+            output->scanoutPitch = 0;
+        }
+        output->active = active[index];
+        output->activeModeIndex = modeIndexes[index];
+    }
+    for (NvU32 requestIndex = 0; requestIndex < requestCount; ++requestIndex)
+    {
+        outputs_[requestOutputs[requestIndex]]->assignedHead =
+            requests[requestIndex].assignedHead;
+    }
+
+cleanup:
+    for (NvU32 index = 0; index < outputCount_; ++index)
+    {
+        NvKmsWindowsDestroyScanoutSurface(newSurfaces[index]);
+    }
+    return status;
 }
 
 _Use_decl_annotations_
@@ -718,9 +1038,8 @@ void Adapter::Cleanup(WDFOBJECT adapterObject)
     AdapterObjectContext* context = GetAdapterObjectContext(adapterObject);
     if (context->owner != nullptr)
     {
+        context->owner->ResetOutputs();
         context->owner->handle_ = nullptr;
-        context->owner->monitor_ = nullptr;
-        context->owner->swapchain_ = nullptr;
         context->owner->initializationStatus_ = STATUS_NOT_FOUND;
         context->owner->state_ = State::Stopped;
         context->owner->powered_ = false;
@@ -768,7 +1087,7 @@ NTSTATUS AdapterQueryTargetInfo(
     IDARG_OUT_QUERYTARGET_INFO* output)
 {
     AdapterObjectContext* context = GetAdapterObjectContext(adapter);
-    if (context->owner == nullptr || input->ConnectorIndex != 0)
+    if (context->owner == nullptr || input->ConnectorIndex >= Adapter::MaxOutputs)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -788,7 +1107,15 @@ NTSTATUS ParseMonitorDescription(
     const IDARG_IN_PARSEMONITORDESCRIPTION* input,
     IDARG_OUT_PARSEMONITORDESCRIPTION* output)
 {
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
+    const NTSTATUS status =
+        GetDisplayState(input->MonitorDescription, &displayState);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
     return FillMonitorModeBuffer(
+        displayState,
         input->MonitorModeBufferInputCount,
         input->pMonitorModes,
         IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR,
@@ -801,7 +1128,15 @@ NTSTATUS ParseMonitorDescription2(
     const IDARG_IN_PARSEMONITORDESCRIPTION2* input,
     IDARG_OUT_PARSEMONITORDESCRIPTION* output)
 {
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
+    const NTSTATUS status =
+        GetDisplayState(input->MonitorDescription, &displayState);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
     return FillMonitorMode2Buffer(
+        displayState,
         input->MonitorModeBufferInputCount,
         input->pMonitorModes,
         &output->MonitorModeBufferOutputCount,
@@ -814,8 +1149,13 @@ NTSTATUS GetDefaultDescriptionModes(
     const IDARG_IN_GETDEFAULTDESCRIPTIONMODES* input,
     IDARG_OUT_GETDEFAULTDESCRIPTIONMODES* output)
 {
-    UNREFERENCED_PARAMETER(monitor);
+    MonitorObjectContext* const context = GetMonitorObjectContext(monitor);
+    if (context->output == nullptr)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
     return FillMonitorModeBuffer(
+        context->output->displayState,
         input->DefaultMonitorModeBufferInputCount,
         input->pDefaultMonitorModes,
         IDDCX_MONITOR_MODE_ORIGIN_DRIVER,
@@ -829,13 +1169,13 @@ NTSTATUS QueryTargetModes(
     const IDARG_IN_QUERYTARGETMODES* input,
     IDARG_OUT_QUERYTARGETMODES* output)
 {
-    UNREFERENCED_PARAMETER(monitor);
-    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
-    NTSTATUS status = GetDisplayState(&displayState);
-    if (!NT_SUCCESS(status))
+    MonitorObjectContext* const context = GetMonitorObjectContext(monitor);
+    if (context->output == nullptr)
     {
-        return status;
+        return STATUS_INVALID_DEVICE_STATE;
     }
+    const NV_KMS_WINDOWS_DISPLAY_STATE& displayState =
+        context->output->displayState;
 
     output->TargetModeBufferOutputCount = displayState.modeCount;
     if (input->TargetModeBufferInputCount == 0)
@@ -863,13 +1203,13 @@ NTSTATUS QueryTargetModes2(
     const IDARG_IN_QUERYTARGETMODES2* input,
     IDARG_OUT_QUERYTARGETMODES* output)
 {
-    UNREFERENCED_PARAMETER(monitor);
-    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
-    NTSTATUS status = GetDisplayState(&displayState);
-    if (!NT_SUCCESS(status))
+    MonitorObjectContext* const context = GetMonitorObjectContext(monitor);
+    if (context->output == nullptr)
     {
-        return status;
+        return STATUS_INVALID_DEVICE_STATE;
     }
+    const NV_KMS_WINDOWS_DISPLAY_STATE& displayState =
+        context->output->displayState;
 
     output->TargetModeBufferOutputCount = displayState.modeCount;
     if (input->TargetModeBufferInputCount == 0)
@@ -897,18 +1237,18 @@ NTSTATUS AssignSwapChain(
     const IDARG_IN_SETSWAPCHAIN* input)
 {
     MonitorObjectContext* context = GetMonitorObjectContext(monitor);
-    return context->owner == nullptr
+    return context->owner == nullptr || context->output == nullptr
         ? STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN
-        : context->owner->AssignSwapChain(monitor, input);
+        : context->owner->AssignSwapChain(context->output, monitor, input);
 }
 
 _Use_decl_annotations_
 NTSTATUS UnassignSwapChain(IDDCX_MONITOR monitor)
 {
     MonitorObjectContext* context = GetMonitorObjectContext(monitor);
-    return context->owner == nullptr
+    return context->owner == nullptr || context->output == nullptr
         ? STATUS_INVALID_DEVICE_STATE
-        : context->owner->UnassignSwapChain(monitor);
+        : context->owner->UnassignSwapChain(context->output, monitor);
 }
 
 } // namespace nv::iddcx

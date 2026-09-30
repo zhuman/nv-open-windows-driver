@@ -4,9 +4,12 @@
 #include <wdf.h>
 #include <iddcx.h>
 
+#include "nvkms_windows.h"
+
 namespace nv::iddcx {
 
 class Adapter;
+struct OutputState;
 
 struct AdapterObjectContext final
 {
@@ -18,13 +21,42 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(AdapterObjectContext, GetAdapterObjectContext
 struct MonitorObjectContext final
 {
     Adapter* owner;
+    OutputState* output;
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(MonitorObjectContext, GetMonitorObjectContext);
 
+struct OutputState final
+{
+    Adapter* owner;
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState;
+    IDDCX_MONITOR monitor;
+    IDDCX_SWAPCHAIN swapchain;
+    IDXGIDevice* swapchainDevice;
+    HANDLE swapchainThread;
+    HANDLE swapchainStopEvent;
+    HANDLE nextSurfaceEvent;
+    SRWLOCK swapchainLock;
+    NV_KMS_WINDOWS_SURFACE* scanoutSurface;
+    void* scanoutPixels;
+    NvU32 scanoutPitch;
+    NvU32 activeModeIndex;
+    NvU32 assignedHead;
+    bool active;
+};
+
+struct ModePath final
+{
+    IDDCX_MONITOR monitor;
+    IDDCX_PATH_FLAGS flags;
+    DISPLAYCONFIG_VIDEO_SIGNAL_INFO signalInfo;
+};
+
 class Adapter final
 {
 public:
+    static constexpr NvU32 MaxOutputs = 16;
+
     Adapter() noexcept;
 
     NTSTATUS EnterD0(_In_ WDFDEVICE device) noexcept;
@@ -38,15 +70,18 @@ public:
 
     NTSTATUS CommitModes(
         _In_ IDDCX_ADAPTER adapter,
-        _In_ const IDARG_IN_COMMITMODES* arguments) const noexcept;
+        _In_ const IDARG_IN_COMMITMODES* arguments) noexcept;
     NTSTATUS CommitModes2(
         _In_ IDDCX_ADAPTER adapter,
-        _In_ const IDARG_IN_COMMITMODES2* arguments) const noexcept;
+        _In_ const IDARG_IN_COMMITMODES2* arguments) noexcept;
 
     NTSTATUS AssignSwapChain(
+        _Inout_ OutputState* output,
         _In_ IDDCX_MONITOR monitor,
         _In_ const IDARG_IN_SETSWAPCHAIN* arguments) noexcept;
-    NTSTATUS UnassignSwapChain(_In_ IDDCX_MONITOR monitor) noexcept;
+    NTSTATUS UnassignSwapChain(
+        _Inout_ OutputState* output,
+        _In_ IDDCX_MONITOR monitor) noexcept;
 
 private:
     enum class State : UCHAR
@@ -59,19 +94,18 @@ private:
 
     static EVT_WDF_OBJECT_CONTEXT_CLEANUP Cleanup;
     static DWORD WINAPI SwapChainThread(_In_ void* context);
-    NTSTATUS AnnounceMonitor() noexcept;
-    NTSTATUS TryAnnounceMonitor() noexcept;
-    void ProcessSwapChain() noexcept;
-    void StopSwapChain() noexcept;
+    NTSTATUS AnnounceMonitor(_Inout_ OutputState* output) noexcept;
+    NTSTATUS TryAnnounceMonitors() noexcept;
+    void ProcessSwapChain(_Inout_ OutputState* output) noexcept;
+    void StopSwapChain(_Inout_ OutputState* output) noexcept;
+    void ResetOutputs() noexcept;
+    NTSTATUS CommitDisplayModes(
+        _In_reads_(pathCount) const ModePath* paths,
+        _In_ UINT pathCount) noexcept;
 
     IDDCX_ADAPTER handle_;
-    IDDCX_MONITOR monitor_;
-    IDDCX_SWAPCHAIN swapchain_;
-    IDXGIDevice* swapchainDevice_;
-    HANDLE swapchainThread_;
-    HANDLE swapchainStopEvent_;
-    HANDLE nextSurfaceEvent_;
-    SRWLOCK swapchainLock_;
+    OutputState* outputs_[MaxOutputs];
+    NvU32 outputCount_;
     NTSTATUS initializationStatus_;
     State state_;
     bool powered_;

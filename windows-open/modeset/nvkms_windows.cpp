@@ -879,7 +879,27 @@ extern "C" NV_STATUS NvKmsWindowsProbeDisplays(
     return NV_OK;
 }
 
-extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
+extern "C" NV_STATUS NvKmsWindowsGetConnectedDisplayCount(
+    NvU32* displayCount)
+{
+    if (displayCount == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    NV_KMS_WINDOWS_DISPLAY_INFO displayInfo = {};
+    const NV_STATUS status = NvKmsWindowsProbeDisplays(&displayInfo);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    *displayCount = displayInfo.connectedCount;
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetDisplay(
+    NvU32 connectedDisplayIndex,
     NV_KMS_WINDOWS_DISPLAY_STATE* displayState)
 {
     if (displayState == nullptr)
@@ -937,6 +957,7 @@ extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
         goto done;
     }
 
+    NvU32 connectedIndex = 0;
     for (NvU32 displayIndex = 0; displayIndex < capacity; ++displayIndex)
     {
         NvKmsKapiStaticDisplayInfo staticInfo = {};
@@ -953,6 +974,12 @@ extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
         {
             continue;
         }
+        if (connectedIndex++ != connectedDisplayIndex)
+        {
+            continue;
+        }
+
+        displayState->displayHandle = displays[displayIndex];
 
         for (NvU32 connectorIndex = 0;
              connectorIndex < resources.numConnectors;
@@ -1009,6 +1036,7 @@ extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
             {
                 NV_KMS_WINDOWS_MODE* const mode =
                     &displayState->modes[displayState->modeCount];
+                mode->kmsModeIndex = modeIndex;
                 mode->refreshRateMillihertz = kmsMode.timings.refreshRate;
                 mode->pixelClockHz = kmsMode.timings.pixelClockHz;
                 mode->hVisible = kmsMode.timings.hVisible;
@@ -1044,6 +1072,12 @@ extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
 done:
     nvkms_free(displays, sizeof(NvKmsKapiDisplay) * displayCount);
     return status;
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
+    NV_KMS_WINDOWS_DISPLAY_STATE* displayState)
+{
+    return NvKmsWindowsGetDisplay(0, displayState);
 }
 
 extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
@@ -1180,6 +1214,163 @@ extern "C" void NvKmsWindowsDestroyScanoutSurface(
         }
     }
     HeapFree(GetProcessHeap(), 0, surface);
+}
+
+extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
+    NV_KMS_WINDOWS_MODESET_OUTPUT* outputs,
+    NvU32 outputCount)
+{
+    if ((outputs == nullptr && outputCount != 0) ||
+        outputCount > NVKMS_KAPI_MAX_HEADS)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    KmsDeviceLockGuard lock;
+    if (kmsDevice == nullptr)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    NvKmsKapiDeviceResourcesInfo resources = {};
+    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources) ||
+        outputCount > resources.numHeads)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    NvKmsKapiDisplayMode modes[NVKMS_KAPI_MAX_HEADS] = {};
+    for (NvU32 index = 0; index < outputCount; ++index)
+    {
+        if (outputs[index].surface == nullptr)
+        {
+            return NV_ERR_INVALID_ARGUMENT;
+        }
+
+        NvBool valid = NV_FALSE;
+        NvBool preferred = NV_FALSE;
+        if (kmsFunctions.getDisplayMode(
+                kmsDevice,
+                outputs[index].displayHandle,
+                outputs[index].modeIndex,
+                &modes[index],
+                &valid,
+                &preferred) < 0 ||
+            !valid ||
+            outputs[index].surface->width != modes[index].timings.hVisible ||
+            outputs[index].surface->height != modes[index].timings.vVisible)
+        {
+            return NV_ERR_INVALID_ARGUMENT;
+        }
+
+        NvKmsKapiDynamicDisplayParams dynamicInfo = {};
+        dynamicInfo.handle = outputs[index].displayHandle;
+        if (!kmsFunctions.getDynamicDisplayInfo(kmsDevice, &dynamicInfo) ||
+            !dynamicInfo.connected)
+        {
+            return NV_ERR_OBJECT_NOT_FOUND;
+        }
+    }
+
+    NvU32 assignmentCount = 1;
+    for (NvU32 index = 0; index < outputCount; ++index)
+    {
+        assignmentCount *= resources.numHeads;
+    }
+
+    for (NvU32 encodedAssignment = 0;
+         encodedAssignment < assignmentCount;
+         ++encodedAssignment)
+    {
+        NvU32 assignedHeads[NVKMS_KAPI_MAX_HEADS] = {};
+        NvU32 remaining = encodedAssignment;
+        NvU32 usedHeads = 0;
+        bool assignmentValid = true;
+        for (NvU32 index = 0; index < outputCount; ++index)
+        {
+            const NvU32 head = remaining % resources.numHeads;
+            remaining /= resources.numHeads;
+            if ((usedHeads & (1U << head)) != 0 ||
+                resources.numLayers[head] == 0)
+            {
+                assignmentValid = false;
+                break;
+            }
+            usedHeads |= 1U << head;
+            assignedHeads[index] = head;
+        }
+        if (!assignmentValid)
+        {
+            continue;
+        }
+
+        NvKmsKapiRequestedModeSetConfig requested = {};
+        NvKmsKapiModeSetReplyConfig reply = {};
+        for (NvU32 head = 0; head < resources.numHeads; ++head)
+        {
+            requested.headsMask |= 1U << head;
+            auto* const headConfig = &requested.headRequestedConfig[head];
+            headConfig->flags.activeChanged = NV_TRUE;
+            headConfig->flags.displaysChanged = NV_TRUE;
+            for (NvU32 layer = 0; layer < resources.numLayers[head]; ++layer)
+            {
+                headConfig->layerRequestedConfig[layer]
+                    .flags.surfaceChanged = NV_TRUE;
+            }
+        }
+
+        for (NvU32 index = 0; index < outputCount; ++index)
+        {
+            const NvU32 head = assignedHeads[index];
+            auto* const headConfig = &requested.headRequestedConfig[head];
+            headConfig->modeSetConfig.bActive = NV_TRUE;
+            headConfig->modeSetConfig.numDisplays = 1;
+            headConfig->modeSetConfig.displays[0] = outputs[index].displayHandle;
+            headConfig->modeSetConfig.mode = modes[index];
+            headConfig->flags.modeChanged = NV_TRUE;
+
+            auto* const layer =
+                &headConfig->layerRequestedConfig[NVKMS_KAPI_LAYER_PRIMARY_IDX];
+            layer->config.surface = outputs[index].surface->surface;
+            layer->config.srcWidth =
+                static_cast<NvU16>(modes[index].timings.hVisible);
+            layer->config.srcHeight =
+                static_cast<NvU16>(modes[index].timings.vVisible);
+            layer->config.dstWidth = layer->config.srcWidth;
+            layer->config.dstHeight = layer->config.srcHeight;
+            layer->config.compParams.compMode =
+                NVKMS_COMPOSITION_BLENDING_MODE_OPAQUE;
+            layer->config.compParams.surfaceAlpha = 255;
+            layer->config.minPresentInterval = 1;
+            layer->flags.srcXYChanged = NV_TRUE;
+            layer->flags.srcWHChanged = NV_TRUE;
+            layer->flags.dstXYChanged = NV_TRUE;
+            layer->flags.dstWHChanged = NV_TRUE;
+        }
+
+        if (!kmsFunctions.applyModeSetConfig(
+                kmsDevice, &requested, &reply, NV_FALSE))
+        {
+            continue;
+        }
+
+        FlushProcessWriteBuffers();
+        reply = {};
+        if (!kmsFunctions.applyModeSetConfig(
+                kmsDevice, &requested, &reply, NV_TRUE))
+        {
+            return reply.flipResult == NV_KMS_FLIP_RESULT_IN_PROGRESS ?
+                NV_ERR_IN_USE : NV_ERR_INVALID_STATE;
+        }
+
+        for (NvU32 index = 0; index < outputCount; ++index)
+        {
+            outputs[index].assignedHead = assignedHeads[index];
+        }
+        return NV_OK;
+    }
+
+    return NV_ERR_NOT_SUPPORTED;
 }
 
 extern "C" NV_STATUS NvKmsWindowsPresentLayers(

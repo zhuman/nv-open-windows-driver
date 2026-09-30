@@ -1032,6 +1032,7 @@ NTSTATUS ReleaseHardware(
         context->nvKmsThread = nullptr;
     }
     InterlockedExchange(&context->nvKmsWorkCompleted, 0);
+    context->adapter.Reset();
     DestroyRmGpuContext(context);
     context->interrupt.Reset();
     NvPlatformUnregisterDmaProvider(context->dmaRegistration);

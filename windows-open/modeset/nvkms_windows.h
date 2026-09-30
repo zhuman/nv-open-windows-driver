@@ -34,6 +34,7 @@ typedef struct NV_KMS_WINDOWS_SURFACE NV_KMS_WINDOWS_SURFACE;
 
 typedef struct NV_KMS_WINDOWS_MODE
 {
+	NvU32 kmsModeIndex;
 	NvU32 refreshRateMillihertz;
 	NvU32 pixelClockHz;
 	NvU32 hVisible;
@@ -52,6 +53,7 @@ typedef struct NV_KMS_WINDOWS_MODE
 
 typedef struct NV_KMS_WINDOWS_DISPLAY_STATE
 {
+	NvU32 displayHandle;
 	NvU32 connectorType;
 	NvU32 connectorIndex;
 	NvU32 edidBytes;
@@ -78,6 +80,14 @@ typedef struct NV_KMS_WINDOWS_LAYER
 	NvU8 opacity;
 } NV_KMS_WINDOWS_LAYER;
 
+typedef struct NV_KMS_WINDOWS_MODESET_OUTPUT
+{
+	NvU32 displayHandle;
+	NvU32 modeIndex;
+	NV_KMS_WINDOWS_SURFACE* surface;
+	NvU32 assignedHead;
+} NV_KMS_WINDOWS_MODESET_OUTPUT;
+
 NV_STATUS NvKmsWindowsRegisterGpu(
 	NvU32 gpuId,
 	NvU32 domain,
@@ -88,6 +98,10 @@ NV_STATUS NvKmsWindowsRegisterGpu(
 void NvKmsWindowsUnregisterGpu(NvU32 gpuId);
 NV_STATUS NvKmsWindowsProbeGpuEnumeration(NV_KMS_WINDOWS_GPU_INFO* gpuInfo);
 NV_STATUS NvKmsWindowsProbeDisplays(NV_KMS_WINDOWS_DISPLAY_INFO* displayInfo);
+NV_STATUS NvKmsWindowsGetConnectedDisplayCount(NvU32* displayCount);
+NV_STATUS NvKmsWindowsGetDisplay(
+	NvU32 connectedDisplayIndex,
+	NV_KMS_WINDOWS_DISPLAY_STATE* displayState);
 NV_STATUS NvKmsWindowsGetPrimaryDisplay(
 	NV_KMS_WINDOWS_DISPLAY_STATE* displayState);
 NV_STATUS NvKmsWindowsCreateScanoutSurface(
@@ -97,6 +111,9 @@ NV_STATUS NvKmsWindowsCreateScanoutSurface(
 	void** pixels,
 	NvU32* pitch);
 void NvKmsWindowsDestroyScanoutSurface(NV_KMS_WINDOWS_SURFACE* surface);
+NV_STATUS NvKmsWindowsSetDisplayModes(
+	NV_KMS_WINDOWS_MODESET_OUTPUT* outputs,
+	NvU32 outputCount);
 NV_STATUS NvKmsWindowsPresentLayers(
 	NvU32 head,
 	const NV_KMS_WINDOWS_LAYER* layers,
