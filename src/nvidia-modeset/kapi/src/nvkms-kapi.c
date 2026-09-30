@@ -601,7 +601,8 @@ static NvBool KmsAllocateDevice(struct NvKmsKapiDevice *device)
     }
 
     /* Allocate semaphore memory in video memory whenever available */
-    if (!nvKmsKapiAllocateSemaphores(device, !device->isSOC)) {
+    if (!nvKmsKapiAllocateSemaphores(device, !device->isSOC) &&
+        (device->isSOC || !nvKmsKapiAllocateSemaphores(device, NV_FALSE))) {
         nvKmsKapiLogDebug(
             "Failed to allocate Semaphore objects for GPU ID 0x%08x",
             device->gpuId);
