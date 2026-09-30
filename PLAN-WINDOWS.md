@@ -154,14 +154,17 @@ The physical display snapshot is hardware-validated: seven connectors and
 seven displays are discovered, one display is connected, its 384-byte EDID has
 a zero checksum, and nine modes are exposed through IddCx. Windows receives a
 successful `IddCxMonitorArrival` and selects a mode. The snapshot also reports
-four heads, two layers on the selected head, and multi-layer capability. This
-is enumeration only: `CommitModes` and `CommitModes2` currently acknowledge
-the OS request without programming NVKMS, and the swap-chain worker releases
-frames without copying or presenting them.
+four heads, two layers on the selected head, and multi-layer capability.
+`CommitModes2` now owns per-output state, allocates a pitched system-memory
+`A8R8G8B8` gradient surface, selects distinct heads, and submits one atomic
+full-device KAPI modeset. Hardware validation on the RTX 4070 reaches a
+successful committing `NVKMS_IOCTL_SET_MODE`; visible-gradient confirmation is
+still pending. The swap-chain worker remains blocked by D3D device setup with
+`DXGI_ERROR_DRIVER_INTERNAL_ERROR` (`0x887A0026`).
 
 The WDF interrupt object's ISR still returns `FALSE` and its DPC is empty.
-GPU reset/FLR, interrupt acknowledgement, real modeset, display power, scanout,
-flip completion, and runtime hotplug remain separate gates. Release and
+GPU reset/FLR, interrupt acknowledgement, visible scanout confirmation, flip
+completion, and runtime hotplug remain separate gates. Release and
 partial-start failure already unwind the current objects in reverse order.
 
 The root-enumerated development device bypasses PCI, MMIO, and interrupt
@@ -432,14 +435,13 @@ locking, power references, timeout recovery, and RM status translation in the
 shared facade so KMDOD and IddCx cannot develop conflicting bus behavior.
 
 The initial Windows KAPI facade is now operational. It loads NVKMS, enumerates
-and allocates the device, queries connector/static/dynamic display state and
-EDID, enumerates modes, allocates and maps pitch-linear `A8R8G8B8` scanout
-memory, creates KAPI surfaces, and submits layer-only
-`applyModeSetConfig()` requests. Device initialization also allocates the
-NVKMS notifier, semaphore, and color-LUT support objects successfully. Treat
-these as proven primitives, not as proof of a modeset: the current layer helper
-does not attach a display, copy a complete KAPI mode, set `bActive`, or mark
-the display/mode/active fields changed.
+and allocates the device, acquires modeset ownership, queries
+connector/static/dynamic display state and EDID, enumerates modes, allocates
+and maps pitch-linear `A8R8G8B8` scanout memory, creates KAPI surfaces, and
+submits atomic full-device modesets. Device initialization also allocates the
+NVKMS notifier, semaphore, and color-LUT support objects successfully. On the
+RTX 4070, validation and the committing `NVKMS_IOCTL_SET_MODE` both succeed.
+Modeset ownership must be released before device teardown.
 
 Preserve the complete `NvKmsKapiDisplayMode` selected during enumeration for
 commit. The current public Windows snapshot preserves the principal timing
@@ -588,20 +590,15 @@ The independent IddCx prototype has advanced through physical monitor arrival
 and OS mode selection. Continue it through the following narrowly observable
 gates before broadening color, DMA, or multi-monitor support:
 
-1. **Power on with an internally black surface.** Add a KAPI modeset operation
-  that takes a generation-scoped display/mode selection and one head. Allocate
-  one mapped scanout surface at the selected dimensions, zero every pitched
-  row, and construct one complete atomic request: attach the display, copy the
-  exact enumerated mode, set `numDisplays=1` and `bActive=true`, mark
-  `displaysChanged`, `modeChanged`, and `activeChanged`, and attach the black
-  surface to the primary layer. Validate first with `commit=false`, then
-  commit. Select a legal head through NVKMS validation rather than permanently
-  assuming head zero. Success means the sink leaves standby, trains the link,
-  and remains synchronized on black without consuming an OS frame.
-2. **Display one driver-generated static frame.** Fill the same mapped surface
-  with a diagnostic color-bar/checkerboard pattern before the initial modeset,
-  or allocate a second surface and submit a layer-only flip after black is
-  stable. Add bounded completion using `getFlipPendingStatus()` first; then
+1. **Power on with an internally generated surface.** This is implemented with
+  a generation-scoped display/mode selection, one mapped gradient surface per
+  output, distinct head assignment, and one atomic full-device request. Each
+  active head attaches the exact enumerated mode and marks display, mode, and
+  active state changed. Validation and commit both succeed on the RTX 4070.
+  Physical inspection must still confirm that the sink displays the gradient.
+2. **Flip one driver-generated static frame.** Allocate a second surface and
+  submit a layer-only flip after the initial gradient is visibly stable. Add
+  bounded completion using `getFlipPendingStatus()` first; then
   subscribe to `FLIP_OCCURRED` when the event path is enabled. This isolates
   scanout format, pitch, cache visibility, surface lifetime, and flip behavior
   from DXGI and IddCx buffer acquisition.
