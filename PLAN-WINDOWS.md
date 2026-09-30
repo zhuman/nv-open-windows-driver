@@ -1,0 +1,909 @@
+# Windows Display Driver Port Plan
+
+## Feasibility
+
+This is possible as a research project, but it is not primarily a WDDM
+translation exercise. The critical path is porting enough of NVIDIA RM and its
+GSP host support to Windows. NVKMS already provides most display-engine policy
+and programming above RM.
+
+The repository confirms:
+
+- [README.md](README.md#kernel-interface-and-os-agnostic-components-of-kernel-modules)
+  calls `src` OS-agnostic, but that means "separated from the Linux kernel
+  interface," not directly Windows-buildable.
+- [`src/nvidia`](src/nvidia) contains RM, GPU initialization, memory management,
+  interrupts, firmware/GSP communication, and generated hardware code.
+- [`src/nvidia-modeset`](src/nvidia-modeset) contains NVKMS: connector discovery,
+  EDID, DP/HDMI, mode validation, display channels, surfaces, and flips.
+- [`src/common`](src/common) contains the most readily portable timing, EDID,
+  DisplayPort, HDMI packet, soft-float, and utility code.
+- The rendering UMD is absent. The README explicitly requires matching
+  proprietary userspace components, but a KMDOD does not need an NVIDIA
+  rendering UMD.
+- The published build selects 48 Unix-specific RM or NvPort files in
+  [`src/nvidia/srcs.mk`](src/nvidia/srcs.mk). Only `common/` and `unix/` RM
+  architecture implementations are present.
+- Windows heritage remains visible, but
+  [`cpuopsys.h`](src/common/sdk/nvidia/inc/cpuopsys.h) currently hard-codes
+  `NVOS_IS_WINDOWS` to zero. This source snapshot was processed for a Unix
+  release.
+- NVKMS hardware operations funnel through `nvkms_call_rm()` and the RM
+  object/control ABI in
+  [`nvkms-rmapi-dgpu.c`](src/nvidia-modeset/src/nvkms-rmapi-dgpu.c). NVKMS
+  cannot initialize hardware independently.
+
+## Recommended Architecture
+
+Multi-device support is a standing invariant. Driver-wide facilities such as
+NvPort core state, memory tracking, thread registries, and OS process-notify
+registration must be initialized once for the driver and torn down only at
+driver unload. Per-GPU PCI, BAR, interrupt, RM, GSP, and display state must be
+owned by the corresponding adapter instance. A driver-wide callback that needs
+device behavior must dispatch through synchronized device-keyed subscribers;
+one adapter must never replace or tear down another adapter's state.
+
+```mermaid
+flowchart LR
+    DXG[Dxgkrnl / KMDOD DDIs] --> WA[Windows display adapter]
+    IDD[IddCx / UMDF] --> IA[Indirect display adapter]
+    WA --> DE[Shared display-engine facade]
+    IA --> DE
+    DE --> KAPI[NVKMS KAPI]
+    KAPI --> NVKMS[NVKMS core]
+    NVKMS --> RM[Open RM host core]
+    RM --> GSP[GSP firmware]
+    RM --> HW[PCIe, BARs, IRQ, memory]
+```
+
+Use the NVKMS KAPI, not the userspace-style NVKMS ioctl ABI. Linux DRM already
+translates atomic display state into `NvKmsKapiRequestedModeSetConfig` and
+calls `applyModeSetConfig()` in
+[`nvidia-drm-modeset.c`](kernel-open/nvidia-drm/nvidia-drm-modeset.c). The KAPI
+also exposes device allocation, connectors, memory, surfaces, modesets, and
+events in [`nvkms-kapi.h`](src/nvidia-modeset/kapi/interface/nvkms-kapi.h).
+
+## Staged Plan
+
+### 1. Freeze a Narrow Hardware Target
+
+Start with one non-boot, discrete Turing GPU, x64 Windows, one SST DP or HDMI
+monitor, one head, SDR `X8R8G8B8`, no MST, DSC, audio, VRR, HDR, suspend, or
+multi-GPU. Pin the source and GSP firmware to version `610.43.03`. This is only
+the first hardware-validation configuration; mode enumeration, color, wire
+format, and internal plane models must not hard-code these restrictions.
+
+### 2. Create a Windows Portability Build
+
+Create a Visual Studio solution with VC++ `.vcxproj` projects for `nvcommon`, a
+dead-stripped RM core, NVKMS, the Windows platform layer, the diagnostic
+driver, KMDOD, and IddCx components. Use the LLVM/Clang-CL platform toolset
+with WDK headers, libraries, packaging, signing, and deployment integration.
+Clang-CL is preferable initially because NVKMS still contains GNU attributes,
+`typeof`, and inline assembly.
+
+Keep this as a sidecar build under a new Windows-only directory. Projects must
+reference NVIDIA sources in place; do not copy or rewrite them. Generate
+project source lists and `.vcxproj.filters` from versioned Windows manifests,
+and put compatibility definitions, forced includes, generated response files,
+and platform implementations under the sidecar directory. Existing Makefiles,
+`srcs.mk` files, generated headers/sources, and published source files remain
+unchanged.
+
+### 3. Inventory Unresolved Platform Symbols
+
+Replace the Unix implementations selected by `srcs.mk` with a Windows platform
+library. Cover allocation, locks, work queues, timers, PCI config, BAR mapping,
+interrupts, DMA/IOMMU mappings, firmware loading, registry, logging, process
+context, and cache/write-combine operations. Implement only symbols reachable
+in the selected dGPU/display configuration.
+
+### 4. Bring Up RM Before WDDM
+
+Use a disposable test-signed diagnostic driver to prove, in order:
+
+1. PCI identification.
+2. Translated BAR resources.
+3. BAR0 access.
+4. Interrupt connection.
+5. GPU reset.
+6. GSP firmware boot.
+7. RM enumerate/open/close.
+8. VRAM allocation and CPU mapping.
+9. Display RM controls such as connector enumeration, EDID/AUX, and hotplug.
+
+Each item is a stop/go gate.
+
+Current KMDOD and IddCx scaffolding cover the first four gates structurally,
+but do not mark them as hardware-validated:
+
+- PCI configuration identity is read through `DxgkCbReadDeviceSpace` and
+  restricted to NVIDIA devices. The callback is retained behind a reusable,
+  C-compatible platform contract that validates extended-config bounds and
+  exact transfer lengths and supports later RM reads and writes.
+- Translated memory and interrupt resources are retained as adapter-owned
+  state, including large-memory descriptors and line/MSI metadata.
+- PCI BAR0 is matched to its translated physical resource, rather than
+  inferred from descriptor order. The complete translated aperture is mapped
+  uncached through the reusable kernel platform library; checked reads collect
+  `PMC_BOOT_0` and `PMC_BOOT_42`, and an all-ones response fails startup as a
+  missing device.
+- Dxgkrnl interrupt callbacks are registered and routed to the adapter, but
+  the ISR intentionally returns `FALSE` until RM provides device-specific
+  status and acknowledgement logic.
+
+The IddCx path has now passed the original RM/GSP/NVKMS bring-up gate on an
+RTX 4070 (`DEV_2786`) with an ASUS PG27U connected over DisplayPort. UMDF maps
+BAR0 noncached and BAR2 write-combined by matching PCI BAR addresses to
+translated resources. It retains WDF pseudo addresses for framework access and
+unmapping, while `WdfDeviceGetHardwareRegisterMappedAddress` supplies the real
+process-visible mappings used by RM. BAR2 is a translated 32 MiB aperture at
+`0x2FFE000000`; BAR1 is not assigned to the UMDF function and is not required
+for the current system-memory-backed display path. The INF must retain
+`UmdfRegisterAccessMode=RegisterAccessUsingUserModeMapping`.
+
+The first D0 transition creates one device-owned IddCx adapter and starts RM
+and NVKMS asynchronously. Canonical `gpumgrStateInitGpu()` initialization,
+GSP boot, NVKMS device allocation, RM GPU-device open, and clean teardown all
+complete. NVKMS dGPU semaphore allocation retries in system memory when its
+preferred video-memory allocation is unavailable; this is required on the
+current UMDF path and is not evidence that every future scanout allocation
+must use system memory.
+
+The physical display snapshot is hardware-validated: seven connectors and
+seven displays are discovered, one display is connected, its 384-byte EDID has
+a zero checksum, and nine modes are exposed through IddCx. Windows receives a
+successful `IddCxMonitorArrival` and selects a mode. The snapshot also reports
+four heads, two layers on the selected head, and multi-layer capability. This
+is enumeration only: `CommitModes` and `CommitModes2` currently acknowledge
+the OS request without programming NVKMS, and the swap-chain worker releases
+frames without copying or presenting them.
+
+The WDF interrupt object's ISR still returns `FALSE` and its DPC is empty.
+GPU reset/FLR, interrupt acknowledgement, real modeset, display power, scanout,
+flip completion, and runtime hotplug remain separate gates. Release and
+partial-start failure already unwind the current objects in reverse order.
+
+The root-enumerated development device bypasses PCI, MMIO, and interrupt
+requirements so the software-only DDI lifecycle remains testable. GPU reset
+and PCIe FLR remain recovery and repeated-test robustness gates, but no longer
+block the validated RM/GSP/NVKMS startup path or the first static modeset. They
+must be implemented through the RM/GSP lifecycle or the UMDF 2.35 bus-reset
+contract, not as an ad hoc KMDOD register sequence.
+
+Both driver alternatives use the same versioned NVIDIA common host ABI. KMDOD
+owns one host context for the driver lifetime so every adapter shares the
+singleton NvPort services without start/stop collisions; UMDF retains its
+device-owned user-mode context. Kernel and UMDF providers implement allocation,
+free, Unix-epoch and monotonic time, execution-context allocation safety, and
+logging in their respective address spaces. The dual-mode common libraries
+compile upstream status and SHA-256 code plus the host wrapper.
+
+The first kernel NvPort slice is also active in KMDOD. It compiles upstream
+NvPort sources unchanged where available, with sidecar Windows backends routed
+through the common host context. Driver initialization binds NvPort before
+Dxgkrnl can start any adapter, and driver unload shuts it down after adapter
+teardown. This profile now enables core, atomic, CPU discovery, debug, memory,
+pseudorandom generation, safe arithmetic, string, synchronization, thread,
+time, and utility support. The upstream xorshift generator is suitable for RM
+jitter and identifiers only; it is not a cryptographic entropy source.
+The CPU sidecar provides CPUID and monotonic performance-counter time while
+leaving privileged MSR, PMU, and integrated-memory-controller operations
+explicitly unsupported until RM demonstrates a required, policy-safe use.
+KMDOD also opens the service registry key once at driver initialization and
+closes it at unload. Typed DWORD reads can address the root or relative subkeys,
+giving global RM initialization shared immutable settings without attaching
+registry lifetime to any GPU adapter.
+The RM-facing query converts bounded ASCII parameter names without allocation
+and imports DWORD values from the service `Parameters` subkey. RM writes remain
+in its mutable in-memory registry rather than persisting runtime state back to
+the Windows service configuration.
+The first standalone RM OS-services library exports the upstream
+`osReadRegistryDwordBase` hook and public `osReadRegistryDword` entry point with
+`OBJGPU` opaque. A WDK-free C boundary maps Windows query results to
+`NV_STATUS` without importing NT types.
+The RM OS-services library exports `osGetSystemTime`, `osGetTimestamp`, and
+`osGetTimestampFreq`. Wall time uses the Unix epoch expected by RM, while RM
+timestamps and their frequency come from `KeQueryPerformanceCounter` so they
+share the DirectX clock domain.
+Monotonic and performance-counter helpers return nanoseconds. RM millisecond
+delays yield at schedulable IRQL and use chunked processor stalls otherwise;
+sub-millisecond delays always stall. Calls above `DISPATCH_LEVEL` retain the
+upstream 20 ms hard-interrupt ceiling.
+RM CPU discovery exports CPUID, base frequency in MHz when leaf `0x16` is
+available, the possible logical CPU count across all Windows processor groups,
+and a stable group-flattened current processor number for thread-state/TLS
+indexing.
+RM thread-state initialization exports maximum-core, current-thread,
+current-process-flags, and scheduling hooks. System and terminating thread
+state comes from WDK predicates; scheduler handoff uses a minimal relative wait
+and returns an error at IRQLs where yielding is illegal.
+The initial RM core library now compiles upstream `locks.c`, `locks_common.c`,
+and `thread_state.c` unchanged under ClangCL. Its Windows-owned compatibility
+surface is limited to the NvPort build profile, an `os_custom.h` overlay,
+upstream include roots, and target-local exceptions for known generated-code
+warnings.
+The RM core graph now includes `system.c`, the direct RM API initialization
+family, event logging, binary-data registration, and generated HAL registration.
+Windows exports `osRmInitRm` to register all published HALs and configure the
+standard thread-state policy while retaining registry ownership at driver scope.
+The initial NVOC graph now compiles the runtime and generated system, base
+object, traceable, HAL manager, HAL, and OS classes. The Windows `OBJOS`
+initializer intentionally retains generated property defaults rather than
+copying Unix reset, ACPI-cache, and vblank policy.
+Link probing `coreInitializeRm` into KMDOD reaches `OBJSYS` construction and
+HAL registration, then requires the complete versioned vGPU/GSP RPC module.
+That module in turn pulls the resource server, memory descriptors, GPU NVOC
+classes, GSP event infrastructure, process/page/DMA OS hooks, and diagnostics.
+The resource server/client, memory descriptor/allocation, GPU/resource,
+serialization, FINN timer, process/page OS-hook, logging, and HAL RPC portions
+of that cohesive import now compile in the RM core library. Startup expansion
+is proceeding in `sysChildObjects` order rather than adding arbitrary public
+class descriptors: `OBJPFM` now includes its generated class, common platform
+implementation, and upstream NBSI object/table owner. Do not link global RM
+startup with placeholder RPC stubs or Unix control implementations merely to
+satisfy the remaining linker surface.
+
+`OBJHYPERVISOR` now follows `OBJPFM` with its generated class and all four
+common backend operation tables. x64 hypervisor detection resolves through the
+Windows CPUID export. ARM64 hypervisor detection obtains raw SMBIOS data through
+`AuxKlibGetSystemFirmwareTable`; the platform validates and owns each returned
+buffer until the matching `osPutSmbiosTable` call.
+
+`OBJCL` now follows the existing Windows `OBJOS` child with its generated class,
+common chipset implementation, PCIe topology/configuration owner, and chipset
+information table. Both x64 and ARM64 compile the family unchanged. Keep
+`pci_pbi.c` deferred until a concrete caller requires it; it is not part of the
+constructor/destructor or current chipset selection path.
+
+`OBJGPUMGR` was already complete in the RM core source graph. The following
+`OBJGSYNCMGR` child now includes its generated class and common manager. Its
+constructor installs the null provider for every G-Sync slot, so architecture-
+specific device providers remain deferred until hardware discovery introduces
+a concrete dependency.
+
+`GpuAccounting` now includes its generated class and common implementation.
+The constructor and destructor are closed by the existing intrusive map/list
+containers and allocate no Windows-specific state. Timer sampling and process
+telemetry remain inactive until later GPU startup paths call into the object.
+
+`PlatformRequestHandler` now includes its generated class and both common
+implementation owners. The sources reach shared generated client-resource
+declarations, so their project items force-include `ctrl0000unix.h` using the
+same declaration-only pattern as existing RM API sources. This exposes types
+only and does not import Unix control implementations or policy.
+
+`OBJRCDB` now includes its generated journal class and common robust-error
+journal implementation. Its constructor allocates journal and diagnostic ring
+storage through NvPort and uses existing RM time services. `journal.c` receives
+the generated `nvrm_version.h` through target-local forced inclusion so upstream
+version reporting remains unchanged.
+
+`OBJVMM` was already complete in the RM core graph. `KernelVgpuMgr` now includes
+its generated class, common profile helpers, kernel manager, and `eheap_old.c`,
+which owns the manager's lazily-created vGPU ID heap. Constructor state remains
+driver-global; per-GPU vGPU lists are initialized only when GPUs attach.
+
+`OBJGPUBOOSTMGR` now includes both its generated manager class and the generated
+`SyncGpuBoost` resource class owned by `gpu_boost_mgr.c`. The global constructor
+is neutral; GPU IDs enter the existing btree-backed membership index only when
+a client creates a synchronized boost group.
+
+`Fabric` now includes its generated system class and common compute-fabric
+implementation. Construction creates only driver-global list/multimap caches
+and NvPort RW locks, leaving the node ID invalid. Fabric memory resources,
+VASpaces, and GPU probing remain separate later dependencies.
+
+The generated `GpuDb` class now pairs with the existing common GPU database
+implementation. Its constructor creates an empty driver-global GPU list and
+NvPort mutex; per-GPU records are still registered only during device startup.
+
+A direct WDM `coreInitializeRm` link probe now drives link closure. Adding the
+generated RM configuration utility removes all reachable `rmcfg_*` externals;
+adding the shared `OBJENGSTATE` and `IntrService` generated/common family moves
+the x64 Debug unresolved count from 853 to 832. The Windows provider and
+filtered-composition work now closes the remaining graph: the probe rebuilds,
+links, and signs with zero unresolved symbols in x64 and ARM64, Debug and
+Release. Production KMDOD remains disconnected until the separate adapter
+rundown and diagnostic interrupt activation gates are satisfied.
+
+The generated `GpuManagementApi` class now pairs with its already-compiled
+implementation. The generated/common `GSyncApi` resource layer also compiles
+with its existing control handlers. Its reachable notification path exposes
+`osEventNotification` and `osObjectEventNotification` as the next real Windows
+OS-service boundary; no no-op event provider has been added.
+
+The Windows event boundary now uses native dispatcher events. The platform
+layer validates user handles against `ExEventObjectType`, retains and releases
+object references, and signals with `KeSetEvent`. The RM sidecar implements
+`osUserHandleToKernelPtr`, object reference counting, direct notifications,
+extended callbacks, notification-index matching, and subdevice filtering. The
+x64 Debug link probe moves from 831 to 825 unresolved externals.
+Upstream `platform/cpu.c` now provides `RmInitCpuInfo` unchanged for x64 and
+ARM64. Architecture-guarded Windows platform intrinsics provide the x64 CR4
+and XCR0 reads used for OSXSAVE and AVX capability detection. ARM64 uses WDK
+status-register intrinsics for MIDR and cache geometry; a platform spin lock is
+held across each CSSELR/CCSIDR pair to prevent migration or competing selector
+writes. Together with the public registry DWORD entry point, this closes CPU
+discovery without placeholder cache values.
+The Windows static-system provider queries `SystemPowerCapabilities` through
+`ZwPowerInformation` and uses system-battery presence for the upstream notebook
+criterion. Confidential-compute flags remain at their zero-initialized defaults
+until Windows guest-isolation detection is implemented. This resolves
+`osInitSystemStaticConfig` and moves the probe from 823 to 822.
+The Windows `osBugCheckOnTimeoutEnabled` policy reads the optional service
+`Parameters\BugCheckOnTimeout` DWORD through the driver-global registry
+provider. Missing, invalid, and zero values disable the policy; nonzero enables
+it. This moves the probe from 822 to 821.
+Windows system callbacks now use caller-allocated `IO_WORKITEM` storage owned by
+the driver object and queued with `IoQueueWorkItemEx`. Driver-global rundown
+protection rejects work after teardown starts and drains accepted callbacks in
+`osSyncWithRmDestroy`. This resolves that hook and `osQueueSystemWorkItem`,
+moving the probe from 821 to 819.
+The complete generated/upstream `MpsApi` pair closes its resource-catalog entry
+without introducing new dependencies, moving the probe from 819 to 818.
+The complete generated/upstream `KernelWatchdog` pair closes its catalog entry
+without adding a unique dependency, moving the probe from 818 to 817. Its MIG
+predicate remains part of the pending shared MIG manager closure.
+The driver-global Windows RM semaphore implements blocking and conditional lock
+acquisition without treating upstream's opaque allocation-free `pSema` as a
+platform object, moving the probe from 817 to 814.
+The complete upstream `Intr` owner and vector container resolve five shared
+interrupt methods, while Windows GPU lock hooks implement hardware interrupt
+masking through the `Intr` HAL. The newly visible FECS/GMMU/MIG/vGPU service
+frontier is retained and the aggregate probe moves from 814 to 813.
+An allocation-free, lock-protected platform PCI registry now owns stable
+configuration handles keyed by complete BDF identity. The WDK-free RM sidecar
+resolves all seven `osPci*` ABI functions, removing six reachable startup
+externals and moving the probe from 813 to 807 without a single-adapter fallback.
+The platform MMIO owner now tracks page-aligned Windows mappings behind RM's
+direct virtual addresses and honors cached, uncached, write-combined, and access
+protection modes. Four kernel/PCI map ABI functions move the probe from 807 to
+803 without adding unresolved dependencies.
+The unchanged upstream OS register and GPU mapping owners now route `OBJGPU`
+accesses to BAR0, including vGPU PCI-mirror handling, over bounded Windows
+register intrinsics. Complete NBSI and FNV owners plus native maximum-user-VA
+policy move the probe from 803 to 797; Xid transport remains a separate owner.
+Atomics use upstream Clang C11
+implementations, debug strings route through the common host logger, and a
+kernel platform contract owns opaque WDK spinlock, mutex, semaphore, and
+reader/writer lock handles. NvPort also exposes global and dynamic paged and
+nonpaged allocators over the host allocation contract. Formatted debug output,
+memory tracking, and the remaining RM-reachable NvPort modules are the next
+library gate before selecting the first RM sources needed for GPU reset and GSP
+firmware boot.
+
+### 5. Bring Up NVKMS/KAPI
+
+Implement the Windows version of
+[`nvidia-modeset-os-interface.h`](src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h):
+allocation, timing, locking, timers, events, GPU enumeration/open/close, and
+`nvkms_call_rm`. Prove `allocateDevice`, resource queries, connector/display
+discovery, EDID, mode validation, and a headless allocate/free cycle.
+
+Build a canonical, driver-internal display capability model rather than having
+each Windows driver reinterpret EDID and NVKMS independently. For every GPU,
+head, connector, and display, retain the complete NVKMS resource and layer
+capabilities, connector conflicts, dynamic display state, EDID/DisplayID data,
+physical dimensions, supported surface formats, LUT/scaler/rotation/composition
+limits, and all candidate modes. Enumerate the full NVKMS mode pool until its
+end marker, preserve exact timing and mode origin/preference, validate every
+advertised mode, and rebuild the snapshot after display-change events. Do not
+silently truncate refresh rates, detailed timings, interlaced modes, or modes
+that are legal only with a particular wire encoding, BPC, dithering, or DSC
+choice.
+
+Represent wire capability separately from framebuffer format. A wire format
+contains RGB, YCbCr 4:4:4, 4:2:2, or 4:2:0 encoding; BPC; color range;
+colorimetry; EOTF; dithering; link bandwidth; and DSC state. Build the legal
+mode/wire-format cross-product by intersecting sink data, NVKMS validation,
+link bandwidth, GPU capabilities, and the applicable Windows driver contract.
+Validate before advertising and again immediately before commit, then read
+back or otherwise verify the selected wire state. Never report a combination
+that NVKMS may silently replace with a different encoding or BPC.
+
+The public NVKMS KAPI mode object exposes timings, HDR infoframes, output
+colorimetry, LUTs, and dithering, but it does not expose explicit requested
+wire encoding and BPC. Those controls and supported-output-color data exist in
+the lower NVKMS mode-validation/set-mode interface. Add a narrow,
+version-pinned Windows display-facade operation that validates and commits an
+exact wire format through the existing lower interface while continuing to use
+KAPI for device, memory, surface, layer, and event ownership. Keep this bridge
+in the Windows sidecar and do not modify published NVKMS sources. Treat exact
+4:2:0 selection as a stop/go check because the published interface expresses
+it differently from RGB, 4:4:4, and 4:2:2; a preference is insufficient when
+Windows committed a precise wire format.
+
+Add a connector-scoped monitor-control transport to the same display facade.
+It accepts bounded seven-bit I2C transmit, receive, and atomic
+transmit-then-receive requests against a resolved adapter/connector/display,
+not an arbitrary hardware port. Route native HDMI/DVI DDC through the
+appropriate RM display I2C operation and DisplayPort requests through
+`NV0073_CTRL_CMD_DP_AUXCH_CTRL` in I2C-over-AUX mode. Preserve repeated-start
+and middle-of-transaction semantics, split transfers only according to RM/AUX
+limits, handle ACK/NACK/DEFER/timeout distinctly, and use bounded retries.
+
+Serialize this transport per physical connector with NVKMS EDID reads, DP link
+training, hotplug probing, HDCP, and any other DDC/AUX owner. Reject operations
+after disconnect, during teardown, or against adapter-local I2C ports. Enforce
+the Windows monitor-I2C address and protected-content rules, including refusal
+of HDCP addresses whenever protected-content state requires it. Keep bus
+locking, power references, timeout recovery, and RM status translation in the
+shared facade so KMDOD and IddCx cannot develop conflicting bus behavior.
+
+The initial Windows KAPI facade is now operational. It loads NVKMS, enumerates
+and allocates the device, queries connector/static/dynamic display state and
+EDID, enumerates modes, allocates and maps pitch-linear `A8R8G8B8` scanout
+memory, creates KAPI surfaces, and submits layer-only
+`applyModeSetConfig()` requests. Device initialization also allocates the
+NVKMS notifier, semaphore, and color-LUT support objects successfully. Treat
+these as proven primitives, not as proof of a modeset: the current layer helper
+does not attach a display, copy a complete KAPI mode, set `bActive`, or mark
+the display/mode/active fields changed.
+
+Preserve the complete `NvKmsKapiDisplayMode` selected during enumeration for
+commit. The current public Windows snapshot preserves the principal timing
+fields but drops the mode name, horizontal skew, double-scan, and sync-polarity
+flags. Reconstructing a mode from that reduced snapshot risks validating a
+different mode. Extend the internal snapshot with the raw KAPI display handle
+and mode, or keep an opaque generation-scoped selection token; invalidate it
+whenever the connector generation changes.
+
+NVKMS event-queue dispatch is already connected at the OS-interface boundary:
+`nvkms_event_queue_changed()` calls `nvKmsKapiHandleEventQueueChange()` outside
+the global KAPI lock. It remains inactive because device allocation supplies
+no `privateData` or `eventCallback` and declares no event interest. Event
+callbacks must only enqueue adapter-owned work; they must not call IDDCX, KAPI,
+or RM directly while NVKMS is dispatching the callback.
+
+### 6. Implement the Full KMDOD Mode Path
+
+Register `KMDDOD_INITIALIZATION_DATA` through
+`DxgkInitializeDisplayOnlyDriver`. Implement PnP/start-stop, child enumeration,
+EDID/device descriptors, VidPn topology and cofunctional modality,
+source/target modes, `CommitVidPn`, visibility, power, and
+`DxgkDdiPresentDisplayOnly`.
+
+Enumerate every connected target and all legal source/target mode pairings from
+the canonical capability snapshot. Implement the two-call sizing contracts,
+pinned-mode handling, topology validation, path transformations, monitor mode
+recommendation, cofunctional modality pivot rules, active-path updates, and
+transactional `CommitVidPn` rollback. Preserve exact rational refresh/timing
+data and invalidate VidPn state on hotplug or EDID generation changes. Support
+all topologies and clone combinations that the hardware/resource model reports
+as simultaneously legal rather than assuming one permanent source and target.
+
+KMDOD does not expose HDR, ACM, advanced color, or explicit wire-format control
+through its current driver model. Advertise only the SDR framebuffer formats
+and path capabilities that KMDOD can represent, but keep the internal mode,
+head-color, wire-format, and plane objects identical to the IddCx path. Select
+and record a validated SDR wire format internally; do not claim unsupported OS
+controls and do not let KMDOD limitations collapse the shared abstraction.
+
+Implement `DxgkDdiQueryInterface` and expose `DXGK_I2C_INTERFACE_2`, including
+transmit, receive, and combined transmit/receive callbacks at `PASSIVE_LEVEL`.
+Resolve `VidPnTargetId` through the current target-to-connector generation and
+forward only validated monitor transactions to the shared display facade.
+Reference/dereference callbacks must participate in adapter teardown so an
+outstanding queried interface cannot use released connector or RM state.
+
+### 7. Make Multi-Plane, Double-Buffered Scanout the Baseline
+
+Define one internal present transaction for both drivers. It identifies the
+adapter, head, target mode and wire format, and contains an ordered array of up
+to `NVKMS_KAPI_LAYER_MAX` plane states plus cursor state. Each plane preserves
+its surface format, source and destination rectangles, NVKMS layer index,
+z-order, rotation/reflection, stretching, blending mode, constant alpha, color
+key where supported, tearing/present interval, synchronization, input and
+output transfer functions, input color space/range, HDR metadata, CSC matrix,
+matrix overrides, and input/tone-mapping LUT state. Head state independently
+preserves output colorimetry, HDR infoframe, output LUT, dithering, and wire
+format. Keep OS-specific KMDOD and IddCx structures at adapters around this
+model rather than embedding them in the display engine.
+
+Both drivers own two pitch-linear scanout surfaces per active plane. Each
+surface consists of an NVKMS `NVKMS_KAPI_ALLOCATION_TYPE_SCANOUT` memory object,
+its CPU mapping, an `NvKmsKapiSurface`, pitch, dimensions, format, and explicit
+lifetime state. Allocate all required pairs transactionally after the mode and
+plane formats are known, initialize them to black, and destroy the old set only
+after a replacement transaction and modeset are ready. Surface pairs belong to
+the corresponding adapter, head, and layer; no global front/back indices are
+allowed in a multi-device driver.
+
+Track each slot as free, being copied, queued for flip, or front. A present may
+write only free back slots. Submit one atomic NVKMS head transaction only after
+all participating plane copies and input synchronization have completed, and
+recycle each old front only after NVKMS reports the corresponding head/layer
+flip. A property-only plane update uses the same validation and transaction
+path. Mode changes, visibility changes, stop, power-down, and surprise removal
+must cancel or drain copy work and flips before freeing any surface. Start with
+exactly two surfaces per active plane; consider a third only if measurements
+show that strict double buffering cannot absorb normal present cadence.
+
+Initially copy the complete frame on every present. Alternating back buffers
+means applying only dirty and move rectangles would leave unchanged regions
+containing the frame from two presents ago. Dirty-rectangle optimization is
+valid only after either copying the old front into the new back first or proving
+that both scanout surfaces are otherwise kept coherent.
+
+KMDOD initially creates one opaque primary plane because that is all its
+display-only present contract supplies. IddCx initially does the same for one
+swapchain frame. Neither front end may bypass the plane abstraction. If a
+future IddCx contract exposes MPO, map each OS plane into this transaction and
+NVKMS layer capability model; unsupported combinations can then be rejected or
+composited without redesigning allocation, copy, color, or flip ownership.
+
+### 8. Implement KMDOD CPU Copy and Flips
+
+`CommitVidPn` allocates the surface pair and translates the complete VidPn state
+into an NVKMS KAPI modeset. `DxgkDdiPresentDisplayOnly` validates the active
+source, dimensions, format, source pitch, destination pitch, and arithmetic,
+then copies each row from `DXGKARG_PRESENT_DISPLAYONLY::pSource` into the mapped
+back surface. The initial path is synchronous and performs the full-frame CPU
+copy before submitting an NVKMS configuration that flips to that surface.
+
+The present path serializes against any pending flip so it never writes the
+front or queued slot. NVKMS flip events and `getFlipPendingStatus()` drive the
+front/back transition; vblank and display interrupts are acknowledged by RM,
+routed through the KMDOD ISR/DPC, and used to notify progress without polling in
+the steady state. Use bounded waits and fail or recover cleanly on timeout.
+Add cursor, rotation, and dirty/move optimization only after single-head
+modeset, continuous full-frame presents, unplug/replug, and teardown are
+reliable.
+
+### 9. Add a KMDOD DMA Copy Path
+
+Add a per-adapter RM copy-engine channel with its own GPFIFO, USERD, notifier or
+tracking semaphore, and synchronization. The KMDOD DMA feasibility gate is to
+lock and describe the `pSource` system pages, map them into a GPU-visible RM
+address space under the active Windows DMA/IOMMU policy, submit a pitch-aware
+system-memory-to-VRAM copy, and observe its completion value. A raw physical
+address or scatter/gather list must not be assumed to be a valid GPU address.
+
+The `pSource` lifetime is guaranteed only for the present call, so the first DMA
+implementation remains synchronous: retain its page/DMA mappings, submit the
+copy, wait with a bounded timeout for the CE completion semaphore, then unmap
+and unlock before returning. Queue the display flip only after CE completion
+and the required CPU/device memory barriers. This removes CPU involvement from
+the pixel transfer while retaining CPU command submission and completion
+handling.
+
+Support `Auto`, `Dma`, and `Cpu` copy policies through a development registry
+setting. `Auto` prefers DMA only after the adapter passes a startup copy and
+byte-verification test, otherwise it uses CPU copy. Any DMA error must quiesce
+or reset the channel before a complete CPU copy overwrites the destination; an
+incomplete DMA destination is never flipped. Record bytes, latency, fallback
+reason, timeout, and reset counters for both paths.
+
+### 10. Prototype IddCx Independently
+
+Build a virtual/sample-derived IDD that reports the same EDID and mode model,
+creates an adapter and monitor, and owns a swapchain-processing worker. Then
+bind it to the PCI device in a separate installation configuration; it cannot
+coexist as function driver with KMDOD on the same PCI function. The IddCx branch
+owns its own two NVKMS scanout surfaces and uses the same slot state machine and
+flip-completion rules, but it does not share runtime objects with KMDOD.
+
+The independent IddCx prototype has advanced through physical monitor arrival
+and OS mode selection. Continue it through the following narrowly observable
+gates before broadening color, DMA, or multi-monitor support:
+
+1. **Power on with an internally black surface.** Add a KAPI modeset operation
+  that takes a generation-scoped display/mode selection and one head. Allocate
+  one mapped scanout surface at the selected dimensions, zero every pitched
+  row, and construct one complete atomic request: attach the display, copy the
+  exact enumerated mode, set `numDisplays=1` and `bActive=true`, mark
+  `displaysChanged`, `modeChanged`, and `activeChanged`, and attach the black
+  surface to the primary layer. Validate first with `commit=false`, then
+  commit. Select a legal head through NVKMS validation rather than permanently
+  assuming head zero. Success means the sink leaves standby, trains the link,
+  and remains synchronized on black without consuming an OS frame.
+2. **Display one driver-generated static frame.** Fill the same mapped surface
+  with a diagnostic color-bar/checkerboard pattern before the initial modeset,
+  or allocate a second surface and submit a layer-only flip after black is
+  stable. Add bounded completion using `getFlipPendingStatus()` first; then
+  subscribe to `FLIP_OCCURRED` when the event path is enabled. This isolates
+  scanout format, pitch, cache visibility, surface lifetime, and flip behavior
+  from DXGI and IddCx buffer acquisition.
+3. **Consume one IddCx frame.** Replace the current release-only worker with a
+  retained-buffer transfer. Prefer the IddCx 1.10 system-buffer contract when
+  available; otherwise copy the acquired D3D surface through an explicitly
+  CPU-readable staging resource. Hold the acquired frame until the copy is
+  complete, present the back surface, wait for bounded flip completion, call
+  `IddCxSwapChainFinishedProcessingFrame`, and only then acquire the next
+  frame. Keep two scanout surfaces before enabling continuous presentation.
+4. **Add runtime connector reconciliation.** Supply KAPI `privateData` and an
+  event callback, declare interest in `DPY_CHANGED` and
+  `DYNAMIC_DPY_CONNECTED`, queue a device-owned worker, re-probe the complete
+  snapshot, and compare display handle, connection state, EDID, and modes
+  against the previous generation. On disconnect, stop the swap chain,
+  disable the head, call `IddCxMonitorDeparture`, delete the monitor, and
+  retire modes/surfaces only after in-flight work drains. On connect or EDID
+  change, create a fresh generation and announce a monitor. Add bounded
+  polling only as a diagnostic fallback if event delivery is not reliable.
+
+The recommended next gate is black/static scanout, before dynamic hotplug. It
+exercises the unproven hardware-critical path shared by every later feature:
+exact mode commit, link training, head activation, surface visibility, and
+power-down rollback. Dynamic hotplug is smaller in raw API surface, but doing
+it first would immediately require teardown of modesets, surfaces, swap chains,
+and pending flips that do not yet exist. Once a static frame is stable, add the
+event subscription and disconnect handling before continuous frame processing;
+that ordering forces the presentation lifetime to be hotplug-safe from its
+first sustained implementation.
+
+Implement the IddCx 1.10+ color and mode contract completely. Set
+`IDDCX_ADAPTER_FLAGS_CAN_PROCESS_FP16`; report target WCG/HDR capabilities and
+dithering in `EVT_IDD_CX_ADAPTER_QUERY_TARGET_INFO`; parse monitor modes and
+enumerate target modes with the version-2 callbacks; include independent BPC
+masks for RGB, YCbCr 4:4:4, 4:2:2, and 4:2:0; retain default HDR10 metadata; and
+commit the OS-selected color space, encoding, and single BPC value through
+`EVT_IDD_CX_ADAPTER_COMMIT_MODES2`. Derive these reports from the canonical
+NVKMS/sink capability cross-product, including required bandwidth, rather than
+from a fixed table. Support SDR sRGB, SDR WCG, and HDR10 mode transitions
+without recreating unrelated adapter state.
+
+Use `IddCxSwapChainReleaseAndAcquireBuffer2` with system-buffer acquisition as
+the baseline frame contract so each frame carries its actual DXGI color space,
+SDR white level, and default/unchanged/new HDR10 metadata. Accept and preserve
+both 8-bit and FP16 swapchain surfaces. Allocate matching `X8R8G8B8` or linear
+scRGB `R16G16B16A16` NVKMS scanout pairs as required, and configure each plane's
+input transfer function, color space/range, CSC/matrix/LUT state plus the head's
+output transfer function, colorimetry, HDR infoframe, dithering, and exact wire
+format. A raw copy transfers pixels but does not by itself satisfy WCG/HDR;
+NVKMS must perform the negotiated gamut and transfer-function processing and
+send the correct signaling to the monitor.
+
+Do not release/acquire the next frame until the current frame's CPU or DMA copy
+has finished, because the acquired system-buffer mapping, color metadata, and
+contents must remain valid for the entire transfer. CPU-copy the complete frame
+into the matching mapped back surface, atomically queue its plane/head update,
+and report frame statistics through IddCx. A Direct3D texture path is optional
+later; it is not a prerequisite for the system-buffer path and must not assume
+an unpublished NVIDIA rendering UMD.
+
+Register `EVT_IDD_CX_MONITOR_I2C_TRANSMIT`,
+`EVT_IDD_CX_MONITOR_I2C_RECEIVE`, and
+`EVT_IDD_CX_MONITOR_I2C_TRANSMIT_AND_RECEIVE`. Resolve each monitor object to
+its adapter-owned connector and forward the request to the same shared
+transport used by KMDOD. Honor IddCx buffer-size and callback-lifetime rules,
+retain the device power reference for the complete blocking transaction, and
+cancel safely when monitor removal or device teardown begins.
+
+### 11. Gate and Implement Pure-UMDF DMA
+
+The target WDK exposes WDF DMA enablers and transactions to UMDF, and the
+current IddCx scaffold already creates a scatter/gather 64-bit
+`WDFDMAENABLER` under `UmdfDirectHardwareAccess=AllowDirectHardwareAccessAndDma`.
+That proves framework availability, not end-to-end GPU copying. The stop/go
+gate is whether a transaction over an acquired IddCx system buffer can produce
+a mapping that RM can bind into the GPU address space used by the CE channel,
+with correct IOMMU, cache-coherency, cancellation, and process-lifetime
+behavior.
+
+Once that gate passes, give each IddCx adapter its own RM CE channel and submit
+the same pitch-aware system-memory-to-VRAM copy used by KMDOD. Retain the
+swapchain buffer and WDF DMA transaction until the CE semaphore completes, then
+release the frame and queue the NVKMS flip. Apply the same `Auto`/`Dma`/`Cpu`
+policy, startup verification, bounded timeout, full CPU overwrite after a
+quiesced DMA failure, and telemetry used by KMDOD.
+
+If pure UMDF cannot bridge WDF's DMA mapping to an RM/GPU-visible address, keep
+the CPU path fully functional and choose explicitly between shipping without
+DMA or using an uncertified experimental KMDF transport companion. Microsoft
+describes IDD as a user-mode model without kernel-mode components, so a helper
+changes the product and certification story.
+
+### 12. Validate Presentation and Teardown
+
+For each driver, test CPU-forced, DMA-forced, automatic fallback, injected CE
+timeout, mode change during copy, unplug during a queued flip, allocation
+failure between the two surfaces, repeated start/stop, surprise removal, and
+multi-adapter ownership. Compare every DMA test frame against a CPU reference,
+including nontrivial source/destination pitches and widths that are not copy
+alignment multiples. Verify that no front or queued surface is written and no
+surface, source mapping, DMA transaction, channel, or event survives adapter
+teardown.
+
+Use synthetic EDID/DisplayID fixtures and physical sinks to verify complete
+mode enumeration, exact timing round trips, preferred and driver modes,
+hotplug-generation invalidation, constrained link-bandwidth cases, and every
+advertised encoding/BPC combination. For IddCx, exercise SDR, SDR WCG, HDR10,
+8-bit and FP16 surfaces, default and per-frame HDR metadata, SDR white-level
+changes, RGB/YUV 4:4:4/4:2:2/4:2:0 commits, dithering, and rejection of
+unsupported combinations. Verify the actual link state or sink-observed wire
+format rather than only the requested state. For KMDOD, verify exhaustive legal
+VidPn enumeration and that HDR/advanced-color controls are not falsely exposed.
+
+Test the internal transaction directly with multiple planes, independent
+source/destination rectangles, up/down scaling, rotation/reflection, alpha and
+blending, CSC and matrix overrides, color ranges, transfer functions, HDR
+metadata, LUTs, mixed property-only and surface updates, per-layer completion,
+and atomic rejection. These tests are required before advertising any future
+IddCx MPO capability even if the current OS-facing paths instantiate only the
+primary plane.
+
+Test monitor I2C from both front ends with native DDC and DP I2C-over-AUX
+sinks: transmit, receive, atomic repeated-start, transfers larger than one AUX
+payload, NACK, DEFER/retry, timeout, unplug during transfer, concurrent EDID
+read/link training, device power transitions, and teardown. Verify DDC/CI
+interoperability, strict target-to-connector routing, rejection of invalid or
+adapter-local ports, protected-address policy, and absence of cross-adapter bus
+or lock state.
+
+Exercise Driver Verifier for KMDOD, Application Verifier and WDF diagnostics
+for IddCx, disable/enable, reboot, bugcheck display ownership, and eventually
+sleep/resume. Then run the applicable display-only and indirect-display HLK
+tests.
+
+## Source Preservation and Upstream Updates
+
+Treat this repository as an upstream source payload plus a Windows sidecar,
+not as a fork whose Unix sources are gradually converted to Windows:
+
+- Store `.sln`, `.vcxproj`, `.props`, `.targets`, source manifests, INF files,
+  Windows platform code, compatibility headers, and generation scripts in a
+  new Windows-only directory.
+- Reference upstream C and generated source files at their existing paths.
+  Never copy them into project directories.
+- Express compiler compatibility through Clang-CL flags and a forced-include
+  header. Express OS behavior through new Windows implementations of existing
+  import tables and OS abstraction contracts.
+- Maintain small, versioned source manifests for each library. Generate
+  `.vcxproj` item lists, filters, and response files from those manifests so a
+  source-release update produces a reviewable manifest diff rather than a
+  hand-edited project-file merge.
+- Keep generated project artifacts out of the authoritative source lists.
+  Make generation deterministic and validate that every referenced path exists
+  and that no source is selected twice.
+- Do not modify NVIDIA Makefiles, `srcs.mk`, generated files, or published
+  source merely to satisfy MSVC project discovery or Windows preprocessor
+  conventions. If an upstream source patch becomes unavoidable, isolate the
+  smallest patch, document why a forced include or platform implementation
+  cannot solve it, and keep it separately replayable.
+- Add a repeatable upstream-update check that imports a clean release, regenerates
+  projects, compiles each static library, and reports added, removed, and newly
+  unresolved platform symbols.
+
+This arrangement keeps Linux builds independent and makes future NVIDIA source
+releases primarily a source-manifest and compatibility-layer update.
+
+## Rendering Command Buffer and Submission Inventory
+
+The repository contains substantial GPU work-submission infrastructure, but it
+does not contain NVIDIA's production Direct3D, OpenGL, Vulkan, or CUDA user-mode
+driver. The reusable layers are:
+
+### RM Resource and Channel Layer
+
+RM owns GPU sessions, address spaces, memory objects and mappings, TSGs,
+channels, engines, runlists, scheduling, USERD, notifiers, and doorbell tokens.
+For example, [`nv_gpu_ops.c`](src/nvidia/src/kernel/rmapi/nv_gpu_ops.c)
+allocates a GPFIFO, error notifier, USERD, channel, and CE or SEC2 engine; maps
+control state; obtains the hardware channel/runlist identifiers and submission
+token; and schedules the channel. This is the privileged foundation that must
+be operational on Windows before any rendering experiment.
+
+The UVM-facing allocation API currently restricts that particular path to copy
+and SEC2 engines. RM itself also contains graphics engine objects and context
+management, so a graphics experiment needs a new narrowly scoped RM client or
+adapter rather than pretending the UVM CE allocation entry point creates a GR
+channel.
+
+### Generic `nvidia-push` Layer
+
+[`nvidia-push`](src/common/unix/nvidia-push) is the closest reusable generic
+command-buffer library. It allocates one CPU/GPU-visible region partitioned
+into the main method stream, circular GPFIFO, and progress tracker; allocates
+USERD, notifiers, semaphore memory, and the channel object; emits GPFIFO
+entries; inserts progress semaphore methods; applies memory ordering; updates
+GPPUT; and either writes USERD or rings a Volta+ doorbell.
+
+Its host contract is already explicit in the `NvPushImports` table in
+[`nvidia-push-types.h`](src/common/unix/nvidia-push/interface/nvidia-push-types.h):
+RM alloc/control/free, memory allocation and mapping, timing, waits, events,
+errors, and logging. The directory name is Unix-specific, but the core design
+is suitable for reuse once those imports and the few compiler/OS assumptions
+are supplied by the Windows sidecar.
+
+### NVKMS `nvidia-3d` Layer
+
+[`nvidia-3d`](src/common/unix/nvidia-3d) builds on `nvidia-push` and is more
+than a header collection. It creates a graphics object, uploads bundled
+precompiled architecture-specific shaders, configures color targets, textures,
+constant buffers, blending, and vertex streams, and emits draw methods.
+[`nvkms-headsurface-3d.c`](src/nvidia-modeset/src/nvkms-headsurface-3d.c) uses
+it to composite head surfaces, draw a warp mesh, release semaphores, and kick
+the channel.
+
+This is a strong bring-up and fixed-function composition substrate. It is not
+a general rendering UMD: its shader set and state model are purpose-built for
+NVKMS, and it provides no Direct3D/Vulkan API translation, shader compiler,
+pipeline compiler/cache, descriptor model, general residency policy, resource
+sharing contract, or application isolation boundary.
+
+### UVM Push and Completion Layer
+
+[`uvm_channel.c`](kernel-open/nvidia-uvm/uvm_channel.c) provides a second,
+complete kernel command-submission implementation for UVM migration and
+security work. It reserves pushbuffer space, emits CE or SEC2 methods, appends
+a monotonically increasing tracking-semaphore release, writes a GPFIFO entry,
+orders CPU stores, updates GPPUT, and reclaims completed pushes. It also handles
+proxy and confidential-computing submission variants.
+
+UVM is useful as a reference for copy-engine bring-up, fences, wraparound,
+timeouts, and teardown. It should not be imported wholesale into the display
+driver or treated as a graphics UMD.
+
+### What Is Still Missing
+
+A production rendering stack still needs an application-facing UMD and its
+DDIs, shader ingestion and compilation, API-state translation, command
+validation, per-process resources and GPUVA policy, synchronization and
+residency integration with VidMm/VidSch, preemption and reset recovery,
+protected-content policy, presentation integration, and conformance testing.
+Those are larger than command-buffer allocation itself.
+
+## Future Rendering Experiment Track
+
+Keep rendering out of the KMDOD critical path. After RM/GSP, memory management,
+interrupts, reset, and display are stable, use a separate test component and
+advance through these stop/go gates:
+
+1. Allocate an RM client, per-process or test address space, TSG, channel,
+   GPFIFO, USERD, notifier, semaphore, and one engine object. Prove clean
+   allocation, scheduling, unscheduling, and teardown without submitting work.
+2. Use `nvidia-push` to submit a NOP plus semaphore release. Verify GPPUT/GPGET,
+   completion, wraparound, timeout handling, and channel-error reporting.
+3. Allocate a copy-engine object and submit a small system-memory-to-VRAM and
+   VRAM-to-system-memory copy. Verify bytes, cache coherency, fences, and reset
+   recovery. UVM is the behavioral reference for this step.
+4. Allocate the supported GR object and reuse the fixed-purpose `nvidia-3d`
+   path to clear a render target and then draw one primitive with the bundled
+   shaders. This proves graphics context creation and method submission, not a
+   Direct3D implementation.
+5. Only after those tests are reliable, prototype a minimal WDDM render node,
+   context/allocation DDIs, and private test UMD. Start with kernel-mode
+   submission and a tiny precompiled workload rather than an application API.
+6. Evaluate WDDM 3.2 user-mode work submission as a later optimization. The
+   UMD can append work to a hardware queue and ring a mapped doorbell, which is
+   structurally similar to the existing NVIDIA submission path, but the KMD
+   must still advertise support, create and govern hardware queues and
+   doorbells, integrate scheduling/residency/fences, and retain the traditional
+   kernel-mode submission model. Presentation remains kernel-mode submission.
+
+Therefore, "user-mode-only WDDM rendering driver" is not the correct target.
+The realistic target is a WDDM KMD plus a user-mode rendering component, with
+optional direct user-mode queue submission on supported Windows versions.
+IddCx remains a separate user-mode display-only model and does not provide a
+native GPU rendering transport.
+
+## Primary Risks
+
+- The Windows RM platform implementation used by NVIDIA's proprietary driver
+  is not published here; recreating it is the largest work item.
+- GSP boot, reset, interrupt, DMA/IOMMU, and teardown correctness can damage
+  system stability or strand the PCI function.
+- A display-only driver still needs memory allocation and scanout programming,
+  even though it avoids rendering command submission.
+- IddCx models indirect displays, not native GPU outputs. Driving NVIDIA's
+  physical connectors through it is a useful experiment, but not an equivalent
+  WDDM ownership model.
+- Most files are MIT-licensed, while the assembled Linux modules are dual
+  MIT/GPLv2; preserve each file's SPDX terms and review redistribution/signing
+  requirements separately.
+
+## Current Engineering Deliverable
+
+The original bring-up milestone is complete in the IddCx function driver:
+
+> GSP booted, RM and NVKMS devices opened, display memory allocated and mapped,
+> physical connectors and EDID read, modes published, monitor arrived.
+
+The next deliverable is deliberately narrower than continuous presentation:
+
+> Validate and commit the OS-selected physical mode, power and train the link,
+> and hold one driver-generated static scanout image on the connected sink.
+
+This retires the remaining hardware-display unknowns before DXGI frame transfer
+and establishes the active state that hotplug teardown must safely dismantle.
