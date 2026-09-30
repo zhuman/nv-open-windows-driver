@@ -503,6 +503,10 @@ memmgrInitInternalChannels_IMPL
         return NV_OK;
     }
 
+#if defined(NV_RM_USER_LINK_PROBE)
+    return NV_OK;
+#endif
+
     NV_PRINTF(LEVEL_INFO, "Initializing global CeUtils instance\n");
 
     NV_ASSERT_OK_OR_RETURN(memmgrInitCeUtils(pMemoryManager, NV_FALSE, NV_TRUE));
