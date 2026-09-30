@@ -120,19 +120,18 @@ void CALLBACK NvKmsTimerCallback(
     void* dataPtr = timer->dataPtr;
     const NvU32 dataU32 = timer->dataU32;
     const NvBool isRefPtr = timer->isRefPtr;
-    const bool canceled =
-        InterlockedCompareExchange(&timer->canceled, 0, 0) != 0;
 
+    NvKmsLock();
     if (isRefPtr)
     {
         dataPtr = nvkms_dec_ref(static_cast<nvkms_ref_ptr*>(dataPtr));
     }
-    if (!canceled && dataPtr != nullptr)
+    if (InterlockedCompareExchange(&timer->canceled, 0, 0) == 0 &&
+        dataPtr != nullptr)
     {
-        NvKmsLock();
         proc(dataPtr, dataU32);
-        NvKmsUnlock();
     }
+    NvKmsUnlock();
 
     if (isRefPtr)
     {
@@ -728,6 +727,14 @@ extern "C" NV_STATUS NvKmsWindowsInitialize(void)
         return NV_ERR_INSUFFICIENT_RESOURCES;
     }
 
+    if (!kmsFunctions.grabOwnership(kmsDevice))
+    {
+        kmsFunctions.freeDevice(kmsDevice);
+        kmsDevice = nullptr;
+        nvKmsModuleUnload();
+        return NV_ERR_STATE_IN_USE;
+    }
+
     return NV_OK;
 }
 
@@ -737,6 +744,7 @@ extern "C" void NvKmsWindowsShutdown(void)
 
     if (kmsDevice != nullptr)
     {
+        kmsFunctions.releaseOwnership(kmsDevice);
         kmsFunctions.freeDevice(kmsDevice);
         kmsDevice = nullptr;
     }
@@ -1135,12 +1143,14 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
         return NV_ERR_NO_MEMORY;
     }
 
+    NvU8 compressible = 0;
     NvKmsKapiAllocateMemoryParams memoryParams = {};
     memoryParams.layout = NvKmsSurfaceMemoryLayoutPitch;
     memoryParams.type = NVKMS_KAPI_ALLOCATION_TYPE_SCANOUT;
     memoryParams.size = allocationSize;
     memoryParams.noDisplayCaching = NV_TRUE;
     memoryParams.useVideoMemory = NV_FALSE;
+    memoryParams.compressible = &compressible;
     scanout->memory = kmsFunctions.allocateMemory(kmsDevice, &memoryParams);
     if (scanout->memory == nullptr)
     {
