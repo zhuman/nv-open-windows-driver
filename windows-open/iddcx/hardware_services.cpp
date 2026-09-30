@@ -772,8 +772,19 @@ ULONG Interrupt::Count() const noexcept
 _Use_decl_annotations_
 BOOLEAN Interrupt::Isr(WDFINTERRUPT interrupt, ULONG messageId)
 {
+    static volatile LONG observedInterrupts = 0;
+    const LONG interruptCount = InterlockedIncrement(&observedInterrupts);
+
     UNREFERENCED_PARAMETER(interrupt);
-    UNREFERENCED_PARAMETER(messageId);
+    if (interruptCount <= 16)
+    {
+        TraceEvents(
+            TRACE_LEVEL_INFORMATION,
+            TRACE_DRIVER,
+            "GPU interrupt observed: count=%ld messageId=%lu",
+            interruptCount,
+            messageId);
+    }
     return FALSE;
 }
 
