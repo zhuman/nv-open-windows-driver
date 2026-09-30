@@ -1720,6 +1720,7 @@ UmdfService=nv-iddcx,NvIddCx_Service
 UmdfServiceOrder=nv-iddcx
 UmdfKernelModeClientPolicy=AllowKernelModeClients
 UmdfDirectHardwareAccess=AllowDirectHardwareAccessAndDma
+UmdfRegisterAccessMode=RegisterAccessUsingUserModeMapping
 UmdfHostProcessSharing=ProcessSharingDisabled
 
 [NvIddCx_Service]

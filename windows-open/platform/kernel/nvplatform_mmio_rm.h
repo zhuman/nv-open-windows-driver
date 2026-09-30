@@ -29,6 +29,11 @@ void NvPlatformRmWriteRegister8(volatile void* address, NvU8 value);
 void NvPlatformRmWriteRegister16(volatile void* address, NvU16 value);
 void NvPlatformRmWriteRegister32(volatile void* address, NvU32 value);
 
+NvBool NvPlatformRmCopyMemory(
+    void* destination,
+    const void* source,
+    NvLength length);
+
 NvU64 NvPlatformRmGetMaximumUserAddress(void);
 
 #ifdef __cplusplus

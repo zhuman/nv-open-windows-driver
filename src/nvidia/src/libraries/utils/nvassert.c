@@ -24,6 +24,10 @@
 #include "nvport/nvport.h"
 #include "utils/nvassert.h"
 
+#if defined(NV_RM_USER_LINK_PROBE)
+void NvKmsWindowsTraceAssert(NvU32 lineNumber, NvU64 returnAddress);
+#endif
+
 #if defined(NVRM) && !defined(NVWATCH) && !defined(GSP_PLUGIN_BUILD)
 #include "containers/map.h"
 #include "os/os.h"
@@ -189,6 +193,10 @@ nvAssertFailedNoLog
 {
     NvU64 ip = portUtilGetReturnAddress();
     PORT_UNREFERENCED_VARIABLE(ip);
+
+#if defined(NV_RM_USER_LINK_PROBE)
+    NvKmsWindowsTraceAssert(lineNum, ip);
+#endif
 
     NV_ASSERT_PRINTF(LEVEL_ERROR, "Assertion failed: " NV_ASSERT_FAILED_PRINTF_FMT,
         NV_ASSERT_FAILED_PRINTF_PARAM);

@@ -29,6 +29,10 @@
 
 #include "lib/base_utils.h"
 #include "gpu/gpu.h"
+
+#if defined(NV_RM_USER_LINK_PROBE)
+void NvKmsWindowsTraceStateInitEngine(NvU32 index, NvU32 descriptor, const char *name, NvBool begin);
+#endif
 #include "gpu/disp/kern_disp.h"
 #include "gpu/disp/inst_mem/disp_inst_mem.h"
 #include "gpu/subdevice/subdevice.h"
@@ -2344,9 +2348,23 @@ gpuStateInit_IMPL
         rmStatus = gpuLoadFailurePathTest(pGpu, NV_REG_STR_GPU_LOAD_FAILURE_TEST_STAGE_INIT, curEngDescIdx, NV_FALSE);
         if (rmStatus == NV_OK)
         {
+#if defined(NV_RM_USER_LINK_PROBE)
+            NvKmsWindowsTraceStateInitEngine(
+                curEngDescIdx,
+                curEngDescriptor,
+                engstateGetName(pEngstate),
+                NV_TRUE);
+#endif
             engstateLogStateTransitionPre(pEngstate, ENGSTATE_STATE_INIT, &engTransitionData);
             rmStatus = engstateStateInit(pGpu, pEngstate);
             engstateLogStateTransitionPost(pEngstate, ENGSTATE_STATE_INIT, &engTransitionData);
+#if defined(NV_RM_USER_LINK_PROBE)
+            NvKmsWindowsTraceStateInitEngine(
+                curEngDescIdx,
+                curEngDescriptor,
+                engstateGetName(pEngstate),
+                NV_FALSE);
+#endif
         }
 
         // RMCONFIG:  Bail on errors unless the feature/object/engine/class

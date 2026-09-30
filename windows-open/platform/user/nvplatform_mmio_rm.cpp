@@ -15,6 +15,7 @@ struct Aperture
     NvU64 physicalAddress;
     volatile NvU8* address;
     SIZE_T length;
+    NV_PLATFORM_MMIO_CACHE_TYPE cacheType;
     NV_PLATFORM_MMIO_ACCESS access;
     ULONG* read32Cache;
     SIZE_T read32CacheOffset;
@@ -41,7 +42,20 @@ bool IsSupportedProtection(NvU32 protect, NvU32 cacheType) noexcept
     return protect != 0 && (protect & ~NV_PROTECT_READ_WRITE) == 0 &&
         (cacheType == NV_MEMORY_DEFAULT ||
          cacheType == NV_MEMORY_UNCACHED ||
-         cacheType == NV_MEMORY_UNCACHED_WEAK);
+         cacheType == NV_MEMORY_UNCACHED_WEAK ||
+         cacheType == NV_MEMORY_WRITECOMBINED);
+}
+
+bool IsCompatibleCacheType(
+    NV_PLATFORM_MMIO_CACHE_TYPE apertureCacheType,
+    NvU32 requestedCacheType) noexcept
+{
+    return requestedCacheType == NV_MEMORY_DEFAULT ||
+        (apertureCacheType == NV_PLATFORM_MMIO_CACHE_UNCACHED &&
+         (requestedCacheType == NV_MEMORY_UNCACHED ||
+          requestedCacheType == NV_MEMORY_UNCACHED_WEAK)) ||
+        (apertureCacheType == NV_PLATFORM_MMIO_CACHE_WRITE_COMBINED &&
+         requestedCacheType == NV_MEMORY_WRITECOMBINED);
 }
 
 Aperture* FindAperture(
@@ -75,10 +89,13 @@ extern "C" NTSTATUS NvPlatformRegisterMmioAperture(
     ULONGLONG physicalAddress,
     volatile void* address,
     SIZE_T length,
+    NV_PLATFORM_MMIO_CACHE_TYPE cacheType,
     const NV_PLATFORM_MMIO_ACCESS* access,
     void** registration) noexcept
 {
     if (physicalAddress == 0 || address == nullptr || length == 0 ||
+        (cacheType != NV_PLATFORM_MMIO_CACHE_UNCACHED &&
+         cacheType != NV_PLATFORM_MMIO_CACHE_WRITE_COMBINED) ||
         access == nullptr || access->context == nullptr ||
         access->read8 == nullptr || access->read16 == nullptr ||
         access->read32 == nullptr || access->read32Buffer == nullptr ||
@@ -104,6 +121,7 @@ extern "C" NTSTATUS NvPlatformRegisterMmioAperture(
         available->physicalAddress = physicalAddress;
         available->address = static_cast<volatile NvU8*>(address);
         available->length = length;
+        available->cacheType = cacheType;
         available->access = *access;
         available->registered = true;
         *registration = available;
@@ -142,7 +160,8 @@ extern "C" NV_STATUS NvPlatformRmMapPhysical(
     AcquireSRWLockShared(&apertureLock);
     for (const auto& aperture : apertures)
     {
-        if (!aperture.registered || physicalAddress < aperture.physicalAddress)
+        if (!aperture.registered || physicalAddress < aperture.physicalAddress ||
+            !IsCompatibleCacheType(aperture.cacheType, cacheType))
         {
             continue;
         }
@@ -159,6 +178,58 @@ extern "C" NV_STATUS NvPlatformRmMapPhysical(
 
 extern "C" void NvPlatformRmUnmapPhysical(void*)
 {
+}
+
+extern "C" NvBool NvPlatformRmCopyMemory(
+    void* destination,
+    const void* source,
+    NvLength length)
+{
+    if (destination == nullptr || source == nullptr || length == 0)
+    {
+        return NV_FALSE;
+    }
+
+    AcquireSRWLockShared(&apertureLock);
+    SIZE_T destinationOffset = 0;
+    SIZE_T sourceOffset = 0;
+    Aperture* destinationAperture = FindAperture(
+        destination,
+        static_cast<SIZE_T>(length),
+        &destinationOffset);
+    Aperture* sourceAperture = FindAperture(
+        source,
+        static_cast<SIZE_T>(length),
+        &sourceOffset);
+    if (destinationAperture == nullptr && sourceAperture == nullptr)
+    {
+        ReleaseSRWLockShared(&apertureLock);
+        return NV_FALSE;
+    }
+
+    NvU8* destinationBytes = static_cast<NvU8*>(destination);
+    const NvU8* sourceBytes = static_cast<const NvU8*>(source);
+    for (NvLength index = 0; index < length; ++index)
+    {
+        const NvU8 value = sourceAperture != nullptr
+            ? sourceAperture->access.read8(
+                sourceAperture->access.context,
+                sourceOffset + static_cast<SIZE_T>(index))
+            : sourceBytes[index];
+        if (destinationAperture != nullptr)
+        {
+            destinationAperture->access.write8(
+                destinationAperture->access.context,
+                destinationOffset + static_cast<SIZE_T>(index),
+                value);
+        }
+        else
+        {
+            destinationBytes[index] = value;
+        }
+    }
+    ReleaseSRWLockShared(&apertureLock);
+    return NV_TRUE;
 }
 
 extern "C" void NvPlatformRmWriteRegister8(volatile void* address, NvU8 value)

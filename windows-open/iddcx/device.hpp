@@ -23,6 +23,8 @@ struct DeviceContext final
     void* pciConfigRegistration;
     RegisterAperture registerAperture;
     void* mmioRegistration;
+    RegisterAperture bar2Aperture;
+    void* bar2MmioRegistration;
     DmaEngine dmaEngine;
     void* dmaRegistration;
     Interrupt interrupt;

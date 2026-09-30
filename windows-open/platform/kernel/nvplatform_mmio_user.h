@@ -22,10 +22,17 @@ typedef struct NV_PLATFORM_MMIO_ACCESS
     void (*write32)(void* context, SIZE_T offset, ULONG value);
 } NV_PLATFORM_MMIO_ACCESS;
 
+typedef enum NV_PLATFORM_MMIO_CACHE_TYPE
+{
+    NV_PLATFORM_MMIO_CACHE_UNCACHED,
+    NV_PLATFORM_MMIO_CACHE_WRITE_COMBINED,
+} NV_PLATFORM_MMIO_CACHE_TYPE;
+
 NTSTATUS NvPlatformRegisterMmioAperture(
     ULONGLONG physicalAddress,
     volatile void* address,
     SIZE_T length,
+    NV_PLATFORM_MMIO_CACHE_TYPE cacheType,
     const NV_PLATFORM_MMIO_ACCESS* access,
     void** registration) noexcept;
 

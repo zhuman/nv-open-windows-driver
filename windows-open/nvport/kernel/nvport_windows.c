@@ -2,6 +2,9 @@
 
 #include "nvport/nvport.h"
 #include "nvplatform_memory_rm.h"
+#if defined(NV_USER_MODE)
+#include "nvplatform_mmio_rm.h"
+#endif
 #include "nvplatform_thread.h"
 
 #include <stddef.h>
@@ -177,6 +180,13 @@ void* portMemCopy(
     {
         return NULL;
     }
+
+#if defined(NV_USER_MODE)
+    if (NvPlatformRmCopyMemory(destination, source, sourceSize))
+    {
+        return destination;
+    }
+#endif
 
     for (index = 0; index < sourceSize; ++index)
     {

@@ -401,59 +401,17 @@ NTSTATUS RegisterAperture::Initialize(
     _In_ WDFCMRESLIST resourcesTranslated,
     _In_ const ConfigSpace& configSpace) noexcept
 {
-    Reset();
-
-    const PHYSICAL_ADDRESS registerBarAddress = configSpace.RegisterBarAddress();
-    const ULONG resourceCount = WdfCmResourceListGetCount(resourcesTranslated);
-    PCM_PARTIAL_RESOURCE_DESCRIPTOR registerRange = nullptr;
-    for (ULONG index = 0; index < resourceCount; ++index)
-    {
-        PCM_PARTIAL_RESOURCE_DESCRIPTOR resource =
-            WdfCmResourceListGetDescriptor(resourcesTranslated, index);
-        if (resource != nullptr &&
-            resource->Type == CmResourceTypeMemory &&
-            resource->u.Memory.Start.QuadPart == registerBarAddress.QuadPart)
-        {
-            registerRange = resource;
-            break;
-        }
-    }
-
-    if (registerRange == nullptr || registerRange->u.Memory.Length < RequiredIdentityLength)
-    {
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
-    }
-
-    TraceEvents(
-        TRACE_LEVEL_INFORMATION,
-        TRACE_PCI,
-        "BAR0 resource: config=0x%llX translated=0x%llX length=0x%X flags=0x%X",
-        registerBarAddress.QuadPart,
-        registerRange->u.Memory.Start.QuadPart,
-        registerRange->u.Memory.Length,
-        registerRange->Flags);
-
-    NTSTATUS status = WdfDeviceMapIoSpace(
+    NTSTATUS status = InitializeMemoryBar(
         device,
-        registerRange->u.Memory.Start,
-        registerRange->u.Memory.Length,
-        MmNonCached,
-        &address_);
+        resourcesTranslated,
+        configSpace,
+        0,
+        MmNonCached);
     if (!NT_SUCCESS(status))
     {
-        TraceEvents(
-            TRACE_LEVEL_ERROR,
-            TRACE_PCI,
-            "BAR0 map failed: status=%!STATUS! start=0x%llX length=0x%X",
-            status,
-            registerRange->u.Memory.Start.QuadPart,
-            registerRange->u.Memory.Length);
-        Reset();
         return status;
     }
 
-    device_ = device;
-    length_ = registerRange->u.Memory.Length;
     status = Read32(PmcBoot0Offset, &identity_.boot0);
     if (NT_SUCCESS(status))
     {
@@ -480,14 +438,109 @@ NTSTATUS RegisterAperture::Initialize(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS RegisterAperture::InitializeMemoryBar(
+    _In_ WDFDEVICE device,
+    _In_ WDFCMRESLIST resourcesTranslated,
+    _In_ const ConfigSpace& configSpace,
+    _In_ ULONG barIndex,
+    _In_ MEMORY_CACHING_TYPE cacheType) noexcept
+{
+    Reset();
+
+    if (barIndex >= configSpace.MemoryBarCount())
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    const PHYSICAL_ADDRESS barAddress = configSpace.MemoryBarAddress(barIndex);
+    const ULONG resourceCount = WdfCmResourceListGetCount(resourcesTranslated);
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR barRange = nullptr;
+    for (ULONG index = 0; index < resourceCount; ++index)
+    {
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR resource =
+            WdfCmResourceListGetDescriptor(resourcesTranslated, index);
+        if (resource != nullptr &&
+            resource->Type == CmResourceTypeMemory &&
+            resource->u.Memory.Start.QuadPart == barAddress.QuadPart)
+        {
+            barRange = resource;
+            break;
+        }
+    }
+
+    if (barRange == nullptr ||
+        (barIndex == 0 && barRange->u.Memory.Length < RequiredIdentityLength))
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_PCI,
+        "memory BAR resource: index=%u config=0x%llX translated=0x%llX length=0x%X flags=0x%X",
+        barIndex,
+        barAddress.QuadPart,
+        barRange->u.Memory.Start.QuadPart,
+        barRange->u.Memory.Length,
+        barRange->Flags);
+
+    NTSTATUS status = WdfDeviceMapIoSpace(
+        device,
+        barRange->u.Memory.Start,
+        barRange->u.Memory.Length,
+        cacheType,
+        &pseudoAddress_);
+    if (!NT_SUCCESS(status))
+    {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_PCI,
+            "memory BAR map failed: index=%u status=%!STATUS! start=0x%llX length=0x%X",
+            barIndex,
+            status,
+            barRange->u.Memory.Start.QuadPart,
+            barRange->u.Memory.Length);
+        Reset();
+        return status;
+    }
+
+    device_ = device;
+    length_ = barRange->u.Memory.Length;
+    address_ = WdfDeviceGetHardwareRegisterMappedAddress(
+        device,
+        pseudoAddress_);
+    if (address_ == nullptr)
+    {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_PCI,
+            "memory BAR user mapping unavailable: index=%u pseudo=%p",
+            barIndex,
+            pseudoAddress_);
+        Reset();
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_PCI,
+        "memory BAR mapped: index=%u pseudo=%p user=%p",
+        barIndex,
+        pseudoAddress_,
+        address_);
+
+    return STATUS_SUCCESS;
+}
+
 void RegisterAperture::Reset() noexcept
 {
-    if (device_ != nullptr && address_ != nullptr)
+    if (device_ != nullptr && pseudoAddress_ != nullptr)
     {
-        WdfDeviceUnmapIoSpace(device_, address_, length_);
+        WdfDeviceUnmapIoSpace(device_, pseudoAddress_, length_);
     }
 
     device_ = nullptr;
+    pseudoAddress_ = nullptr;
     address_ = nullptr;
     length_ = 0;
     RtlZeroMemory(&identity_, sizeof(identity_));
@@ -497,21 +550,21 @@ UCHAR RegisterAperture::ReadRegister8(_In_ SIZE_T offset) const noexcept
 {
     return WDF_READ_REGISTER_UCHAR(
         device_,
-        static_cast<UCHAR*>(address_) + offset);
+        static_cast<UCHAR*>(pseudoAddress_) + offset);
 }
 
 USHORT RegisterAperture::ReadRegister16(_In_ SIZE_T offset) const noexcept
 {
     return WDF_READ_REGISTER_USHORT(
         device_,
-        reinterpret_cast<USHORT*>(static_cast<UCHAR*>(address_) + offset));
+        reinterpret_cast<USHORT*>(static_cast<UCHAR*>(pseudoAddress_) + offset));
 }
 
 ULONG RegisterAperture::ReadRegister32(_In_ SIZE_T offset) const noexcept
 {
     return WDF_READ_REGISTER_ULONG(
         device_,
-        reinterpret_cast<ULONG*>(static_cast<UCHAR*>(address_) + offset));
+        reinterpret_cast<ULONG*>(static_cast<UCHAR*>(pseudoAddress_) + offset));
 }
 
 void RegisterAperture::ReadRegisterBuffer32(
@@ -525,7 +578,7 @@ void RegisterAperture::ReadRegisterBuffer32(
         const ULONG transferCount = min(count, MaximumTransferCount);
         WDF_READ_REGISTER_BUFFER_ULONG(
             device_,
-            reinterpret_cast<ULONG*>(static_cast<UCHAR*>(address_) + offset),
+            reinterpret_cast<ULONG*>(static_cast<UCHAR*>(pseudoAddress_) + offset),
             buffer,
             transferCount);
         offset += static_cast<SIZE_T>(transferCount) * sizeof(*buffer);
@@ -540,7 +593,7 @@ void RegisterAperture::WriteRegister8(
 {
     WDF_WRITE_REGISTER_UCHAR(
         device_,
-        static_cast<UCHAR*>(address_) + offset,
+        static_cast<UCHAR*>(pseudoAddress_) + offset,
         value);
 }
 
@@ -550,7 +603,7 @@ void RegisterAperture::WriteRegister16(
 {
     WDF_WRITE_REGISTER_USHORT(
         device_,
-        reinterpret_cast<USHORT*>(static_cast<UCHAR*>(address_) + offset),
+        reinterpret_cast<USHORT*>(static_cast<UCHAR*>(pseudoAddress_) + offset),
         value);
 }
 
@@ -560,7 +613,7 @@ void RegisterAperture::WriteRegister32(
 {
     WDF_WRITE_REGISTER_ULONG(
         device_,
-        reinterpret_cast<ULONG*>(static_cast<UCHAR*>(address_) + offset),
+        reinterpret_cast<ULONG*>(static_cast<UCHAR*>(pseudoAddress_) + offset),
         value);
 }
 

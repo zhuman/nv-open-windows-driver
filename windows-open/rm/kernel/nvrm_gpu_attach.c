@@ -1,8 +1,11 @@
 #include "core/core.h"
 #include "core/locks.h"
+#include "gpu/bus/kern_bus.h"
 #include "gpu/disp/inst_mem/disp_inst_mem.h"
 #include "gpu/disp/kern_disp.h"
 #include "gpu/fifo/kernel_fifo.h"
+#include "gpu/gr/kernel_graphics.h"
+#include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "gpu/gpu.h"
 #include "gpu/gsp/kernel_gsp.h"
 #include "kernel/mem_mgr/mem.h"
@@ -192,6 +195,7 @@ NV_STATUS NvRmInitializeGpuFirmware(
     volatile void* pPromAddress = NULL;
     void* publishedGpu = NULL;
     NvU32 previousGpuInstance = NV_U32_MAX;
+    GPU_MASK gpusLockedMask = 0;
     NV_STATUS status;
 
     if (gpuContext == NULL || firmware == NULL || firmwareSize == 0)
@@ -245,9 +249,35 @@ NV_STATUS NvRmInitializeGpuFirmware(
         }
         if (status == NV_OK)
         {
-            NvKmsWindowsTraceMessage("RM GPU lifecycle: display init begin");
-            status = kdispStateInitLocked(pGpu, GPU_GET_KERNEL_DISPLAY(pGpu));
-            NvKmsWindowsTraceMessage("RM GPU lifecycle: display init end");
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: state init begin");
+            status = gpumgrStateInitGpu(pGpu);
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: state init end");
+        }
+        if (status == NV_OK)
+        {
+            status = rmGpuGroupLockAcquire(
+                pGpu->gpuInstance,
+                GPU_LOCK_GRP_SUBDEVICE,
+                GPUS_LOCK_FLAGS_NONE,
+                RM_LOCK_MODULES_INIT,
+                &gpusLockedMask);
+        }
+        if (status == NV_OK)
+        {
+            KernelGraphics* pKernelGraphics = GPU_GET_KERNEL_GRAPHICS(pGpu, 0);
+
+            NvKmsWindowsTraceMessage(
+                rmDeviceGpuLockIsOwner(pGpu->gpuInstance)
+                    ? "RM GPU lifecycle: graphics GPU lock owned"
+                    : "RM GPU lifecycle: graphics GPU lock not owned");
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: graphics static info begin");
+            status = pKernelGraphics != NULL
+                ? kgraphicsLoadStaticInfo(
+                    pGpu,
+                    pKernelGraphics,
+                    KMIGMGR_SWIZZID_INVALID)
+                : NV_ERR_INVALID_STATE;
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: graphics static info end");
         }
         if (status == NV_OK)
         {
@@ -259,6 +289,10 @@ NV_STATUS NvRmInitializeGpuFirmware(
                 KERNEL_DISPLAY_GET_INST_MEM(pKernelDisplay),
                 0);
             NvKmsWindowsTraceMessage("RM GPU lifecycle: display instmem load end");
+        }
+        if (gpusLockedMask != 0)
+        {
+            rmGpuGroupLockRelease(gpusLockedMask, GPUS_LOCK_FLAGS_NONE);
         }
         gpumgrSetCurrentGpuInstance(previousGpuInstance);
     }

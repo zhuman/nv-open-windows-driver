@@ -73,6 +73,13 @@ public:
         _In_ WDFCMRESLIST resourcesTranslated,
         _In_ const ConfigSpace& configSpace) noexcept;
 
+    NTSTATUS InitializeMemoryBar(
+        _In_ WDFDEVICE device,
+        _In_ WDFCMRESLIST resourcesTranslated,
+        _In_ const ConfigSpace& configSpace,
+        _In_ ULONG barIndex,
+        _In_ MEMORY_CACHING_TYPE cacheType) noexcept;
+
     void Reset() noexcept;
 
     UCHAR ReadRegister8(_In_ SIZE_T offset) const noexcept;
@@ -94,6 +101,7 @@ public:
 
 private:
     WDFDEVICE device_;
+    void* pseudoAddress_;
     void* address_;
     SIZE_T length_;
     BootIdentity identity_;
