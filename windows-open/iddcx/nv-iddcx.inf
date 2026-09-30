@@ -1710,6 +1710,8 @@ AddReg=NvIddCx_HardwareSettings
 HKR,,"UpperFilters",0x00010000,"IndirectKmd"
 HKR,"WUDF","DeviceGroupId",0x00000000,"NvWindowsIddCxGroup"
 HKR,"DMA Management","RemappingSupported",0x00010001,1
+HKR,"Interrupt Management\MessageSignaledInterruptProperties","MSISupported",0x00010001,1
+HKR,"Interrupt Management\MessageSignaledInterruptProperties","MessageNumberLimit",0x00010001,1
 
 [NvIddCx_Install.NT.Services]
 Include=WUDFRD.inf
