@@ -41,6 +41,17 @@ struct nvkms_sema_t
     HANDLE semaphore;
 };
 
+struct NV_KMS_WINDOWS_SURFACE
+{
+    NvKmsKapiMemory* memory;
+    NvKmsKapiSurface* surface;
+    void* pixels;
+    NvU64 size;
+    NvU32 width;
+    NvU32 height;
+    NvU32 pitch;
+};
+
 namespace {
 
 SRWLOCK gpuRegistryLock = SRWLOCK_INIT;
@@ -50,8 +61,19 @@ NvKmsKapiFunctionsTable kmsFunctions = {};
 NvKmsKapiDevice* kmsDevice = nullptr;
 NvKmsKapiGpuInfo enumeratedKmsGpu = {};
 NvBool kmsGpuEnumerated = NV_FALSE;
+SRWLOCK kmsDeviceLock = SRWLOCK_INIT;
 INIT_ONCE kmsLockInitOnce = INIT_ONCE_STATIC_INIT;
 CRITICAL_SECTION kmsLock;
+
+class KmsDeviceLockGuard
+{
+public:
+    KmsDeviceLockGuard() { AcquireSRWLockExclusive(&kmsDeviceLock); }
+    ~KmsDeviceLockGuard() { ReleaseSRWLockExclusive(&kmsDeviceLock); }
+
+    KmsDeviceLockGuard(const KmsDeviceLockGuard&) = delete;
+    KmsDeviceLockGuard& operator=(const KmsDeviceLockGuard&) = delete;
+};
 
 BOOL CALLBACK NvKmsInitializeLock(PINIT_ONCE, void*, void**)
 {
@@ -662,6 +684,8 @@ extern "C" NV_STATUS NvKmsWindowsProbeRmClient(NvHandle* clientHandle)
 
 extern "C" NV_STATUS NvKmsWindowsInitialize(void)
 {
+    KmsDeviceLockGuard lock;
+
     if (!nvKmsModuleLoad())
     {
         return NV_ERR_GENERIC;
@@ -701,6 +725,8 @@ extern "C" NV_STATUS NvKmsWindowsInitialize(void)
 
 extern "C" void NvKmsWindowsShutdown(void)
 {
+    KmsDeviceLockGuard lock;
+
     if (kmsDevice != nullptr)
     {
         kmsFunctions.freeDevice(kmsDevice);
@@ -712,6 +738,8 @@ extern "C" void NvKmsWindowsShutdown(void)
 extern "C" NV_STATUS NvKmsWindowsProbeDisplays(
     NV_KMS_WINDOWS_DISPLAY_INFO* displayInfo)
 {
+    KmsDeviceLockGuard lock;
+
     if (displayInfo == nullptr || kmsDevice == nullptr)
     {
         return NV_ERR_INVALID_STATE;
@@ -840,6 +868,400 @@ extern "C" NV_STATUS NvKmsWindowsProbeDisplays(
     }
 
     nvkms_free(displays, sizeof(NvKmsKapiDisplay) * displayCount);
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
+    NV_KMS_WINDOWS_DISPLAY_STATE* displayState)
+{
+    if (displayState == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    KmsDeviceLockGuard lock;
+    *displayState = {};
+    displayState->preferredModeIndex = ~0U;
+    if (kmsDevice == nullptr)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    NvKmsKapiDeviceResourcesInfo resources = {};
+    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources))
+    {
+        return NV_ERR_GENERIC;
+    }
+
+    displayState->headCount = resources.numHeads;
+    for (NvU32 head = 0; head < resources.numHeads; ++head)
+    {
+        if (resources.numLayers[head] > displayState->maxLayersPerHead)
+        {
+            displayState->maxLayersPerHead = resources.numLayers[head];
+        }
+    }
+    displayState->supportsMultiLayerFlip =
+        displayState->maxLayersPerHead > 1 ? NV_TRUE : NV_FALSE;
+
+    NvU32 displayCount = 0;
+    if (!kmsFunctions.getDisplays(kmsDevice, &displayCount, nullptr))
+    {
+        return NV_ERR_GENERIC;
+    }
+    if (displayCount == 0)
+    {
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+
+    auto* const displays = static_cast<NvKmsKapiDisplay*>(
+        nvkms_alloc(sizeof(NvKmsKapiDisplay) * displayCount, NV_TRUE));
+    if (displays == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    NvU32 capacity = displayCount;
+    NV_STATUS status = NV_ERR_OBJECT_NOT_FOUND;
+    if (!kmsFunctions.getDisplays(kmsDevice, &capacity, displays))
+    {
+        status = NV_ERR_GENERIC;
+        goto done;
+    }
+
+    for (NvU32 displayIndex = 0; displayIndex < capacity; ++displayIndex)
+    {
+        NvKmsKapiStaticDisplayInfo staticInfo = {};
+        NvKmsKapiDynamicDisplayParams dynamicInfo = {};
+        dynamicInfo.handle = displays[displayIndex];
+        if (!kmsFunctions.getStaticDisplayInfo(
+                kmsDevice, displays[displayIndex], &staticInfo) ||
+            !kmsFunctions.getDynamicDisplayInfo(kmsDevice, &dynamicInfo))
+        {
+            status = NV_ERR_GENERIC;
+            goto done;
+        }
+        if (!dynamicInfo.connected)
+        {
+            continue;
+        }
+
+        for (NvU32 connectorIndex = 0;
+             connectorIndex < resources.numConnectors;
+             ++connectorIndex)
+        {
+            NvKmsKapiConnectorInfo connector = {};
+            if (!kmsFunctions.getConnectorInfo(
+                    kmsDevice,
+                    resources.connectorHandles[connectorIndex],
+                    &connector))
+            {
+                status = NV_ERR_GENERIC;
+                goto done;
+            }
+            if (connector.handle == staticInfo.connectorHandle)
+            {
+                displayState->connectorType = connector.type;
+                displayState->connectorIndex = connector.physicalIndex;
+                break;
+            }
+        }
+
+        displayState->edidBytes = dynamicInfo.edid.bufferSize;
+        if (displayState->edidBytes > NV_KMS_WINDOWS_MAX_EDID_BYTES)
+        {
+            displayState->edidBytes = NV_KMS_WINDOWS_MAX_EDID_BYTES;
+        }
+        std::memcpy(
+            displayState->edid,
+            dynamicInfo.edid.buffer,
+            displayState->edidBytes);
+
+        for (NvU32 modeIndex = 0;
+             displayState->modeCount < NV_KMS_WINDOWS_MAX_DISPLAY_MODES;
+             ++modeIndex)
+        {
+            NvKmsKapiDisplayMode kmsMode = {};
+            NvBool valid = NV_FALSE;
+            NvBool preferred = NV_FALSE;
+            const int moreModes = kmsFunctions.getDisplayMode(
+                kmsDevice,
+                displays[displayIndex],
+                modeIndex,
+                &kmsMode,
+                &valid,
+                &preferred);
+            if (moreModes < 0)
+            {
+                status = NV_ERR_GENERIC;
+                goto done;
+            }
+
+            if (valid)
+            {
+                NV_KMS_WINDOWS_MODE* const mode =
+                    &displayState->modes[displayState->modeCount];
+                mode->refreshRateMillihertz = kmsMode.timings.refreshRate;
+                mode->pixelClockHz = kmsMode.timings.pixelClockHz;
+                mode->hVisible = kmsMode.timings.hVisible;
+                mode->hSyncStart = kmsMode.timings.hSyncStart;
+                mode->hSyncEnd = kmsMode.timings.hSyncEnd;
+                mode->hTotal = kmsMode.timings.hTotal;
+                mode->vVisible = kmsMode.timings.vVisible;
+                mode->vSyncStart = kmsMode.timings.vSyncStart;
+                mode->vSyncEnd = kmsMode.timings.vSyncEnd;
+                mode->vTotal = kmsMode.timings.vTotal;
+                mode->widthMillimeters = kmsMode.timings.widthMM;
+                mode->heightMillimeters = kmsMode.timings.heightMM;
+                mode->interlaced = kmsMode.timings.flags.interlaced;
+                mode->preferred = preferred;
+                if (preferred)
+                {
+                    displayState->preferredModeIndex = displayState->modeCount;
+                }
+                ++displayState->modeCount;
+            }
+
+            if (moreModes == 0)
+            {
+                break;
+            }
+        }
+
+        status = displayState->modeCount == 0 ?
+            NV_ERR_OBJECT_NOT_FOUND : NV_OK;
+        break;
+    }
+
+done:
+    nvkms_free(displays, sizeof(NvKmsKapiDisplay) * displayCount);
+    return status;
+}
+
+extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
+    NvU32 width,
+    NvU32 height,
+    NV_KMS_WINDOWS_SURFACE** surface,
+    void** pixels,
+    NvU32* pitch)
+{
+    if (width == 0 || height == 0 || surface == nullptr ||
+        pixels == nullptr || pitch == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    *surface = nullptr;
+    *pixels = nullptr;
+    *pitch = 0;
+
+    KmsDeviceLockGuard lock;
+    if (kmsDevice == nullptr)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    NvKmsKapiDeviceResourcesInfo resources = {};
+    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources) ||
+        resources.numHeads == 0 || resources.numLayers[0] == 0)
+    {
+        return NV_ERR_GENERIC;
+    }
+    if ((resources.supportedSurfaceMemoryFormats[0] &
+         NVBIT64(NvKmsSurfaceMemoryFormatA8R8G8B8)) == 0)
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    const NvU32 alignment = resources.caps.pitchAlignment == 0 ?
+        1 : resources.caps.pitchAlignment;
+    const NvU64 rowBytes = static_cast<NvU64>(width) * 4;
+    const NvU64 alignedPitch =
+        ((rowBytes + alignment - 1) / alignment) * alignment;
+    const NvU64 allocationSize = alignedPitch * height;
+    if (alignedPitch > ~static_cast<NvU32>(0) ||
+        allocationSize / height != alignedPitch)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    auto* const scanout = static_cast<NV_KMS_WINDOWS_SURFACE*>(
+        HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                  sizeof(NV_KMS_WINDOWS_SURFACE)));
+    if (scanout == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    NvKmsKapiAllocateMemoryParams memoryParams = {};
+    memoryParams.layout = NvKmsSurfaceMemoryLayoutPitch;
+    memoryParams.type = NVKMS_KAPI_ALLOCATION_TYPE_SCANOUT;
+    memoryParams.size = allocationSize;
+    memoryParams.noDisplayCaching = NV_TRUE;
+    memoryParams.useVideoMemory = NV_FALSE;
+    scanout->memory = kmsFunctions.allocateMemory(kmsDevice, &memoryParams);
+    if (scanout->memory == nullptr)
+    {
+        HeapFree(GetProcessHeap(), 0, scanout);
+        return NV_ERR_NO_MEMORY;
+    }
+
+    if (!kmsFunctions.mapMemory(
+            kmsDevice, scanout->memory, NVKMS_KAPI_MAPPING_TYPE_USER,
+            &scanout->pixels))
+    {
+        kmsFunctions.freeMemory(kmsDevice, scanout->memory);
+        HeapFree(GetProcessHeap(), 0, scanout);
+        return NV_ERR_GENERIC;
+    }
+
+    scanout->size = allocationSize;
+    scanout->width = width;
+    scanout->height = height;
+    scanout->pitch = static_cast<NvU32>(alignedPitch);
+
+    NvKmsKapiCreateSurfaceParams surfaceParams = {};
+    surfaceParams.planes[0].memory = scanout->memory;
+    surfaceParams.planes[0].pitch = scanout->pitch;
+    surfaceParams.width = width;
+    surfaceParams.height = height;
+    surfaceParams.format = NvKmsSurfaceMemoryFormatA8R8G8B8;
+    surfaceParams.explicit_layout = NV_TRUE;
+    surfaceParams.layout = NvKmsSurfaceMemoryLayoutPitch;
+    scanout->surface = kmsFunctions.createSurface(kmsDevice, &surfaceParams);
+    if (scanout->surface == nullptr)
+    {
+        kmsFunctions.unmapMemory(
+            kmsDevice, scanout->memory, NVKMS_KAPI_MAPPING_TYPE_USER,
+            scanout->pixels);
+        kmsFunctions.freeMemory(kmsDevice, scanout->memory);
+        HeapFree(GetProcessHeap(), 0, scanout);
+        return NV_ERR_GENERIC;
+    }
+
+    *surface = scanout;
+    *pixels = scanout->pixels;
+    *pitch = scanout->pitch;
+    return NV_OK;
+}
+
+extern "C" void NvKmsWindowsDestroyScanoutSurface(
+    NV_KMS_WINDOWS_SURFACE* surface)
+{
+    if (surface == nullptr)
+    {
+        return;
+    }
+
+    KmsDeviceLockGuard lock;
+    if (kmsDevice != nullptr)
+    {
+        if (surface->surface != nullptr)
+        {
+            kmsFunctions.destroySurface(kmsDevice, surface->surface);
+        }
+        if (surface->pixels != nullptr && surface->memory != nullptr)
+        {
+            kmsFunctions.unmapMemory(
+                kmsDevice, surface->memory, NVKMS_KAPI_MAPPING_TYPE_USER,
+                surface->pixels);
+        }
+        if (surface->memory != nullptr)
+        {
+            kmsFunctions.freeMemory(kmsDevice, surface->memory);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, surface);
+}
+
+extern "C" NV_STATUS NvKmsWindowsPresentLayers(
+    NvU32 head,
+    const NV_KMS_WINDOWS_LAYER* layers,
+    NvU32 layerCount)
+{
+    if ((layers == nullptr && layerCount != 0) ||
+        layerCount > NV_KMS_WINDOWS_MAX_LAYERS)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    KmsDeviceLockGuard lock;
+    if (kmsDevice == nullptr)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    NvKmsKapiDeviceResourcesInfo resources = {};
+    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources) ||
+        head >= resources.numHeads || layerCount > resources.numLayers[head])
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    NvKmsKapiRequestedModeSetConfig requested = {};
+    NvKmsKapiModeSetReplyConfig reply = {};
+    requested.headsMask = 1U << head;
+    auto* const headConfig = &requested.headRequestedConfig[head];
+
+    for (NvU32 layerIndex = 0;
+         layerIndex < resources.numLayers[head];
+         ++layerIndex)
+    {
+        auto* const requestedLayer =
+            &headConfig->layerRequestedConfig[layerIndex];
+        requestedLayer->flags.surfaceChanged = NV_TRUE;
+        if (layerIndex >= layerCount)
+        {
+            continue;
+        }
+
+        const NV_KMS_WINDOWS_LAYER* const layer = &layers[layerIndex];
+        if (layer->surface == nullptr || layer->sourceWidth == 0 ||
+            layer->sourceHeight == 0 || layer->destinationWidth == 0 ||
+            layer->destinationHeight == 0 ||
+            layer->sourceX > 0xffffU || layer->sourceY > 0xffffU ||
+            layer->sourceWidth > 0xffffU ||
+            layer->sourceHeight > 0xffffU ||
+            layer->destinationX < -32768 ||
+            layer->destinationX > 32767 ||
+            layer->destinationY < -32768 ||
+            layer->destinationY > 32767 ||
+            layer->destinationWidth > 0xffffU ||
+            layer->destinationHeight > 0xffffU ||
+            layer->sourceX + layer->sourceWidth > layer->surface->width ||
+            layer->sourceY + layer->sourceHeight > layer->surface->height)
+        {
+            return NV_ERR_INVALID_ARGUMENT;
+        }
+
+        auto* const config = &requestedLayer->config;
+        config->surface = layer->surface->surface;
+        config->srcX = static_cast<NvU16>(layer->sourceX);
+        config->srcY = static_cast<NvU16>(layer->sourceY);
+        config->srcWidth = static_cast<NvU16>(layer->sourceWidth);
+        config->srcHeight = static_cast<NvU16>(layer->sourceHeight);
+        config->dstX = static_cast<NvS16>(layer->destinationX);
+        config->dstY = static_cast<NvS16>(layer->destinationY);
+        config->dstWidth = static_cast<NvU16>(layer->destinationWidth);
+        config->dstHeight = static_cast<NvU16>(layer->destinationHeight);
+        config->compParams.compMode = layer->opacity == 255 ?
+            NVKMS_COMPOSITION_BLENDING_MODE_OPAQUE :
+            NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_SURFACE_ALPHA;
+        config->compParams.surfaceAlpha = layer->opacity;
+        config->minPresentInterval = 1;
+
+        requestedLayer->flags.srcXYChanged = NV_TRUE;
+        requestedLayer->flags.srcWHChanged = NV_TRUE;
+        requestedLayer->flags.dstXYChanged = NV_TRUE;
+        requestedLayer->flags.dstWHChanged = NV_TRUE;
+    }
+
+    if (!kmsFunctions.applyModeSetConfig(
+            kmsDevice, &requested, &reply, NV_TRUE))
+    {
+        return reply.flipResult == NV_KMS_FLIP_RESULT_IN_PROGRESS ?
+            NV_ERR_IN_USE : NV_ERR_INVALID_STATE;
+    }
     return NV_OK;
 }
 

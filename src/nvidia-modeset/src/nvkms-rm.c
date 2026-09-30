@@ -191,6 +191,9 @@ static NvBool QueryGpuCapabilities(NVDevEvoPtr pDevEvo)
 
     /* TODO: This cap bit should be queried from RM */
     pDevEvo->requiresAllAllocationsInSysmem = pDevEvo->isSOCDisplay;
+#if defined(NV_WINDOWS_IDDCX)
+    pDevEvo->requiresAllAllocationsInSysmem = TRUE;
+#endif
 
     /* ctxDma{,Non}CoherentAllowed */
 

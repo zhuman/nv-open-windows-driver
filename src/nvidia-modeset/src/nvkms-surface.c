@@ -401,6 +401,7 @@ static NvBool ValidateSurfaceAllocation(
      */
     NvBool requireVidmem = (pRequest->isoType == NVKMS_MEMORY_ISO) &&
                            !pDevEvo->isSOCDisplay &&
+                           !pDevEvo->requiresAllAllocationsInSysmem &&
                            !pRequest->noDisplayHardwareAccess;
 
     /*

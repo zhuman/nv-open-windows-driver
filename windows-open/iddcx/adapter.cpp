@@ -1,4 +1,5 @@
 #include "adapter.hpp"
+#include "nvkms_windows.h"
 #include "trace.h"
 
 #include <d3d11.h>
@@ -12,54 +13,191 @@ namespace {
 constexpr wchar_t EndpointFriendlyName[] = L"NVIDIA Indirect Display Adapter";
 constexpr wchar_t EndpointManufacturerName[] = L"NVIDIA";
 constexpr wchar_t EndpointModelName[] = L"Open GPU Kernel Modules";
-constexpr UINT MonitorWidth = 1920;
-constexpr UINT MonitorHeight = 1080;
-constexpr UINT MonitorRefreshRate = 60;
 
 void FillSignalInfo(
     _Out_ DISPLAYCONFIG_VIDEO_SIGNAL_INFO* signalInfo,
+    _In_ const NV_KMS_WINDOWS_MODE& mode,
     _In_ bool monitorMode) noexcept
 {
-    signalInfo->pixelRate =
-        static_cast<UINT64>(MonitorWidth) * MonitorHeight * MonitorRefreshRate;
-    signalInfo->hSyncFreq.Numerator = MonitorHeight * MonitorRefreshRate;
-    signalInfo->hSyncFreq.Denominator = 1;
-    signalInfo->vSyncFreq.Numerator = MonitorRefreshRate;
-    signalInfo->vSyncFreq.Denominator = 1;
-    signalInfo->activeSize.cx = MonitorWidth;
-    signalInfo->activeSize.cy = MonitorHeight;
-    signalInfo->totalSize = signalInfo->activeSize;
+    signalInfo->pixelRate = mode.pixelClockHz;
+    signalInfo->hSyncFreq.Numerator = mode.pixelClockHz;
+    signalInfo->hSyncFreq.Denominator = mode.hTotal;
+    signalInfo->vSyncFreq.Numerator = mode.refreshRateMillihertz;
+    signalInfo->vSyncFreq.Denominator = 1000;
+    signalInfo->activeSize.cx = mode.hVisible;
+    signalInfo->activeSize.cy = mode.vVisible;
+    signalInfo->totalSize.cx = mode.hTotal;
+    signalInfo->totalSize.cy = mode.vTotal;
     signalInfo->videoStandard = 255;
-    signalInfo->scanLineOrdering = DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
+    signalInfo->scanLineOrdering = mode.interlaced
+        ? DISPLAYCONFIG_SCANLINE_ORDERING_INTERLACED_UPPERFIELDFIRST
+        : DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
     signalInfo->AdditionalSignalInfo.vSyncFreqDivider = monitorMode ? 0 : 1;
 }
 
-IDDCX_MONITOR_MODE CreateMonitorMode() noexcept
+IDDCX_MONITOR_MODE CreateMonitorMode(
+    _In_ const NV_KMS_WINDOWS_MODE& displayMode,
+    _In_ IDDCX_MONITOR_MODE_ORIGIN origin) noexcept
 {
     IDDCX_MONITOR_MODE mode = {};
     mode.Size = sizeof(mode);
-    mode.Origin = IDDCX_MONITOR_MODE_ORIGIN_DRIVER;
-    FillSignalInfo(&mode.MonitorVideoSignalInfo, true);
+    mode.Origin = origin;
+    FillSignalInfo(&mode.MonitorVideoSignalInfo, displayMode, true);
     return mode;
 }
 
-IDDCX_TARGET_MODE CreateTargetMode() noexcept
+IDDCX_MONITOR_MODE2 CreateMonitorMode2(
+    _In_ const NV_KMS_WINDOWS_MODE& displayMode,
+    _In_ IDDCX_MONITOR_MODE_ORIGIN origin) noexcept
+{
+    IDDCX_MONITOR_MODE2 mode = {};
+    mode.Size = sizeof(mode);
+    mode.Origin = origin;
+    FillSignalInfo(&mode.MonitorVideoSignalInfo, displayMode, true);
+    mode.BitsPerComponent.Rgb = IDDCX_BITS_PER_COMPONENT_8;
+    return mode;
+}
+
+IDDCX_TARGET_MODE CreateTargetMode(
+    _In_ const NV_KMS_WINDOWS_MODE& displayMode) noexcept
 {
     IDDCX_TARGET_MODE mode = {};
     mode.Size = sizeof(mode);
-    FillSignalInfo(&mode.TargetVideoSignalInfo.targetVideoSignalInfo, false);
+    FillSignalInfo(
+        &mode.TargetVideoSignalInfo.targetVideoSignalInfo,
+        displayMode,
+        false);
     return mode;
 }
 
-IDDCX_TARGET_MODE2 CreateTargetMode2() noexcept
+IDDCX_TARGET_MODE2 CreateTargetMode2(
+    _In_ const NV_KMS_WINDOWS_MODE& displayMode) noexcept
 {
     IDDCX_TARGET_MODE2 mode = {};
     mode.Size = sizeof(mode);
-    FillSignalInfo(&mode.TargetVideoSignalInfo.targetVideoSignalInfo, false);
+    FillSignalInfo(
+        &mode.TargetVideoSignalInfo.targetVideoSignalInfo,
+        displayMode,
+        false);
     mode.RequiredBandwidth = mode.TargetVideoSignalInfo
         .targetVideoSignalInfo.pixelRate;
     mode.BitsPerComponent.Rgb = IDDCX_BITS_PER_COMPONENT_8;
     return mode;
+}
+
+DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY GetOutputTechnology(
+    _In_ NvU32 connectorType) noexcept
+{
+    switch (connectorType)
+    {
+    case 0:
+    case 7:
+        return DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL;
+    case 1:
+        return DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HD15;
+    case 2:
+    case 3:
+        return DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DVI;
+    case 5:
+        return DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS;
+    case 6:
+        return DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI;
+    default:
+        return DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER;
+    }
+}
+
+NTSTATUS GetDisplayState(
+    _Out_ NV_KMS_WINDOWS_DISPLAY_STATE* displayState) noexcept
+{
+    const NV_STATUS status = NvKmsWindowsGetPrimaryDisplay(displayState);
+    if (status != NV_OK)
+    {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "NvKmsWindowsGetPrimaryDisplay failed: 0x%08X",
+            status);
+        return STATUS_DEVICE_NOT_READY;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS FillMonitorModeBuffer(
+    _In_ UINT inputCount,
+    _Out_writes_opt_(inputCount) IDDCX_MONITOR_MODE* modes,
+    _In_ IDDCX_MONITOR_MODE_ORIGIN origin,
+    _Out_ UINT* outputCount,
+    _Out_ UINT* preferredModeIndex) noexcept
+{
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
+    NTSTATUS status = GetDisplayState(&displayState);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    *outputCount = displayState.modeCount;
+    *preferredModeIndex = displayState.preferredModeIndex < displayState.modeCount
+        ? displayState.preferredModeIndex
+        : 0;
+    if (inputCount == 0)
+    {
+        return STATUS_SUCCESS;
+    }
+    if (modes == nullptr)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (inputCount < displayState.modeCount)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    for (UINT index = 0; index < displayState.modeCount; ++index)
+    {
+        modes[index] = CreateMonitorMode(displayState.modes[index], origin);
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS FillMonitorMode2Buffer(
+    _In_ UINT inputCount,
+    _Out_writes_opt_(inputCount) IDDCX_MONITOR_MODE2* modes,
+    _Out_ UINT* outputCount,
+    _Out_ UINT* preferredModeIndex) noexcept
+{
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
+    NTSTATUS status = GetDisplayState(&displayState);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    *outputCount = displayState.modeCount;
+    *preferredModeIndex = displayState.preferredModeIndex < displayState.modeCount
+        ? displayState.preferredModeIndex
+        : 0;
+    if (inputCount == 0)
+    {
+        return STATUS_SUCCESS;
+    }
+    if (modes == nullptr)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (inputCount < displayState.modeCount)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    for (UINT index = 0; index < displayState.modeCount; ++index)
+    {
+        modes[index] = CreateMonitorMode2(
+            displayState.modes[index],
+            IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR);
+    }
+    return STATUS_SUCCESS;
 }
 
 HRESULT CreateSwapChainDevice(
@@ -145,8 +283,24 @@ NTSTATUS Adapter::EnterD0(_In_ WDFDEVICE device) noexcept
     IDDCX_ADAPTER_CAPS capabilities = {};
     capabilities.Size = sizeof(capabilities);
     capabilities.Flags = IDDCX_ADAPTER_FLAGS_NONE;
-    capabilities.MaxDisplayPipelineRate =
-        static_cast<UINT64>(MonitorWidth) * MonitorHeight * MonitorRefreshRate;
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
+    const NTSTATUS displayStatus = GetDisplayState(&displayState);
+    if (!NT_SUCCESS(displayStatus))
+    {
+        powered_ = false;
+        initializationStatus_ = displayStatus;
+        state_ = State::Failed;
+        return displayStatus;
+    }
+    for (NvU32 index = 0; index < displayState.modeCount; ++index)
+    {
+        if (displayState.modes[index].pixelClockHz >
+            capabilities.MaxDisplayPipelineRate)
+        {
+            capabilities.MaxDisplayPipelineRate =
+                displayState.modes[index].pixelClockHz;
+        }
+    }
     capabilities.MaxMonitorsSupported = 1;
     capabilities.EndPointDiagnostics.Size =
         sizeof(capabilities.EndPointDiagnostics);
@@ -250,12 +404,21 @@ NTSTATUS Adapter::CompleteInitialization(
 
 NTSTATUS Adapter::AnnounceMonitor() noexcept
 {
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
+    NTSTATUS status = GetDisplayState(&displayState);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
     IDDCX_MONITOR_INFO monitorInfo = {};
     monitorInfo.Size = sizeof(monitorInfo);
-    monitorInfo.MonitorType = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI;
+    monitorInfo.MonitorType = GetOutputTechnology(displayState.connectorType);
     monitorInfo.ConnectorIndex = 0;
     monitorInfo.MonitorDescription.Size = sizeof(monitorInfo.MonitorDescription);
     monitorInfo.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
+    monitorInfo.MonitorDescription.DataSize = displayState.edidBytes;
+    monitorInfo.MonitorDescription.pData = displayState.edid;
     monitorInfo.MonitorContainerId = {
         0x1500c36c, 0x73e5, 0x4bd2,
         { 0x93, 0xa7, 0xe6, 0x8c, 0x59, 0xd4, 0xe7, 0x9c }
@@ -269,7 +432,7 @@ NTSTATUS Adapter::AnnounceMonitor() noexcept
     input.pMonitorInfo = &monitorInfo;
 
     IDARG_OUT_MONITORCREATE output = {};
-    NTSTATUS status = IddCxMonitorCreate(handle_, &input, &output);
+    status = IddCxMonitorCreate(handle_, &input, &output);
     TraceEvents(
         NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,
@@ -283,6 +446,17 @@ NTSTATUS Adapter::AnnounceMonitor() noexcept
 
     monitor_ = output.MonitorObject;
     GetMonitorObjectContext(monitor_)->owner = this;
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "NVKMS monitor: connector=%u physical=%u EDID=%u modes=%u heads=%u layers=%u multiLayer=%u",
+        displayState.connectorType,
+        displayState.connectorIndex,
+        displayState.edidBytes,
+        displayState.modeCount,
+        displayState.headCount,
+        displayState.maxLayersPerHead,
+        displayState.supportsMultiLayerFlip);
     IDARG_OUT_MONITORARRIVAL arrival = {};
     status = IddCxMonitorArrival(monitor_, &arrival);
     TraceEvents(
@@ -605,10 +779,12 @@ NTSTATUS ParseMonitorDescription(
     const IDARG_IN_PARSEMONITORDESCRIPTION* input,
     IDARG_OUT_PARSEMONITORDESCRIPTION* output)
 {
-    UNREFERENCED_PARAMETER(input);
-    output->MonitorModeBufferOutputCount = 0;
-    output->PreferredMonitorModeIdx = NO_PREFERRED_MODE;
-    return STATUS_NOT_SUPPORTED;
+    return FillMonitorModeBuffer(
+        input->MonitorModeBufferInputCount,
+        input->pMonitorModes,
+        IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR,
+        &output->MonitorModeBufferOutputCount,
+        &output->PreferredMonitorModeIdx);
 }
 
 _Use_decl_annotations_
@@ -616,10 +792,11 @@ NTSTATUS ParseMonitorDescription2(
     const IDARG_IN_PARSEMONITORDESCRIPTION2* input,
     IDARG_OUT_PARSEMONITORDESCRIPTION* output)
 {
-    UNREFERENCED_PARAMETER(input);
-    output->MonitorModeBufferOutputCount = 0;
-    output->PreferredMonitorModeIdx = NO_PREFERRED_MODE;
-    return STATUS_NOT_SUPPORTED;
+    return FillMonitorMode2Buffer(
+        input->MonitorModeBufferInputCount,
+        input->pMonitorModes,
+        &output->MonitorModeBufferOutputCount,
+        &output->PreferredMonitorModeIdx);
 }
 
 _Use_decl_annotations_
@@ -629,29 +806,12 @@ NTSTATUS GetDefaultDescriptionModes(
     IDARG_OUT_GETDEFAULTDESCRIPTIONMODES* output)
 {
     UNREFERENCED_PARAMETER(monitor);
-    output->DefaultMonitorModeBufferOutputCount = 1;
-    output->PreferredMonitorModeIdx = 0;
-
-    if (input->DefaultMonitorModeBufferInputCount == 0)
-    {
-        TraceEvents(
-            TRACE_LEVEL_INFORMATION,
-            TRACE_DRIVER,
-            "GetDefaultDescriptionModes: count=1");
-        return STATUS_SUCCESS;
-    }
-
-    if (input->pDefaultMonitorModes == nullptr)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    input->pDefaultMonitorModes[0] = CreateMonitorMode();
-    TraceEvents(
-        TRACE_LEVEL_INFORMATION,
-        TRACE_DRIVER,
-        "GetDefaultDescriptionModes: 1920x1080@60");
-    return STATUS_SUCCESS;
+    return FillMonitorModeBuffer(
+        input->DefaultMonitorModeBufferInputCount,
+        input->pDefaultMonitorModes,
+        IDDCX_MONITOR_MODE_ORIGIN_DRIVER,
+        &output->DefaultMonitorModeBufferOutputCount,
+        &output->PreferredMonitorModeIdx);
 }
 
 _Use_decl_annotations_
@@ -661,23 +821,30 @@ NTSTATUS QueryTargetModes(
     IDARG_OUT_QUERYTARGETMODES* output)
 {
     UNREFERENCED_PARAMETER(monitor);
-    output->TargetModeBufferOutputCount = 1;
-    if (input->TargetModeBufferInputCount == 0)
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
+    NTSTATUS status = GetDisplayState(&displayState);
+    if (!NT_SUCCESS(status))
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "QueryTargetModes: count=1");
-        return STATUS_SUCCESS;
+        return status;
     }
 
+    output->TargetModeBufferOutputCount = displayState.modeCount;
+    if (input->TargetModeBufferInputCount == 0)
+    {
+        return STATUS_SUCCESS;
+    }
     if (input->pTargetModes == nullptr)
     {
         return STATUS_INVALID_PARAMETER;
     }
-
-    input->pTargetModes[0] = CreateTargetMode();
-    TraceEvents(
-        TRACE_LEVEL_INFORMATION,
-        TRACE_DRIVER,
-        "QueryTargetModes: 1920x1080@60");
+    if (input->TargetModeBufferInputCount < displayState.modeCount)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    for (UINT index = 0; index < displayState.modeCount; ++index)
+    {
+        input->pTargetModes[index] = CreateTargetMode(displayState.modes[index]);
+    }
     return STATUS_SUCCESS;
 }
 
@@ -688,26 +855,30 @@ NTSTATUS QueryTargetModes2(
     IDARG_OUT_QUERYTARGETMODES* output)
 {
     UNREFERENCED_PARAMETER(monitor);
-    output->TargetModeBufferOutputCount = 1;
-    if (input->TargetModeBufferInputCount == 0)
+    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
+    NTSTATUS status = GetDisplayState(&displayState);
+    if (!NT_SUCCESS(status))
     {
-        TraceEvents(
-            TRACE_LEVEL_INFORMATION,
-            TRACE_DRIVER,
-            "QueryTargetModes2: count=1");
-        return STATUS_SUCCESS;
+        return status;
     }
 
+    output->TargetModeBufferOutputCount = displayState.modeCount;
+    if (input->TargetModeBufferInputCount == 0)
+    {
+        return STATUS_SUCCESS;
+    }
     if (input->pTargetModes == nullptr)
     {
         return STATUS_INVALID_PARAMETER;
     }
-
-    input->pTargetModes[0] = CreateTargetMode2();
-    TraceEvents(
-        TRACE_LEVEL_INFORMATION,
-        TRACE_DRIVER,
-        "QueryTargetModes2: 1920x1080@60 RGB 8 bpc");
+    if (input->TargetModeBufferInputCount < displayState.modeCount)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    for (UINT index = 0; index < displayState.modeCount; ++index)
+    {
+        input->pTargetModes[index] = CreateTargetMode2(displayState.modes[index]);
+    }
     return STATUS_SUCCESS;
 }
 
