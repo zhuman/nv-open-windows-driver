@@ -31,6 +31,10 @@
 #include "nvkms-types.h"
 #include "nvkms-utils.h"
 
+#if defined(_WIN32)
+#include "nvplatform_mmio_rm.h"
+#endif
+
 /* declare prototypes: */
 void nvDmaKickoffEvo(NVEvoChannelPtr);
 
@@ -76,7 +80,11 @@ static inline void nvDmaStorePioMethod(
      * separately use appropriate fencing on anything that needs to preceed this
      * write.
      */
+#if defined(_WIN32)
+    NvPlatformRmWriteRegister32(ptr, value);
+#else
     __atomic_store_n(ptr, value, __ATOMIC_RELAXED);
+#endif
 }
 
 static inline NvU32 nvDmaLoadPioMethod(
@@ -92,7 +100,11 @@ static inline NvU32 nvDmaLoadPioMethod(
      * get reordered before this read, potentially clobbering the pushbuffer
      * before it's been read.)
      */
+#if defined(_WIN32)
+    return NvPlatformRmReadRegister32(ptr);
+#else
     return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+#endif
 }
 
 static inline void nvDmaSetEvoMethodData(

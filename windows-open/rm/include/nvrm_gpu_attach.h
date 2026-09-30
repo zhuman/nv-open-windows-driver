@@ -47,6 +47,22 @@ NV_STATUS NvRmOpenGpuDevice(
 NV_STATUS NvRmCloseGpuDevice(
     NvHandle clientHandle);
 
+void NvRmExternalKernelAlloc(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void* params);
+
+void NvRmExternalKernelAllocMemory(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void* params);
+
+void NvRmExternalKernelControl(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void* params);
+
+void NvRmExternalKernelFree(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void* params);
+
 NV_STATUS NvRmCleanupGpuClients(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 

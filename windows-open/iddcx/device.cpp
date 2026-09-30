@@ -12,6 +12,11 @@
 
 #include "device.tmh"
 
+extern "C" void NvKmsWindowsTraceMessage(const char* message)
+{
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%s", message);
+}
+
 namespace nv::iddcx {
 
 namespace {
@@ -816,6 +821,26 @@ NTSTATUS PrepareHardware(
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
     context->nvKmsInitialized = true;
+
+    NV_KMS_WINDOWS_DISPLAY_INFO displayInfo = {};
+    const NV_STATUS displayProbeStatus =
+        NvKmsWindowsProbeDisplays(&displayInfo);
+    TraceEvents(
+        displayProbeStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "NvKmsWindowsProbeDisplays: 0x%08X connectors=%u displays=%u connected=%u EDID=%u checksum=0x%02X",
+        displayProbeStatus,
+        displayInfo.connectorCount,
+        displayInfo.displayCount,
+        displayInfo.connectedCount,
+        displayInfo.edidBytes,
+        displayInfo.edidChecksum);
+    if (displayProbeStatus != NV_OK)
+    {
+        DestroyRmGpuContext(context);
+        context->configSpace.Reset();
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
 
     NV_KMS_WINDOWS_GPU_INFO modesetGpuInfo = {};
     const NV_STATUS modesetEnumerationStatus =

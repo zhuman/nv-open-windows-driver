@@ -17,6 +17,15 @@ typedef struct NV_KMS_WINDOWS_GPU_INFO
 	NvU8 function;
 } NV_KMS_WINDOWS_GPU_INFO;
 
+typedef struct NV_KMS_WINDOWS_DISPLAY_INFO
+{
+	NvU32 connectorCount;
+	NvU32 displayCount;
+	NvU32 connectedCount;
+	NvU32 edidBytes;
+	NvU8 edidChecksum;
+} NV_KMS_WINDOWS_DISPLAY_INFO;
+
 NV_STATUS NvKmsWindowsRegisterGpu(
 	NvU32 gpuId,
 	NvU32 domain,
@@ -26,6 +35,7 @@ NV_STATUS NvKmsWindowsRegisterGpu(
 	void* osDevice);
 void NvKmsWindowsUnregisterGpu(NvU32 gpuId);
 NV_STATUS NvKmsWindowsProbeGpuEnumeration(NV_KMS_WINDOWS_GPU_INFO* gpuInfo);
+NV_STATUS NvKmsWindowsProbeDisplays(NV_KMS_WINDOWS_DISPLAY_INFO* displayInfo);
 NV_STATUS NvKmsWindowsProbeRmClient(NvHandle* clientHandle);
 NV_STATUS NvKmsWindowsInitialize(void);
 void NvKmsWindowsShutdown(void);

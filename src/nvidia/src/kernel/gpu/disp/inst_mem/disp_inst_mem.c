@@ -249,9 +249,15 @@ instmemInitMemDesc
     else if (IS_GSP_CLIENT(pGpu))
     {
         // ToDO: Need to respect RM overrides and keep monolithic design same as offload.
+#if defined(_WIN32)
+        instmemSetMemory(pGpu, pInstMem,
+                         ADDR_SYSMEM, NV_MEMORY_CACHED,
+                         0, instMemSize);
+#else
         instmemSetMemory(pGpu, pInstMem,
                          ADDR_FBMEM, NV_MEMORY_WRITECOMBINED,
                          0 , instMemSize);
+#endif
     }
 
     switch (pInstMem->instMemAddrSpace)

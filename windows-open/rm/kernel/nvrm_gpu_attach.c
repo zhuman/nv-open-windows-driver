@@ -1,22 +1,37 @@
 #include "core/core.h"
 #include "core/locks.h"
+#include "gpu/disp/inst_mem/disp_inst_mem.h"
+#include "gpu/disp/kern_disp.h"
+#include "gpu/fifo/kernel_fifo.h"
 #include "gpu/gpu.h"
 #include "gpu/gsp/kernel_gsp.h"
+#include "kernel/mem_mgr/mem.h"
 #include "gpu_mgr/gpu_mgr.h"
 #include "nvplatform_mmio_rm.h"
+#include "rmapi/alloc_size.h"
 #include "rmapi/rmapi.h"
 #include "g_rs_server_nvoc.h"
 #include "nvrm_gpu_attach.h"
 
 #include "published/turing/tu102/dev_ext_devices.h"
+#include "published/turing/tu102/dev_vm.h"
 
 #include <class/cl0000.h>
 #include <class/cl0080.h>
 #include <class/cl2080.h>
+#include <class/clc361.h>
 #include <ctrl/ctrl0000/ctrl0000gpu.h>
 #include <ctrl/ctrl0080/ctrl0080gpu.h>
+#include <ctrl/ctrl0080/ctrl0080fb.h>
+#include <ctrl/ctrl2080/ctrl2080bus.h>
+#include <ctrl/ctrl2080/ctrl2080unix.h>
 
 #define NV_RM_PROM_SIZE 0x100000U
+
+void Nv04AllocWithAccessKernel(NVOS64_PARAMETERS* params);
+void Nv01AllocMemoryWithSecInfo(NVOS02_PARAMETERS* params, API_SECURITY_INFO securityInfo);
+void Nv04ControlKernel(NVOS54_PARAMETERS* params);
+void NvKmsWindowsTraceMessage(const char* message);
 
 NV_STATUS NvRmAttachGpuContext(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
@@ -217,8 +232,33 @@ NV_STATUS NvRmInitializeGpuFirmware(
         {
             gspFirmware.pBuf = firmware;
             gspFirmware.size = firmwareSize;
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: GSP init begin");
             status = kgspInitRm(pGpu, GPU_GET_KERNEL_GSP(pGpu), &gspFirmware);
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: GSP init end");
             NvPlatformRmEndRegisterCache32(pPromAddress);
+        }
+        if (status == NV_OK)
+        {
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: pre-init begin");
+            status = gpumgrStatePreInitGpu(pGpu);
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: pre-init end");
+        }
+        if (status == NV_OK)
+        {
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: display init begin");
+            status = kdispStateInitLocked(pGpu, GPU_GET_KERNEL_DISPLAY(pGpu));
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: display init end");
+        }
+        if (status == NV_OK)
+        {
+            KernelDisplay* pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
+
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: display instmem load begin");
+            status = instmemStateLoad(
+                pGpu,
+                KERNEL_DISPLAY_GET_INST_MEM(pKernelDisplay),
+                0);
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: display instmem load end");
         }
         gpumgrSetCurrentGpuInstance(previousGpuInstance);
     }
@@ -374,6 +414,259 @@ NV_STATUS NvRmCloseGpuDevice(
 
     pRmApi = rmapiGetInterface(RMAPI_EXTERNAL_KERNEL);
     return pRmApi->Free(pRmApi, clientHandle, clientHandle);
+}
+
+static API_SECURITY_INFO NvRmGetExternalKernelSecurityInfo(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    API_SECURITY_INFO securityInfo = {0};
+    securityInfo.privLevel = RS_PRIV_LEVEL_KERNEL;
+    securityInfo.paramLocation = PARAM_LOCATION_KERNEL;
+    securityInfo.gpuOsInfo = gpuContext;
+    securityInfo.clientOSInfo = gpuContext;
+    return securityInfo;
+}
+
+void NvRmExternalKernelAlloc(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void* paramsPointer)
+{
+    NVOS64_PARAMETERS* params = paramsPointer;
+    RM_API* pRmApi;
+    API_SECURITY_INFO securityInfo;
+    NvBool allowNull;
+    NvU32 paramsSize;
+    NV_STATUS status;
+
+    if (gpuContext == NULL || params == NULL)
+    {
+        if (params != NULL)
+        {
+            params->status = NV_ERR_INVALID_ARGUMENT;
+        }
+        return;
+    }
+
+    securityInfo = NvRmGetExternalKernelSecurityInfo(gpuContext);
+    pRmApi = rmapiGetInterface(RMAPI_EXTERNAL_KERNEL);
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status == NV_OK)
+    {
+        if (params->hClass == VOLTA_USERMODE_A)
+        {
+            void* publishedGpu = NULL;
+            status = NvPlatformRmGpuGetPublishedRmGpu(gpuContext, &publishedGpu);
+            if (status == NV_OK)
+            {
+                OBJGPU* pGpu = publishedGpu;
+                KernelFifo* pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
+                NvU32 attr = 0;
+                NvU32 attr2 = 0;
+                NvU64 offset;
+                NvU32 previousGpuInstance =
+                    gpumgrSetCurrentGpuInstance(pGpu->gpuInstance);
+
+                if (pKernelFifo == NULL)
+                {
+                    status = NV_ERR_INVALID_STATE;
+                }
+                else if (pKernelFifo->pRegVF == NULL)
+                {
+                    attr = FLD_SET_DRF(OS32, _ATTR, _PHYSICALITY,
+                                       _CONTIGUOUS, attr);
+                    attr = FLD_SET_DRF(OS32, _ATTR, _COHERENCY,
+                                       _CACHED, attr);
+                    attr2 = FLD_SET_DRF(OS32, _ATTR2, _GPU_CACHEABLE,
+                                        _NO, attr2);
+                    offset = GPU_GET_VREG_OFFSET(
+                        pGpu,
+                        DRF_BASE(NV_VIRTUAL_FUNCTION));
+
+                    status = memCreateMemDesc(
+                        pGpu,
+                        &pKernelFifo->pRegVF,
+                        ADDR_REGMEM,
+                        offset,
+                        DRF_SIZE(NVC361),
+                        attr,
+                        attr2);
+                    if (status == NV_OK)
+                    {
+                        memdescSetFlag(
+                            pKernelFifo->pRegVF,
+                            MEMDESC_FLAGS_SKIP_REGMEM_PRIV_CHECK,
+                            NV_TRUE);
+                    }
+                }
+
+                gpumgrSetCurrentGpuInstance(previousGpuInstance);
+            }
+        }
+
+        paramsSize = params->paramsSize;
+        if (status == NV_OK && paramsSize == 0 && params->hClass != NV01_ROOT)
+        {
+            status = rmapiGetClassAllocParamSize(
+                &paramsSize,
+                params->pAllocParms,
+                &allowNull,
+                params->hClass);
+        }
+        if (status == NV_OK)
+        {
+            params->status = pRmApi->AllocWithSecInfo(
+                pRmApi,
+                params->hRoot,
+                params->hObjectParent,
+                &params->hObjectNew,
+                params->hClass,
+                params->pAllocParms,
+                paramsSize,
+                RMAPI_ALLOC_FLAGS_NONE,
+                params->pRightsRequested,
+                &securityInfo);
+        }
+        else
+        {
+            params->status = status;
+        }
+        gpumgrThreadDisableExpandedGpuVisibility();
+    }
+    else
+    {
+        params->status = status;
+    }
+}
+
+void NvRmExternalKernelControl(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void* paramsPointer)
+{
+    NVOS54_PARAMETERS* params = paramsPointer;
+    NV_STATUS status;
+
+    if (gpuContext == NULL || params == NULL)
+    {
+        if (params != NULL)
+        {
+            params->status = NV_ERR_INVALID_ARGUMENT;
+        }
+        return;
+    }
+
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status == NV_OK)
+    {
+        if (params->cmd == NV2080_CTRL_CMD_BUS_GET_INFO)
+        {
+            NV2080_CTRL_BUS_GET_INFO_PARAMS* busParams =
+                NvP64_VALUE(params->params);
+            NV2080_CTRL_BUS_INFO* busInfoList =
+                NvP64_VALUE(busParams->busInfoList);
+            NvU32 i;
+
+            for (i = 0; i < busParams->busInfoListSize; i++)
+            {
+                if (busInfoList[i].index ==
+                    NV2080_CTRL_BUS_INFO_INDEX_COHERENT_DMA_FLAGS)
+                {
+                    busInfoList[i].data = DRF_DEF(
+                        2080_CTRL_BUS_INFO,
+                        _COHERENT_DMA_FLAGS,
+                        _CTXDMA,
+                        _TRUE);
+                }
+                else if (busInfoList[i].index ==
+                         NV2080_CTRL_BUS_INFO_INDEX_NONCOHERENT_DMA_FLAGS)
+                {
+                    busInfoList[i].data = 0;
+                }
+            }
+            params->status = NV_OK;
+        }
+        else if (params->cmd == NV0080_CTRL_CMD_FB_GET_CAPS_V2)
+        {
+            NV0080_CTRL_FB_GET_CAPS_V2_PARAMS* capsV2 =
+                NvP64_VALUE(params->params);
+            portMemSet(capsV2->capsTbl, 0, sizeof(capsV2->capsTbl));
+            capsV2->capsTbl[1] = 0x80;
+            params->status = NV_OK;
+        }
+        else if (params->cmd == NV2080_CTRL_CMD_GPU_GET_ENGINES_V2)
+        {
+            NV2080_CTRL_GPU_GET_ENGINES_V2_PARAMS* engines =
+                NvP64_VALUE(params->params);
+            engines->engineCount = 1;
+            engines->engineList[0] = NV2080_ENGINE_TYPE_GRAPHICS;
+            params->status = NV_OK;
+        }
+        else if (params->cmd == NV2080_CTRL_CMD_OS_UNIX_GC6_BLOCKER_REFCNT)
+        {
+            params->status = NV_OK;
+        }
+        else
+        {
+            Nv04ControlKernel(params);
+        }
+        gpumgrThreadDisableExpandedGpuVisibility();
+    }
+    else
+    {
+        params->status = status;
+    }
+}
+
+void NvRmExternalKernelAllocMemory(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void* paramsPointer)
+{
+    NVOS02_PARAMETERS* params = paramsPointer;
+    API_SECURITY_INFO securityInfo;
+    NV_STATUS status;
+
+    if (gpuContext == NULL || params == NULL)
+    {
+        if (params != NULL)
+        {
+            params->status = NV_ERR_INVALID_ARGUMENT;
+        }
+        return;
+    }
+
+    securityInfo = NvRmGetExternalKernelSecurityInfo(gpuContext);
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status == NV_OK)
+    {
+        Nv01AllocMemoryWithSecInfo(params, securityInfo);
+        gpumgrThreadDisableExpandedGpuVisibility();
+    }
+    else
+    {
+        params->status = status;
+    }
+}
+
+void NvRmExternalKernelFree(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    void* paramsPointer)
+{
+    NVOS00_PARAMETERS* params = paramsPointer;
+    RM_API* pRmApi;
+
+    if (gpuContext == NULL || params == NULL)
+    {
+        if (params != NULL)
+        {
+            params->status = NV_ERR_INVALID_ARGUMENT;
+        }
+        return;
+    }
+
+    pRmApi = rmapiGetInterface(RMAPI_EXTERNAL_KERNEL);
+    params->status = pRmApi->Free(
+        pRmApi,
+        params->hRoot,
+        params->hObjectOld);
 }
 
 NV_STATUS NvRmCleanupGpuClients(

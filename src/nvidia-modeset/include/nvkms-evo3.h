@@ -31,6 +31,10 @@
 
 #include <ctrl/ctrlc372/ctrlc372chnc.h>
 
+#if defined(_WIN32)
+#include "nvplatform_mmio_rm.h"
+#endif
+
 #define NV_EVO3_X_EMULATED_SURFACE_MEMORY_FORMATS_C6        \
     (NVBIT64(NvKmsSurfaceMemoryFormatRF16GF16BF16XF16) |    \
      NVBIT64(NvKmsSurfaceMemoryFormatX2B10G10R10))
@@ -131,7 +135,11 @@ void nvEvoSetNotifierC3(NVDevEvoRec *pDevEvo,
 static inline NvU32 nvEvoReadCapReg3(volatile const NvU32 *pCaps, NvU32 offset)
 {
     /* Offsets are in bytes, but the array has dword-sized elements. */
+#if defined(_WIN32)
+    return NvPlatformRmReadRegister32(pCaps + (offset / sizeof(NvU32)));
+#else
     return pCaps[offset / sizeof(NvU32)];
+#endif
 }
 
 NvBool nvEvoGetCapabilities3(NVDevEvoPtr pDevEvo,
