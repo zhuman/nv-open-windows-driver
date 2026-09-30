@@ -693,10 +693,13 @@ extern "C" NV_STATUS NvKmsWindowsInitialize(void)
 {
     KmsDeviceLockGuard lock;
 
+    NvKmsWindowsTraceMessage("NVKMS Windows initialize: module load begin");
     if (!nvKmsModuleLoad())
     {
+        NvKmsWindowsTraceMessage("NVKMS Windows initialize: module load failed");
         return NV_ERR_GENERIC;
     }
+    NvKmsWindowsTraceMessage("NVKMS Windows initialize: module load complete");
 
     kmsFunctions = {};
     kmsFunctions.versionString = "";
@@ -713,9 +716,11 @@ extern "C" NV_STATUS NvKmsWindowsInitialize(void)
     kmsFunctions.enumerateGpus(NvKmsGpuCallback);
     if (!kmsGpuEnumerated)
     {
+        NvKmsWindowsTraceMessage("NVKMS Windows initialize: GPU enumeration failed");
         nvKmsModuleUnload();
         return NV_ERR_OBJECT_NOT_FOUND;
     }
+    NvKmsWindowsTraceMessage("NVKMS Windows initialize: GPU enumeration complete");
 
     NvKmsKapiAllocateDeviceParams allocateParams = {};
     allocateParams.gpuId = enumeratedKmsGpu.gpuInfo.gpu_id;
@@ -723,17 +728,21 @@ extern "C" NV_STATUS NvKmsWindowsInitialize(void)
     kmsDevice = kmsFunctions.allocateDevice(&allocateParams);
     if (kmsDevice == nullptr)
     {
+        NvKmsWindowsTraceMessage("NVKMS Windows initialize: device allocation failed");
         nvKmsModuleUnload();
         return NV_ERR_INSUFFICIENT_RESOURCES;
     }
+    NvKmsWindowsTraceMessage("NVKMS Windows initialize: device allocation complete");
 
     if (!kmsFunctions.grabOwnership(kmsDevice))
     {
+        NvKmsWindowsTraceMessage("NVKMS Windows initialize: ownership acquisition failed");
         kmsFunctions.freeDevice(kmsDevice);
         kmsDevice = nullptr;
         nvKmsModuleUnload();
         return NV_ERR_STATE_IN_USE;
     }
+    NvKmsWindowsTraceMessage("NVKMS Windows initialize: ownership acquisition complete");
 
     return NV_OK;
 }
