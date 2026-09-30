@@ -101,32 +101,42 @@ void NvKmsGpuCallback(const NvKmsKapiGpuInfo* info)
     }
 }
 
+DWORD WINAPI NvKmsTimerCleanup(void* context)
+{
+    auto* const timer = static_cast<nvkms_timer_t*>(context);
+    WaitForThreadpoolTimerCallbacks(timer->timer, FALSE);
+    CloseThreadpoolTimer(timer->timer);
+    HeapFree(GetProcessHeap(), 0, timer);
+    return 0;
+}
+
 void CALLBACK NvKmsTimerCallback(
     PTP_CALLBACK_INSTANCE instance,
     void* context,
     PTP_TIMER timerHandle)
 {
     auto* const timer = static_cast<nvkms_timer_t*>(context);
+    nvkms_timer_proc_t* const proc = timer->proc;
     void* dataPtr = timer->dataPtr;
+    const NvU32 dataU32 = timer->dataU32;
+    const NvBool isRefPtr = timer->isRefPtr;
+    const bool canceled =
+        InterlockedCompareExchange(&timer->canceled, 0, 0) != 0;
 
-    if (timer->isRefPtr)
+    if (isRefPtr)
     {
         dataPtr = nvkms_dec_ref(static_cast<nvkms_ref_ptr*>(dataPtr));
     }
-
-    if (InterlockedCompareExchange(&timer->canceled, 0, 0) == 0 &&
-        dataPtr != nullptr)
+    if (!canceled && dataPtr != nullptr)
     {
         NvKmsLock();
-        timer->proc(dataPtr, timer->dataU32);
+        proc(dataPtr, dataU32);
         NvKmsUnlock();
     }
 
-    if (timer->isRefPtr)
+    if (isRefPtr)
     {
-        DisassociateCurrentThreadFromCallback(instance);
-        CloseThreadpoolTimer(timerHandle);
-        HeapFree(GetProcessHeap(), 0, timer);
+        QueueUserWorkItem(NvKmsTimerCleanup, timer, WT_EXECUTEONLYONCE);
     }
 }
 
@@ -404,9 +414,7 @@ extern "C" void nvkms_free_timer(nvkms_timer_handle_t* timer)
     }
     InterlockedExchange(&timer->canceled, 1);
     SetThreadpoolTimer(timer->timer, nullptr, 0, 0);
-    WaitForThreadpoolTimerCallbacks(timer->timer, TRUE);
-    CloseThreadpoolTimer(timer->timer);
-    HeapFree(GetProcessHeap(), 0, timer);
+    QueueUserWorkItem(NvKmsTimerCleanup, timer, WT_EXECUTEONLYONCE);
 }
 
 extern "C" nvkms_per_open* nvkms_open_from_kapi(NvKmsKapiDevice* device)

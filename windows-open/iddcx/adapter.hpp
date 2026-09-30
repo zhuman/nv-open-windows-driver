@@ -28,6 +28,7 @@ public:
     Adapter() noexcept;
 
     NTSTATUS EnterD0(_In_ WDFDEVICE device) noexcept;
+    NTSTATUS NotifyDisplayReady() noexcept;
     void ExitD0() noexcept;
     void Reset() noexcept;
 
@@ -59,6 +60,7 @@ private:
     static EVT_WDF_OBJECT_CONTEXT_CLEANUP Cleanup;
     static DWORD WINAPI SwapChainThread(_In_ void* context);
     NTSTATUS AnnounceMonitor() noexcept;
+    NTSTATUS TryAnnounceMonitor() noexcept;
     void ProcessSwapChain() noexcept;
     void StopSwapChain() noexcept;
 
@@ -73,6 +75,7 @@ private:
     NTSTATUS initializationStatus_;
     State state_;
     bool powered_;
+    volatile LONG displayReady_;
 };
 
 EVT_IDD_CX_ADAPTER_INIT_FINISHED AdapterInitFinished;

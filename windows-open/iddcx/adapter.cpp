@@ -261,7 +261,8 @@ Adapter::Adapter() noexcept
             nextSurfaceEvent_(nullptr),
       initializationStatus_(STATUS_NOT_FOUND),
       state_(State::Stopped),
-      powered_(false)
+    powered_(false),
+    displayReady_(0)
 {
         InitializeSRWLock(&swapchainLock_);
 }
@@ -283,24 +284,8 @@ NTSTATUS Adapter::EnterD0(_In_ WDFDEVICE device) noexcept
     IDDCX_ADAPTER_CAPS capabilities = {};
     capabilities.Size = sizeof(capabilities);
     capabilities.Flags = IDDCX_ADAPTER_FLAGS_NONE;
-    NV_KMS_WINDOWS_DISPLAY_STATE displayState = {};
-    const NTSTATUS displayStatus = GetDisplayState(&displayState);
-    if (!NT_SUCCESS(displayStatus))
-    {
-        powered_ = false;
-        initializationStatus_ = displayStatus;
-        state_ = State::Failed;
-        return displayStatus;
-    }
-    for (NvU32 index = 0; index < displayState.modeCount; ++index)
-    {
-        if (displayState.modes[index].pixelClockHz >
-            capabilities.MaxDisplayPipelineRate)
-        {
-            capabilities.MaxDisplayPipelineRate =
-                displayState.modes[index].pixelClockHz;
-        }
-    }
+    capabilities.MaxDisplayPipelineRate =
+        static_cast<UINT64>(7680) * 4320 * 240;
     capabilities.MaxMonitorsSupported = 1;
     capabilities.EndPointDiagnostics.Size =
         sizeof(capabilities.EndPointDiagnostics);
@@ -347,6 +332,12 @@ NTSTATUS Adapter::EnterD0(_In_ WDFDEVICE device) noexcept
     return STATUS_SUCCESS;
 }
 
+NTSTATUS Adapter::NotifyDisplayReady() noexcept
+{
+    InterlockedExchange(&displayReady_, 1);
+    return TryAnnounceMonitor();
+}
+
 void Adapter::ExitD0() noexcept
 {
     powered_ = false;
@@ -372,6 +363,7 @@ void Adapter::Reset() noexcept
 
     initializationStatus_ = STATUS_NOT_FOUND;
     state_ = State::Stopped;
+    InterlockedExchange(&displayReady_, 0);
 }
 
 NTSTATUS Adapter::CompleteInitialization(
@@ -397,9 +389,26 @@ NTSTATUS Adapter::CompleteInitialization(
         return STATUS_SUCCESS;
     }
 
-    initializationStatus_ = AnnounceMonitor();
-    state_ = NT_SUCCESS(initializationStatus_) ? State::Ready : State::Failed;
+    state_ = State::Ready;
+    initializationStatus_ = TryAnnounceMonitor();
+    if (!NT_SUCCESS(initializationStatus_))
+    {
+        state_ = State::Failed;
+    }
     return STATUS_SUCCESS;
+}
+
+NTSTATUS Adapter::TryAnnounceMonitor() noexcept
+{
+    if (state_ != State::Ready ||
+        !powered_ ||
+        monitor_ != nullptr ||
+        InterlockedCompareExchange(&displayReady_, 0, 0) == 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    return AnnounceMonitor();
 }
 
 NTSTATUS Adapter::AnnounceMonitor() noexcept

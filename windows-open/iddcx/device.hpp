@@ -33,6 +33,11 @@ struct DeviceContext final
     NvHandle rmClientHandle;
     NvHandle rmDeviceHandle;
     NvHandle rmSubdeviceHandle;
+    HANDLE nvKmsThread;
+    SRWLOCK lifecycleLock;
+    volatile LONG nvKmsWorkCanceled;
+    volatile LONG nvKmsWorkCompleted;
+    volatile LONG d0Active;
     bool rmDeviceOpened;
     bool rmGpuAttached;
     bool nvKmsInitialized;
@@ -48,5 +53,6 @@ EVT_WDF_DEVICE_RELEASE_HARDWARE ReleaseHardware;
 EVT_WDF_DEVICE_D0_ENTRY EnterD0;
 EVT_WDF_DEVICE_D0_EXIT ExitD0;
 EVT_WDF_OBJECT_CONTEXT_CLEANUP DeviceCleanup;
+DWORD WINAPI InitializeNvKms(_In_ void* parameter);
 
 } // namespace nv::iddcx
