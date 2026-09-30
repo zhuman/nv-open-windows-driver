@@ -910,6 +910,42 @@ rmapiDelPendingDevices
 }
 
 void
+rmapiFreeInternalDevices
+(
+    NvU32 gpuMask
+)
+{
+    RmClient **ppClient;
+    RsClient *pRsClient;
+    RS_ITERATOR it;
+    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+
+    ppClient = serverutilGetFirstClientUnderLock();
+    while (ppClient)
+    {
+        pRsClient = staticCast(*ppClient, RsClient);
+
+        if (serverIsClientInternal(&g_resServ, pRsClient->hClient))
+        {
+            it = clientRefIter(pRsClient, NULL, classId(Device), RS_ITERATE_CHILDREN, NV_TRUE);
+            while (clientRefIterNext(pRsClient, &it))
+            {
+                RsResourceRef *pDeviceRef = it.pResourceRef;
+                Device *pDevice = dynamicCast(pDeviceRef->pResource, Device);
+
+                if ((gpuMask & NVBIT(gpuGetInstance(GPU_RES_GET_GPU(pDevice)))) != 0)
+                {
+                    pRmApi->Free(pRmApi, pRsClient->hClient, pDeviceRef->hResource);
+                    it = clientRefIter(pRsClient, NULL, classId(Device), RS_ITERATE_CHILDREN, NV_TRUE);
+                }
+            }
+        }
+
+        ppClient = serverutilGetNextClientUnderLock(ppClient);
+    }
+}
+
+void
 rmapiReportInternalLeakedDevices
 (
     NvU32 gpuMask

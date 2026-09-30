@@ -279,6 +279,7 @@ void rmapiSetDelPendingClientResourcesFromGpuMask(NvU32 gpuMask);
 // Delete the marked client resources
 void rmapiDelPendingClients(void);
 void rmapiDelPendingDevices(NvU32 gpuMask);
+void rmapiFreeInternalDevices(NvU32 gpuMask);
 void rmapiReportLeakedDevices(NvU32 gpuMask);
 void rmapiReportInternalLeakedDevices(NvU32 gpuMask);
 

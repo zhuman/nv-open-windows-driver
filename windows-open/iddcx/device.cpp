@@ -411,6 +411,17 @@ void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
         context->rmSubdeviceHandle = 0;
     }
 
+    if (context->rmGpuStateLoaded)
+    {
+        const NV_STATUS status = NvRmUnloadGpuState(context->rmGpuContext);
+        TraceEvents(
+            status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "NvRmUnloadGpuState: 0x%08X",
+            status);
+        context->rmGpuStateLoaded = false;
+    }
+
     if (context->rmGpuAttached)
     {
         NvKmsWindowsUnregisterGpu(context->rmGpuId);
@@ -940,6 +951,7 @@ NTSTATUS PrepareHardware(
         context->configSpace.Reset();
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
+    context->rmGpuStateLoaded = true;
 
     const NV_STATUS modesetRegisterStatus = identity != nullptr
         ? NvKmsWindowsRegisterGpu(

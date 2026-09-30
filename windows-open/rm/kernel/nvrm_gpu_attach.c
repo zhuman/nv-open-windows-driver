@@ -1,5 +1,6 @@
 #include "core/core.h"
 #include "core/locks.h"
+#include "gpu/bif/kernel_bif.h"
 #include "gpu/bus/kern_bus.h"
 #include "gpu/disp/inst_mem/disp_inst_mem.h"
 #include "gpu/disp/kern_disp.h"
@@ -8,6 +9,7 @@
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "gpu/gpu.h"
 #include "gpu/gsp/kernel_gsp.h"
+#include "gpu/intr/intr.h"
 #include "kernel/mem_mgr/mem.h"
 #include "gpu_mgr/gpu_mgr.h"
 #include "nvplatform_mmio_rm.h"
@@ -195,7 +197,6 @@ NV_STATUS NvRmInitializeGpuFirmware(
     volatile void* pPromAddress = NULL;
     void* publishedGpu = NULL;
     NvU32 previousGpuInstance = NV_U32_MAX;
-    GPU_MASK gpusLockedMask = 0;
     NV_STATUS status;
 
     if (gpuContext == NULL || firmware == NULL || firmwareSize == 0)
@@ -255,44 +256,60 @@ NV_STATUS NvRmInitializeGpuFirmware(
         }
         if (status == NV_OK)
         {
-            status = rmGpuGroupLockAcquire(
-                pGpu->gpuInstance,
-                GPU_LOCK_GRP_SUBDEVICE,
-                GPUS_LOCK_FLAGS_NONE,
-                RM_LOCK_MODULES_INIT,
-                &gpusLockedMask);
+            kbifCheckAndRearmMSI(pGpu, GPU_GET_KERNEL_BIF(pGpu));
+            intrSetIntrEn(GPU_GET_INTR(pGpu), INTERRUPT_TYPE_DISABLED);
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: full state load begin");
+            status = gpumgrStateLoadGpu(pGpu, GPU_STATE_DEFAULT);
+            NvKmsWindowsTraceMessage("RM GPU lifecycle: full state load end");
         }
+        gpumgrSetCurrentGpuInstance(previousGpuInstance);
+    }
+
+    gpumgrThreadDisableExpandedGpuVisibility();
+    rmapiLockRelease();
+    return status;
+}
+
+NV_STATUS NvRmUnloadGpuState(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    OBJGPU* pGpu = NULL;
+    void* publishedGpu = NULL;
+    NvU32 previousGpuInstance = NV_U32_MAX;
+    NV_STATUS status;
+
+    if (gpuContext == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_NONE, RM_LOCK_MODULES_INIT);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status == NV_OK)
+    {
+        status = NvPlatformRmGpuGetPublishedRmGpu(gpuContext, &publishedGpu);
+    }
+    if (status == NV_OK)
+    {
+        pGpu = (OBJGPU*)publishedGpu;
+        previousGpuInstance = gpumgrSetCurrentGpuInstance(pGpu->gpuInstance);
+        status = rmGpuLocksAcquire(
+            GPUS_LOCK_FLAGS_NONE,
+            RM_LOCK_MODULES_DESTROY);
         if (status == NV_OK)
         {
-            KernelGraphics* pKernelGraphics = GPU_GET_KERNEL_GRAPHICS(pGpu, 0);
-
-            NvKmsWindowsTraceMessage(
-                rmDeviceGpuLockIsOwner(pGpu->gpuInstance)
-                    ? "RM GPU lifecycle: graphics GPU lock owned"
-                    : "RM GPU lifecycle: graphics GPU lock not owned");
-            NvKmsWindowsTraceMessage("RM GPU lifecycle: graphics static info begin");
-            status = pKernelGraphics != NULL
-                ? kgraphicsLoadStaticInfo(
-                    pGpu,
-                    pKernelGraphics,
-                    KMIGMGR_SWIZZID_INVALID)
-                : NV_ERR_INVALID_STATE;
-            NvKmsWindowsTraceMessage("RM GPU lifecycle: graphics static info end");
-        }
-        if (status == NV_OK)
-        {
-            KernelDisplay* pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
-
-            NvKmsWindowsTraceMessage("RM GPU lifecycle: display instmem load begin");
-            status = instmemStateLoad(
-                pGpu,
-                KERNEL_DISPLAY_GET_INST_MEM(pKernelDisplay),
-                0);
-            NvKmsWindowsTraceMessage("RM GPU lifecycle: display instmem load end");
-        }
-        if (gpusLockedMask != 0)
-        {
-            rmGpuGroupLockRelease(gpusLockedMask, GPUS_LOCK_FLAGS_NONE);
+            rmapiSetDelPendingClientResourcesFromGpuMask(NVBIT(pGpu->gpuInstance));
+            rmapiDelPendingDevices(NVBIT(pGpu->gpuInstance));
+            status = gpuStateUnload(pGpu, GPU_STATE_DEFAULT);
+            rmapiSetDelPendingClientResourcesFromGpuMask(NVBIT(pGpu->gpuInstance));
+            rmapiDelPendingDevices(NVBIT(pGpu->gpuInstance));
+            rmapiFreeInternalDevices(NVBIT(pGpu->gpuInstance));
+            rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
         }
         gpumgrSetCurrentGpuInstance(previousGpuInstance);
     }

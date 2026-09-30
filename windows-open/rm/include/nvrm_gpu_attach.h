@@ -25,6 +25,9 @@ NV_STATUS NvRmInitializeGpuFirmware(
     const void* firmware,
     NvU32 firmwareSize);
 
+NV_STATUS NvRmUnloadGpuState(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
+
 typedef enum NV_RM_GPU_OPEN_STAGE
 {
     NV_RM_GPU_OPEN_STAGE_ROOT_CLIENT,

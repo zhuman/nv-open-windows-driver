@@ -83,12 +83,12 @@ ceutilsGetFirstAsyncCe_IMPL
     return NV_ERR_INSUFFICIENT_RESOURCES;
 }
 
-static void _ceutilsProcessCompletionCallbacks
+static void _ceutilsProcessCompletionCallbacksThrough
 (
-    CeUtils *pCeUtils
+    CeUtils *pCeUtils,
+    NvU64 lastCompletedPayload
 )
 {
-    NvU64 lastCompletedPayload = ceutilsUpdateProgress(pCeUtils);
     CeUtilsCallbackList pendingCallbacks;
     CeUtilsCallback *pCallbackEntry;
 
@@ -116,6 +116,16 @@ static void _ceutilsProcessCompletionCallbacks
     }
 
     listDestroy(&pendingCallbacks);
+}
+
+static void _ceutilsProcessCompletionCallbacks
+(
+    CeUtils *pCeUtils
+)
+{
+    _ceutilsProcessCompletionCallbacksThrough(
+        pCeUtils,
+        ceutilsUpdateProgress(pCeUtils));
 }
 
 static NV_STATUS
@@ -339,10 +349,36 @@ ceutilsDestruct_IMPL
     NvU64 lastSubmittedPayload = pCeUtils->lastSubmittedPayload;
 
     // flush out all the work
-    channelWaitForFinishPayload(pCeUtils->pChannel, lastSubmittedPayload);
+    NV_STATUS status = channelWaitForFinishPayload(
+        pCeUtils->pChannel,
+        lastSubmittedPayload);
+#if defined(NV_RM_USER_LINK_PROBE)
+    if (status != NV_OK)
+    {
+        NV_PRINTF(
+            LEVEL_WARNING,
+            "CeUtils teardown timed out; completing pending callbacks during shutdown\n");
+    }
+#else
+    NV_ASSERT(status == NV_OK);
+#endif
 
     // process all callbacks while CeUtils is fully functional
-    _ceutilsProcessCompletionCallbacks(pCeUtils);
+    if (status == NV_OK
+#if defined(NV_RM_USER_LINK_PROBE)
+        || status == NV_ERR_TIMEOUT
+#endif
+       )
+    {
+        pCeUtils->lastCompletedPayload = lastSubmittedPayload;
+        _ceutilsProcessCompletionCallbacksThrough(
+            pCeUtils,
+            lastSubmittedPayload);
+    }
+    else
+    {
+        _ceutilsProcessCompletionCallbacks(pCeUtils);
+    }
     portSyncSpinlockAcquire(pCeUtils->pCallbackLock);
     NV_ASSERT(listCount(&pCeUtils->completionCallbacks) == 0);
     portSyncSpinlockRelease(pCeUtils->pCallbackLock);

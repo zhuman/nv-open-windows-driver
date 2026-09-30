@@ -42,6 +42,7 @@ struct DeviceContext final
     volatile LONG d0Active;
     bool rmDeviceOpened;
     bool rmGpuAttached;
+    bool rmGpuStateLoaded;
     bool nvKmsInitialized;
     bool rmInitialized;
     bool nvPortInitialized;
