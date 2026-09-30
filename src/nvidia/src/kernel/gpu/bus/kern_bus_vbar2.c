@@ -339,6 +339,23 @@ kbusFlushVirtualBar2_VBAR2(OBJGPU *pGpu, KernelBus *pKernelBus, NvBool shutdown,
         return;
     }
 
+#if defined(NV_RM_USER_LINK_PROBE)
+    while (shutdown && listCount(&pKernelBus->virtualBar2[gfid].usedMapList))
+    {
+        VirtualBar2MapEntry *pMap =
+            listHead(&pKernelBus->virtualBar2[gfid].usedMapList);
+
+        listRemove(&pKernelBus->virtualBar2[gfid].usedMapList, pMap);
+        listAppendExisting(&pKernelBus->virtualBar2[gfid].cachedMapList, pMap);
+        _freeRmApertureMap_VBAR2(
+            pGpu,
+            pKernelBus,
+            pMap,
+            UPDATE_RM_APERTURE_FLAGS_INVALIDATE |
+                UPDATE_RM_APERTURE_FLAGS_DISCARD);
+    }
+#endif
+
     //
     // There should be no there are no active BAR2 mappings on shutdown. Failure indicates
     // there is a missing unmap BAR2 call somewhere in RM.
@@ -1153,7 +1170,7 @@ kbusReleaseRmAperture_VBAR2
         }
     }
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(NV_RM_USER_LINK_PROBE)
     it = listIterAll(&pKernelBus->virtualBar2[GPU_GFID_PF].usedMapList);
     while (listIterNext(&it))
     {
