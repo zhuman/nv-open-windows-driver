@@ -846,7 +846,8 @@ BOOLEAN Interrupt::Isr(WDFINTERRUPT interrupt, ULONG messageId)
             interruptCount,
             messageId);
     }
-    return FALSE;
+    WdfInterruptQueueDpcForIsr(interrupt);
+    return TRUE;
 }
 
 _Use_decl_annotations_
