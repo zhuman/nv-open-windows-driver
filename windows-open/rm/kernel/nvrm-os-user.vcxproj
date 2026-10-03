@@ -7,4 +7,9 @@
     <TargetName>nvrm-os-user</TargetName>
   </PropertyGroup>
   <Import Project="nvrm-os-kernel.vcxproj" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalOptions>/clang:-Wno-unused-but-set-variable %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
 </Project>

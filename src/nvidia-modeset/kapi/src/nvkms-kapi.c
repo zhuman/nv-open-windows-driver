@@ -42,6 +42,7 @@
 
 #include <class/cl0000.h> /* NV01_ROOT/NV01_NULL_OBJECT */
 #include <class/cl003e.h> /* NV01_MEMORY_SYSTEM */
+#include <class/cl0050.h> /* NV_CE_UTILS */
 #include <class/cl0080.h> /* NV01_DEVICE */
 #include <class/cl0040.h> /* NV01_MEMORY_LOCAL_USER */
 #include <class/cl0071.h> /* NV01_MEMORY_SYSTEM_OS_DESCRIPTOR */
@@ -58,6 +59,7 @@
 
 #include "ctrl/ctrl003e.h" /* NV003E_CTRL_CMD_GET_SURFACE_PHYS_PAGES */
 #include "ctrl/ctrl0041.h" /* NV0041_CTRL_SURFACE_INFO */
+#include "ctrl/ctrl0050.h" /* NV0050_CTRL_CMD_MEMCOPY */
 
 #include "nv_smg.h"
 
@@ -2231,6 +2233,62 @@ static void UnmapMemory
     }
 }
 
+static NvBool CopyMemory
+(
+    struct NvKmsKapiDevice *device,
+    struct NvKmsKapiMemory *dstMemory,
+    const struct NvKmsKapiMemory *srcMemory,
+    NvU64 size
+)
+{
+    NV0050_ALLOCATION_PARAMETERS allocParams = {0};
+    NV0050_CTRL_MEMCOPY_PARAMS copyParams = {0};
+    NvU32 hCeUtils;
+    NvU32 status;
+
+    if (device == NULL || dstMemory == NULL || srcMemory == NULL ||
+        size == 0 || size > dstMemory->size || size > srcMemory->size) {
+        return NV_FALSE;
+    }
+
+    hCeUtils = nvKmsKapiGenerateRmHandle(device);
+    if (hCeUtils == 0) {
+        return NV_FALSE;
+    }
+
+    allocParams.flags =
+        DRF_DEF(0050_CEUTILS, _FLAGS, _VIRTUAL_MODE, _TRUE) |
+        DRF_DEF(0050_CEUTILS, _FLAGS, _NO_BAR1_USE, _TRUE);
+
+    status = nvRmApiAlloc(device->hRmClient,
+                          device->hRmSubDevice,
+                          hCeUtils,
+                          NV_CE_UTILS,
+                          &allocParams);
+    if (status == NVOS_STATUS_SUCCESS) {
+        copyParams.hDstMemory = dstMemory->hRmHandle;
+        copyParams.hSrcMemory = srcMemory->hRmHandle;
+        copyParams.length = size;
+        copyParams.flags = NV0050_CTRL_MEMCOPY_FLAGS_DEFAULT;
+        status = nvRmApiControl(device->hRmClient,
+                                hCeUtils,
+                                NV0050_CTRL_CMD_MEMCOPY,
+                                &copyParams,
+                                sizeof(copyParams));
+        nvRmApiFree(device->hRmClient, device->hRmSubDevice, hCeUtils);
+    }
+
+    nvKmsKapiFreeRmHandle(device, hCeUtils);
+    if (status != NVOS_STATUS_SUCCESS) {
+        nvKmsKapiLogDeviceDebug(device,
+                                "Failed to copy memory to scanout: 0x%x",
+                                status);
+        return NV_FALSE;
+    }
+
+    return NV_TRUE;
+}
+
 static NvBool IsVidmem(
     const struct NvKmsKapiMemory *memory)
 {
@@ -3334,6 +3392,7 @@ static NvBool NvKmsKapiRequestedModeSetConfigToKms(
 
     params->request.commit = commit;
     params->request.deviceHandle = device->hKmsDevice;
+    params->request.bypassComposition = requestedConfig->bypassComposition;
     params->request.requestedDispsBitMask = 1 << dispIdx;
 
     for (head = 0;
@@ -3448,6 +3507,9 @@ static NvBool NvKmsKapiRequestedModeSetConfigToKms(
 
         paramsHead->allowGsync = NV_TRUE;
         paramsHead->allowAdaptiveSync = NVKMS_ALLOW_ADAPTIVE_SYNC_ALL;
+        paramsHead->colorBpc =
+            (enum NvKmsDpyAttributeColorBpcValue)headModeSetConfig->colorBpc;
+        paramsHead->colorBpcSpecified = headModeSetConfig->colorBpcSpecified;
 
         /* Apply dithering settings */
         paramsHead->flip.dithering.state = headModeSetConfig->dithering.state;
@@ -4168,6 +4230,7 @@ NvBool nvKmsKapiGetFunctionsTableInternal
 
     funcsTable->mapMemory   = MapMemory;
     funcsTable->unmapMemory = UnmapMemory;
+    funcsTable->copyMemory  = CopyMemory;
     funcsTable->isVidmem    = IsVidmem;
     funcsTable->isContiguous = IsContiguous;
     funcsTable->gc6BlockerRefCntInc = RmGc6BlockerRefCntInc;

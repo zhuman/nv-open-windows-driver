@@ -237,6 +237,20 @@ const NV_KMS_WINDOWS_MODE* FindDisplayMode(
     return nullptr;
 }
 
+const NV_KMS_WINDOWS_MODE* FindDisplayMode(
+    _In_ const NV_KMS_WINDOWS_DISPLAY_STATE& displayState,
+    _In_ NvU32 modeIndex) noexcept
+{
+    for (NvU32 index = 0; index < displayState.modeCount; ++index)
+    {
+        if (displayState.modes[index].kmsModeIndex == modeIndex)
+        {
+            return &displayState.modes[index];
+        }
+    }
+    return nullptr;
+}
+
 void FillGradient(
     _Out_writes_bytes_(static_cast<size_t>(pitch) * height) void* pixels,
     _In_ NvU32 pitch,
@@ -502,6 +516,35 @@ NTSTATUS Adapter::TryAnnounceMonitors() noexcept
             ResetOutputs();
             return arrivalStatus;
         }
+    }
+
+    ModePath paths[MaxOutputs] = {};
+    for (NvU32 index = 0; index < outputCount_; ++index)
+    {
+        OutputState* const output = outputs_[index];
+        const NvU32 preferredModeIndex =
+            output->displayState.preferredModeIndex < output->displayState.modeCount
+                ? output->displayState.preferredModeIndex
+                : 0;
+        paths[index].monitor = output->monitor;
+        paths[index].flags = IDDCX_PATH_FLAGS_ACTIVE;
+        FillSignalInfo(
+            &paths[index].signalInfo,
+            output->displayState.modes[preferredModeIndex],
+            false);
+    }
+
+    const NTSTATUS restoreStatus = CommitDisplayModes(paths, outputCount_);
+    TraceEvents(
+        NT_SUCCESS(restoreStatus) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "Preferred mode restore: %!STATUS! outputs=%u",
+        restoreStatus,
+        outputCount_);
+    if (!NT_SUCCESS(restoreStatus))
+    {
+        ResetOutputs();
+        return restoreStatus;
     }
 
     return STATUS_SUCCESS;
@@ -1020,8 +1063,8 @@ NTSTATUS Adapter::CommitDisplayModes(
     }
     for (NvU32 requestIndex = 0; requestIndex < requestCount; ++requestIndex)
     {
-        outputs_[requestOutputs[requestIndex]]->assignedHead =
-            requests[requestIndex].assignedHead;
+        OutputState* const output = outputs_[requestOutputs[requestIndex]];
+        output->assignedHead = requests[requestIndex].assignedHead;
     }
 
 cleanup:
@@ -1052,6 +1095,15 @@ NTSTATUS AdapterInitFinished(
     IDDCX_ADAPTER adapter,
     const IDARG_IN_ADAPTER_INIT_FINISHED* arguments)
 {
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "AdapterInitFinished entry: adapter=%p arguments=%p status=%!STATUS!",
+        adapter,
+        arguments,
+        arguments != nullptr
+            ? arguments->AdapterInitStatus
+            : STATUS_INVALID_PARAMETER);
     AdapterObjectContext* context = GetAdapterObjectContext(adapter);
     return context->owner == nullptr
         ? STATUS_INVALID_DEVICE_STATE

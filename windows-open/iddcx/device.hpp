@@ -19,6 +19,7 @@ struct DeviceContext final
 {
     NV_COMMON_HOST_CONTEXT commonHost;
     Adapter adapter;
+    DeviceResetInterface deviceReset;
     ConfigSpace configSpace;
     void* pciConfigRegistration;
     RegisterAperture registerAperture;
@@ -56,6 +57,7 @@ EVT_WDF_DEVICE_RELEASE_HARDWARE ReleaseHardware;
 EVT_WDF_DEVICE_D0_ENTRY EnterD0;
 EVT_WDF_DEVICE_D0_EXIT ExitD0;
 EVT_WDF_OBJECT_CONTEXT_CLEANUP DeviceCleanup;
+NTSTATUS StartNvKmsInitialization(_In_ WDFDEVICE device) noexcept;
 DWORD WINAPI InitializeNvKms(_In_ void* parameter);
 
 } // namespace nv::iddcx

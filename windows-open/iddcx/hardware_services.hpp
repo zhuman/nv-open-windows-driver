@@ -31,6 +31,41 @@ struct BootIdentity final
     ULONG boot42;
 };
 
+using DeviceResetHandler = NTSTATUS (NTAPI*)(
+    _In_ void* context,
+    _In_ ULONG resetType,
+    _In_ ULONG flags,
+    _In_opt_ void* resetParameters);
+
+struct UmDeviceResetInterface final
+{
+    USHORT size;
+    USHORT version;
+    void* context;
+    PINTERFACE_REFERENCE interfaceReference;
+    PINTERFACE_DEREFERENCE interfaceDereference;
+    DeviceResetHandler deviceReset;
+    ULONG supportedResetTypes;
+    void* reserved;
+    void* queryBusSpecificResetInfo;
+    void* deviceBusSpecificReset;
+    void* getDeviceResetStatus;
+};
+
+class DeviceResetInterface final
+{
+public:
+    NTSTATUS Initialize(_In_ WDFDEVICE device) noexcept;
+    NTSTATUS ResetDevice(_In_ ULONG resetType) noexcept;
+    void Reset() noexcept;
+
+    [[nodiscard]] bool IsAvailable() const noexcept;
+    [[nodiscard]] ULONG SupportedResetTypes() const noexcept;
+
+private:
+    UmDeviceResetInterface interface_;
+};
+
 class ConfigSpace final
 {
 public:
@@ -136,6 +171,8 @@ public:
 private:
     static EVT_WDF_INTERRUPT_ISR Isr;
     static EVT_WDF_INTERRUPT_DPC Dpc;
+    static EVT_WDF_INTERRUPT_ENABLE Enable;
+    static EVT_WDF_INTERRUPT_DISABLE Disable;
 
     WDFINTERRUPT handle_;
     ULONG vector_;

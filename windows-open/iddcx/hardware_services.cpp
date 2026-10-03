@@ -2,6 +2,8 @@
 #include <wdmguid.h>
 
 #include "hardware_services.hpp"
+#include "device.hpp"
+#include "nvrm_gpu_attach.h"
 #include "trace.h"
 
 #include <devpkey.h>
@@ -87,6 +89,91 @@ NTSTATUS QueryUint32Property(
 } // namespace
 
 namespace nv::iddcx {
+
+NTSTATUS DeviceResetInterface::Initialize(_In_ WDFDEVICE device) noexcept
+{
+    Reset();
+
+    constexpr USHORT versions[] = {
+        3,
+        2,
+        1,
+    };
+    NTSTATUS status = STATUS_NOT_SUPPORTED;
+    for (const USHORT version : versions)
+    {
+        status = WdfFdoQueryForInterface(
+            device,
+            &GUID_DEVICE_RESET_INTERFACE_STANDARD,
+            reinterpret_cast<PINTERFACE>(&interface_),
+            sizeof(interface_),
+            version,
+            nullptr);
+        if (NT_SUCCESS(status))
+        {
+            break;
+        }
+        ZeroMemory(&interface_, sizeof(interface_));
+    }
+
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_WARNING,
+        TRACE_DRIVER,
+        "DEVICE_RESET_INTERFACE_STANDARD query: status=%!STATUS! version=%u size=%u supported=0x%08X reset=%p",
+        status,
+        interface_.version,
+        interface_.size,
+        interface_.supportedResetTypes,
+        interface_.deviceReset);
+    if (!NT_SUCCESS(status) || interface_.deviceReset == nullptr)
+    {
+        Reset();
+        return NT_SUCCESS(status) ? STATUS_NOT_SUPPORTED : status;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS DeviceResetInterface::ResetDevice(_In_ ULONG resetType) noexcept
+{
+    if (interface_.deviceReset == nullptr ||
+        resetType >= sizeof(interface_.supportedResetTypes) * CHAR_BIT ||
+        (interface_.supportedResetTypes & (1UL << resetType)) == 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    const NTSTATUS status = interface_.deviceReset(
+        interface_.context,
+        resetType,
+        0,
+        nullptr);
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "Device reset requested: type=%u status=%!STATUS!",
+        resetType,
+        status);
+    return status;
+}
+
+void DeviceResetInterface::Reset() noexcept
+{
+    if (interface_.interfaceDereference != nullptr)
+    {
+        interface_.interfaceDereference(interface_.context);
+    }
+    ZeroMemory(&interface_, sizeof(interface_));
+}
+
+bool DeviceResetInterface::IsAvailable() const noexcept
+{
+    return interface_.deviceReset != nullptr;
+}
+
+ULONG DeviceResetInterface::SupportedResetTypes() const noexcept
+{
+    return interface_.supportedResetTypes;
+}
 
 NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
 {
@@ -770,6 +857,8 @@ NTSTATUS Interrupt::Initialize(
         WDF_INTERRUPT_CONFIG_INIT(&configuration, Isr, Dpc);
         configuration.InterruptRaw = raw;
         configuration.InterruptTranslated = translated;
+        configuration.EvtInterruptEnable = Enable;
+        configuration.EvtInterruptDisable = Disable;
 
         TraceEvents(
             TRACE_LEVEL_INFORMATION,
@@ -831,6 +920,38 @@ ULONG Interrupt::Count() const noexcept
 }
 
 _Use_decl_annotations_
+NTSTATUS Interrupt::Enable(WDFINTERRUPT interrupt, WDFDEVICE device)
+{
+    UNREFERENCED_PARAMETER(interrupt);
+    DeviceContext* const context = GetDeviceContext(device);
+    const NV_STATUS status = context->rmGpuStateLoaded
+        ? NvRmSetGpuInterruptEnabled(context->rmGpuContext, NV_TRUE)
+        : NV_ERR_INVALID_STATE;
+    TraceEvents(
+        status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "GPU interrupt enable: status=0x%08X",
+        status);
+    return status == NV_OK ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
+}
+
+_Use_decl_annotations_
+NTSTATUS Interrupt::Disable(WDFINTERRUPT interrupt, WDFDEVICE device)
+{
+    UNREFERENCED_PARAMETER(interrupt);
+    DeviceContext* const context = GetDeviceContext(device);
+    const NV_STATUS status = context->rmGpuStateLoaded
+        ? NvRmSetGpuInterruptEnabled(context->rmGpuContext, NV_FALSE)
+        : NV_OK;
+    TraceEvents(
+        status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "GPU interrupt disable: status=0x%08X",
+        status);
+    return status == NV_OK ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
+}
+
+_Use_decl_annotations_
 BOOLEAN Interrupt::Isr(WDFINTERRUPT interrupt, ULONG messageId)
 {
     static volatile LONG observedInterrupts = 0;
@@ -853,8 +974,26 @@ BOOLEAN Interrupt::Isr(WDFINTERRUPT interrupt, ULONG messageId)
 _Use_decl_annotations_
 void Interrupt::Dpc(WDFINTERRUPT interrupt, WDFOBJECT associatedObject)
 {
-    UNREFERENCED_PARAMETER(interrupt);
+    static volatile LONG servicedDpcs = 0;
+
     UNREFERENCED_PARAMETER(associatedObject);
+
+    DeviceContext* const context = GetDeviceContext(WdfInterruptGetDevice(interrupt));
+    const NV_STATUS status = context->rmGpuStateLoaded
+        ? NvRmServiceGpuInterrupt(context->rmGpuContext)
+        : NV_ERR_INVALID_STATE;
+    const LONG dpcCount = InterlockedIncrement(&servicedDpcs);
+    if (dpcCount <= 16)
+    {
+        TraceEvents(
+            status == NV_OK || status == NV_ERR_NO_INTR_PENDING
+                ? TRACE_LEVEL_INFORMATION
+                : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "GPU interrupt DPC: count=%ld status=0x%08X",
+            dpcCount,
+            status);
+    }
 }
 
 } // namespace nv::iddcx

@@ -2022,6 +2022,8 @@ struct NvKmsSetModeRequest {
      */
     NvBool commit;
 
+    NvBool bypassComposition;
+
     /*!
      * The bitmask of which indices within disp[] describe requested
      * configuration changes.  Any other disps will use their existing

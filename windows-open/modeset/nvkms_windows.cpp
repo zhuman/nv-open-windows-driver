@@ -44,6 +44,7 @@ struct nvkms_sema_t
 struct NV_KMS_WINDOWS_SURFACE
 {
     NvKmsKapiMemory* memory;
+    NvKmsKapiMemory* stagingMemory;
     NvKmsKapiSurface* surface;
     void* pixels;
     NvU64 size;
@@ -51,6 +52,8 @@ struct NV_KMS_WINDOWS_SURFACE
     NvU32 height;
     NvU32 pitch;
 };
+
+extern "C" void NvKmsWindowsTraceMessage(const char* message);
 
 namespace {
 
@@ -64,6 +67,17 @@ NvBool kmsGpuEnumerated = NV_FALSE;
 SRWLOCK kmsDeviceLock = SRWLOCK_INIT;
 INIT_ONCE kmsLockInitOnce = INIT_ONCE_STATIC_INIT;
 CRITICAL_SECTION kmsLock;
+
+NvU32 HashSurface(const void* pixels, NvU64 size)
+{
+    const auto* const bytes = static_cast<const NvU8*>(pixels);
+    NvU32 hash = 2166136261U;
+    for (NvU64 index = 0; index < size; ++index)
+    {
+        hash = (hash ^ bytes[index]) * 16777619U;
+    }
+    return hash;
+}
 
 class KmsDeviceLockGuard
 {
@@ -99,6 +113,26 @@ void NvKmsGpuCallback(const NvKmsKapiGpuInfo* info)
         enumeratedKmsGpu = *info;
         kmsGpuEnumerated = NV_TRUE;
     }
+}
+
+void NvKmsEventCallback(const NvKmsKapiEvent* event)
+{
+    if (event == nullptr)
+    {
+        return;
+    }
+
+    char traceMessage[96] = {};
+    std::snprintf(
+        traceMessage,
+        sizeof(traceMessage),
+        "NVKMS event: type=%u head=%u layer=%u",
+        static_cast<NvU32>(event->type),
+        event->type == NVKMS_EVENT_TYPE_FLIP_OCCURRED ?
+            event->u.flipOccurred.head : 0,
+        event->type == NVKMS_EVENT_TYPE_FLIP_OCCURRED ?
+            event->u.flipOccurred.layer : 0);
+    NvKmsWindowsTraceMessage(traceMessage);
 }
 
 DWORD WINAPI NvKmsTimerCleanup(void* context)
@@ -194,8 +228,6 @@ void Nv04AddVblankCallbackKernel(NVOS61_PARAMETERS*);
 NvBool nvKmsModuleLoad(void);
 void nvKmsModuleUnload(void);
 extern const char* const pNV_KMS_ID = "NVIDIA Windows Open Kernel Mode Setting Driver";
-void NvKmsWindowsTraceMessage(const char* message);
-}
 
 extern "C" NvBool nvkms_test_fail_alloc_core_channel(NvKmsFailAllocCoreChannelMethod)
 {
@@ -725,6 +757,7 @@ extern "C" NV_STATUS NvKmsWindowsInitialize(void)
     NvKmsKapiAllocateDeviceParams allocateParams = {};
     allocateParams.gpuId = enumeratedKmsGpu.gpuInfo.gpu_id;
     allocateParams.migDevice = enumeratedKmsGpu.migDevice;
+    allocateParams.eventCallback = NvKmsEventCallback;
     kmsDevice = kmsFunctions.allocateDevice(&allocateParams);
     if (kmsDevice == nullptr)
     {
@@ -1126,8 +1159,8 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     {
         return NV_ERR_GENERIC;
     }
-    if ((resources.supportedSurfaceMemoryFormats[0] &
-         NVBIT64(NvKmsSurfaceMemoryFormatA8R8G8B8)) == 0)
+        if ((resources.supportedSurfaceMemoryFormats[0] &
+            NVBIT64(NvKmsSurfaceMemoryFormatX8R8G8B8)) == 0)
     {
         return NV_ERR_NOT_SUPPORTED;
     }
@@ -1158,7 +1191,7 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     memoryParams.type = NVKMS_KAPI_ALLOCATION_TYPE_SCANOUT;
     memoryParams.size = allocationSize;
     memoryParams.noDisplayCaching = NV_TRUE;
-    memoryParams.useVideoMemory = NV_FALSE;
+    memoryParams.useVideoMemory = NV_TRUE;
     memoryParams.compressible = &compressible;
     scanout->memory = kmsFunctions.allocateMemory(kmsDevice, &memoryParams);
     if (scanout->memory == nullptr)
@@ -1167,10 +1200,31 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
         return NV_ERR_NO_MEMORY;
     }
 
+    memoryParams.useVideoMemory = NV_FALSE;
+    scanout->stagingMemory =
+        kmsFunctions.allocateMemory(kmsDevice, &memoryParams);
+    if (scanout->stagingMemory == nullptr)
+    {
+        kmsFunctions.freeMemory(kmsDevice, scanout->memory);
+        HeapFree(GetProcessHeap(), 0, scanout);
+        return NV_ERR_NO_MEMORY;
+    }
+
+    char memoryMessage[192] = {};
+    nvkms_snprintf(
+        memoryMessage,
+        sizeof(memoryMessage),
+        "NVKMS scanout memory: size=0x%llx vidmem=%u contiguous=%u",
+        static_cast<unsigned long long>(allocationSize),
+        kmsFunctions.isVidmem(scanout->memory),
+        kmsFunctions.isContiguous(scanout->memory));
+    NvKmsWindowsTraceMessage(memoryMessage);
+
     if (!kmsFunctions.mapMemory(
-            kmsDevice, scanout->memory, NVKMS_KAPI_MAPPING_TYPE_USER,
+            kmsDevice, scanout->stagingMemory, NVKMS_KAPI_MAPPING_TYPE_USER,
             &scanout->pixels))
     {
+        kmsFunctions.freeMemory(kmsDevice, scanout->stagingMemory);
         kmsFunctions.freeMemory(kmsDevice, scanout->memory);
         HeapFree(GetProcessHeap(), 0, scanout);
         return NV_ERR_GENERIC;
@@ -1186,15 +1240,16 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     surfaceParams.planes[0].pitch = scanout->pitch;
     surfaceParams.width = width;
     surfaceParams.height = height;
-    surfaceParams.format = NvKmsSurfaceMemoryFormatA8R8G8B8;
+    surfaceParams.format = NvKmsSurfaceMemoryFormatX8R8G8B8;
     surfaceParams.explicit_layout = NV_TRUE;
     surfaceParams.layout = NvKmsSurfaceMemoryLayoutPitch;
     scanout->surface = kmsFunctions.createSurface(kmsDevice, &surfaceParams);
     if (scanout->surface == nullptr)
     {
         kmsFunctions.unmapMemory(
-            kmsDevice, scanout->memory, NVKMS_KAPI_MAPPING_TYPE_USER,
+            kmsDevice, scanout->stagingMemory, NVKMS_KAPI_MAPPING_TYPE_USER,
             scanout->pixels);
+        kmsFunctions.freeMemory(kmsDevice, scanout->stagingMemory);
         kmsFunctions.freeMemory(kmsDevice, scanout->memory);
         HeapFree(GetProcessHeap(), 0, scanout);
         return NV_ERR_GENERIC;
@@ -1224,8 +1279,13 @@ extern "C" void NvKmsWindowsDestroyScanoutSurface(
         if (surface->pixels != nullptr && surface->memory != nullptr)
         {
             kmsFunctions.unmapMemory(
-                kmsDevice, surface->memory, NVKMS_KAPI_MAPPING_TYPE_USER,
+                kmsDevice, surface->stagingMemory,
+                NVKMS_KAPI_MAPPING_TYPE_USER,
                 surface->pixels);
+        }
+        if (surface->stagingMemory != nullptr)
+        {
+            kmsFunctions.freeMemory(kmsDevice, surface->stagingMemory);
         }
         if (surface->memory != nullptr)
         {
@@ -1259,12 +1319,43 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
     }
 
     NvKmsKapiDisplayMode modes[NVKMS_KAPI_MAX_HEADS] = {};
+    NvU32 displayHeadMasks[NVKMS_KAPI_MAX_HEADS] = {};
     for (NvU32 index = 0; index < outputCount; ++index)
     {
         if (outputs[index].surface == nullptr)
         {
             return NV_ERR_INVALID_ARGUMENT;
         }
+
+        NV_KMS_WINDOWS_SURFACE* const surface = outputs[index].surface;
+        if (!kmsFunctions.copyMemory(
+                kmsDevice,
+                surface->memory,
+                surface->stagingMemory,
+                surface->size))
+        {
+            NvKmsWindowsTraceMessage("NVKMS scanout upload failed");
+            return NV_ERR_GENERIC;
+        }
+
+        const NvU32 uploadHash = HashSurface(surface->pixels, surface->size);
+        const NvBool readbackSucceeded = kmsFunctions.copyMemory(
+            kmsDevice,
+            surface->stagingMemory,
+            surface->memory,
+            surface->size);
+        const NvU32 readbackHash = readbackSucceeded ?
+            HashSurface(surface->pixels, surface->size) : 0;
+        char uploadMessage[160] = {};
+        nvkms_snprintf(
+            uploadMessage,
+            sizeof(uploadMessage),
+            "NVKMS scanout upload: size=0x%llx hash=0x%08x readback=%u readbackHash=0x%08x",
+            surface->size,
+            uploadHash,
+            readbackSucceeded,
+            readbackHash);
+        NvKmsWindowsTraceMessage(uploadMessage);
 
         NvBool valid = NV_FALSE;
         NvBool preferred = NV_FALSE;
@@ -1284,11 +1375,16 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
 
         NvKmsKapiDynamicDisplayParams dynamicInfo = {};
         dynamicInfo.handle = outputs[index].displayHandle;
+        NvKmsKapiStaticDisplayInfo staticInfo = {};
         if (!kmsFunctions.getDynamicDisplayInfo(kmsDevice, &dynamicInfo) ||
-            !dynamicInfo.connected)
+            !dynamicInfo.connected ||
+            !kmsFunctions.getStaticDisplayInfo(
+                kmsDevice, outputs[index].displayHandle, &staticInfo) ||
+            staticInfo.headMask == 0)
         {
             return NV_ERR_OBJECT_NOT_FOUND;
         }
+        displayHeadMasks[index] = staticInfo.headMask;
     }
 
     NvU32 assignmentCount = 1;
@@ -1297,10 +1393,12 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
         assignmentCount *= resources.numHeads;
     }
 
-    for (NvU32 encodedAssignment = 0;
-         encodedAssignment < assignmentCount;
-         ++encodedAssignment)
+    for (NvU32 assignmentOffset = 0;
+         assignmentOffset < assignmentCount;
+         ++assignmentOffset)
     {
+        const NvU32 encodedAssignment =
+            assignmentCount - assignmentOffset - 1;
         NvU32 assignedHeads[NVKMS_KAPI_MAX_HEADS] = {};
         NvU32 remaining = encodedAssignment;
         NvU32 usedHeads = 0;
@@ -1310,6 +1408,7 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             const NvU32 head = remaining % resources.numHeads;
             remaining /= resources.numHeads;
             if ((usedHeads & (1U << head)) != 0 ||
+                (displayHeadMasks[index] & (1U << head)) == 0 ||
                 resources.numLayers[head] == 0)
             {
                 assignmentValid = false;
@@ -1325,28 +1424,53 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
 
         NvKmsKapiRequestedModeSetConfig requested = {};
         NvKmsKapiModeSetReplyConfig reply = {};
-        for (NvU32 head = 0; head < resources.numHeads; ++head)
-        {
-            requested.headsMask |= 1U << head;
-            auto* const headConfig = &requested.headRequestedConfig[head];
-            headConfig->flags.activeChanged = NV_TRUE;
-            headConfig->flags.displaysChanged = NV_TRUE;
-            for (NvU32 layer = 0; layer < resources.numLayers[head]; ++layer)
-            {
-                headConfig->layerRequestedConfig[layer]
-                    .flags.surfaceChanged = NV_TRUE;
-            }
-        }
-
+        requested.bypassComposition = NV_TRUE;
         for (NvU32 index = 0; index < outputCount; ++index)
         {
             const NvU32 head = assignedHeads[index];
+            requested.headsMask |= 1U << head;
             auto* const headConfig = &requested.headRequestedConfig[head];
             headConfig->modeSetConfig.bActive = NV_TRUE;
             headConfig->modeSetConfig.numDisplays = 1;
             headConfig->modeSetConfig.displays[0] = outputs[index].displayHandle;
             headConfig->modeSetConfig.mode = modes[index];
+            headConfig->modeSetConfig.colorBpc = 8;
+            headConfig->modeSetConfig.colorBpcSpecified = NV_TRUE;
+            headConfig->modeSetConfig.olutFpNormScale =
+                NVKMS_OLUT_FP_NORM_SCALE_DEFAULT;
+            headConfig->flags.activeChanged = NV_TRUE;
+            headConfig->flags.displaysChanged = NV_TRUE;
             headConfig->flags.modeChanged = NV_TRUE;
+            headConfig->flags.hdrInfoFrameChanged = NV_TRUE;
+            headConfig->flags.colorimetryChanged = NV_TRUE;
+            headConfig->flags.legacyIlutChanged = NV_TRUE;
+            headConfig->flags.legacyOlutChanged = NV_TRUE;
+            headConfig->flags.olutChanged = NV_TRUE;
+            headConfig->flags.olutFpNormScaleChanged = NV_TRUE;
+            headConfig->flags.ditheringChanged = NV_TRUE;
+
+            for (NvU32 layerIndex = 0;
+                 layerIndex < resources.numLayers[head];
+                 ++layerIndex)
+            {
+                auto* const layerConfig =
+                    &headConfig->layerRequestedConfig[layerIndex];
+                layerConfig->config.csc = NVKMS_IDENTITY_CSC_MATRIX;
+                layerConfig->flags.surfaceChanged = NV_TRUE;
+                layerConfig->flags.srcXYChanged = NV_TRUE;
+                layerConfig->flags.srcWHChanged = NV_TRUE;
+                layerConfig->flags.dstXYChanged = NV_TRUE;
+                layerConfig->flags.dstWHChanged = NV_TRUE;
+                layerConfig->flags.cscChanged = NV_TRUE;
+                layerConfig->flags.inputTfChanged = NV_TRUE;
+                layerConfig->flags.outputTfChanged = NV_TRUE;
+                layerConfig->flags.inputColorSpaceChanged = NV_TRUE;
+                layerConfig->flags.inputColorRangeChanged = NV_TRUE;
+                layerConfig->flags.hdrMetadataChanged = NV_TRUE;
+                layerConfig->flags.matrixOverridesChanged = NV_TRUE;
+                layerConfig->flags.ilutChanged = NV_TRUE;
+                layerConfig->flags.tmoChanged = NV_TRUE;
+            }
 
             auto* const layer =
                 &headConfig->layerRequestedConfig[NVKMS_KAPI_LAYER_PRIMARY_IDX];
@@ -1367,6 +1491,15 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             layer->flags.dstWHChanged = NV_TRUE;
         }
 
+        char requestMessage[128] = {};
+        nvkms_snprintf(
+            requestMessage,
+            sizeof(requestMessage),
+            "NVKMS modeset request: outputs=%u headsMask=0x%08x",
+            outputCount,
+            requested.headsMask);
+        NvKmsWindowsTraceMessage(requestMessage);
+
         if (!kmsFunctions.applyModeSetConfig(
                 kmsDevice, &requested, &reply, NV_FALSE))
         {
@@ -1385,6 +1518,16 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
         for (NvU32 index = 0; index < outputCount; ++index)
         {
             outputs[index].assignedHead = assignedHeads[index];
+
+            char assignmentMessage[128] = {};
+            nvkms_snprintf(
+                assignmentMessage,
+                sizeof(assignmentMessage),
+                "NVKMS head assignment: display=0x%08x mask=0x%08x head=%u",
+                outputs[index].displayHandle,
+                displayHeadMasks[index],
+                assignedHeads[index]);
+            NvKmsWindowsTraceMessage(assignmentMessage);
         }
         return NV_OK;
     }
@@ -1420,6 +1563,8 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
     NvKmsKapiModeSetReplyConfig reply = {};
     requested.headsMask = 1U << head;
     auto* const headConfig = &requested.headRequestedConfig[head];
+    headConfig->modeSetConfig.bActive = NV_TRUE;
+    headConfig->modeSetConfig.numDisplays = 1;
 
     for (NvU32 layerIndex = 0;
          layerIndex < resources.numLayers[head];
@@ -1567,4 +1712,6 @@ extern "C" NV_STATUS NvKmsWindowsProbeGpuEnumeration(
     gpuInfo->slot = enumeratedGpus[0].pci_info.slot;
     gpuInfo->function = enumeratedGpus[0].pci_info.function;
     return NV_OK;
+}
+
 }

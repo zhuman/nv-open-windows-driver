@@ -12,7 +12,6 @@ PnpLockDown=1
 %ProviderName%=Models,NTamd64.10.0...22000,NTarm64.10.0...22000
 
 [Models.NTamd64.10.0...22000]
-%DeviceName%=NvIddCx_Install,Root\NvWindowsIddCx
 ; BEGIN GENERATED NVIDIA SUPPORTED GPU MODELS
 %NVIDIA.DeviceDesc.1E02%=NvIddCx_Install,PCI\VEN_10DE&DEV_1E02
 %NVIDIA.DeviceDesc.1E04%=NvIddCx_Install,PCI\VEN_10DE&DEV_1E04
@@ -848,7 +847,6 @@ PnpLockDown=1
 ; END GENERATED NVIDIA SUPPORTED GPU MODELS
 
 [Models.NTarm64.10.0...22000]
-%DeviceName%=NvIddCx_Install,Root\NvWindowsIddCx
 ; BEGIN GENERATED NVIDIA SUPPORTED GPU MODELS
 %NVIDIA.DeviceDesc.1E02%=NvIddCx_Install,PCI\VEN_10DE&DEV_1E02
 %NVIDIA.DeviceDesc.1E04%=NvIddCx_Install,PCI\VEN_10DE&DEV_1E04

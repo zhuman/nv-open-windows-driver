@@ -28,6 +28,13 @@ NV_STATUS NvRmInitializeGpuFirmware(
 NV_STATUS NvRmUnloadGpuState(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 
+NV_STATUS NvRmServiceGpuInterrupt(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
+
+NV_STATUS NvRmSetGpuInterruptEnabled(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    NvBool enabled);
+
 typedef enum NV_RM_GPU_OPEN_STAGE
 {
     NV_RM_GPU_OPEN_STAGE_ROOT_CLIENT,

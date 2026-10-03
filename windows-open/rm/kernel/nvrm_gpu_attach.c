@@ -319,6 +319,93 @@ NV_STATUS NvRmUnloadGpuState(
     return status;
 }
 
+NV_STATUS NvRmServiceGpuInterrupt(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    OBJGPU* pGpu = NULL;
+    void* publishedGpu = NULL;
+    NvU32 previousGpuInstance = NV_U32_MAX;
+    NV_STATUS status;
+
+    if (gpuContext == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DPC);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status == NV_OK)
+    {
+        status = NvPlatformRmGpuGetPublishedRmGpu(gpuContext, &publishedGpu);
+    }
+    if (status == NV_OK)
+    {
+        pGpu = (OBJGPU*)publishedGpu;
+        previousGpuInstance = gpumgrSetCurrentGpuInstance(pGpu->gpuInstance);
+        status = rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DPC);
+        if (status == NV_OK)
+        {
+            status = osDeferredIsr(pGpu);
+            rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
+        }
+        gpumgrSetCurrentGpuInstance(previousGpuInstance);
+    }
+
+    gpumgrThreadDisableExpandedGpuVisibility();
+    rmapiLockRelease();
+    return status;
+}
+
+NV_STATUS NvRmSetGpuInterruptEnabled(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
+    NvBool enabled)
+{
+    OBJGPU* pGpu = NULL;
+    void* publishedGpu = NULL;
+    NvU32 previousGpuInstance = NV_U32_MAX;
+    NV_STATUS status;
+
+    if (gpuContext == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DPC);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status == NV_OK)
+    {
+        status = NvPlatformRmGpuGetPublishedRmGpu(gpuContext, &publishedGpu);
+    }
+    if (status == NV_OK)
+    {
+        pGpu = (OBJGPU*)publishedGpu;
+        previousGpuInstance = gpumgrSetCurrentGpuInstance(pGpu->gpuInstance);
+        status = rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DPC);
+        if (status == NV_OK)
+        {
+            intrSetIntrEn(
+                GPU_GET_INTR(pGpu),
+                enabled ? INTERRUPT_TYPE_HARDWARE : INTERRUPT_TYPE_DISABLED);
+            rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
+        }
+        gpumgrSetCurrentGpuInstance(previousGpuInstance);
+    }
+
+    gpumgrThreadDisableExpandedGpuVisibility();
+    rmapiLockRelease();
+    return status;
+}
+
 NV_STATUS NvRmOpenGpuDevice(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext,
     NvU32 gpuId,

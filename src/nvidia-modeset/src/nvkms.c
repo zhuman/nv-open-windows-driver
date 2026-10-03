@@ -2220,7 +2220,7 @@ static NvBool SetMode(struct NvKmsPerOpen *pOpen,
 
     return nvSetDispModeEvo(pOpenDev->pDevEvo, pOpenDev,
                             &pParams->request, &pParams->reply,
-                            FALSE /* bypassComposition */,
+                            pParams->request.bypassComposition,
                             TRUE /* doRasterLock */);
 }
 

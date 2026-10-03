@@ -380,6 +380,9 @@ struct NvKmsKapiHeadModeSetConfig {
 
     NvBool vrrEnabled;
 
+    NvU8 colorBpc;
+    NvBool colorBpcSpecified;
+
     struct {
         NvBool enabled;
         enum NvKmsInfoFrameEOTF eotf;
@@ -441,6 +444,7 @@ struct NvKmsKapiHeadRequestedConfig {
 
 struct NvKmsKapiRequestedModeSetConfig {
     NvU32 headsMask;
+    NvBool bypassComposition;
     struct NvKmsKapiHeadRequestedConfig
         headRequestedConfig[NVKMS_KAPI_MAX_HEADS];
 };
@@ -1038,6 +1042,14 @@ struct NvKmsKapiFunctionsTable {
         const struct NvKmsKapiDevice *device,
         const struct NvKmsKapiMemory *memory, NvKmsKapiMappingType type,
         const void *pLinearAddress
+    );
+
+    NvBool (*copyMemory)
+    (
+        struct NvKmsKapiDevice *device,
+        struct NvKmsKapiMemory *dstMemory,
+        const struct NvKmsKapiMemory *srcMemory,
+        NvU64 size
     );
 
     /*!

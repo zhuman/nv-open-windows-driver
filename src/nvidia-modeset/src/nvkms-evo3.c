@@ -4264,6 +4264,12 @@ EvoFlipC5Common(NVDevEvoPtr pDevEvo,
          NVEvoUpdateState *updateState,
          NvBool bypassComposition)
 {
+#if defined(NV_WINDOWS_IDDCX)
+    if (pHwState->pSurfaceEvo[NVKMS_LEFT] == NULL) {
+        return;
+    }
+#endif
+
     enum NvKmsSurfaceMemoryFormat format;
     NvBool swapUV;
     NvU32 hTaps, vTaps;

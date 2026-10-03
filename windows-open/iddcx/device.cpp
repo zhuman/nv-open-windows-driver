@@ -458,6 +458,8 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     UNREFERENCED_PARAMETER(driver);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "DeviceAdd");
 
+    WdfDeviceInitSetPowerPolicyOwnership(deviceInit, TRUE);
+
     IDD_CX_CLIENT_CONFIG iddConfiguration;
     IDD_CX_CLIENT_CONFIG_INIT(&iddConfiguration);
     iddConfiguration.EvtIddCxAdapterInitFinished = AdapterInitFinished;
@@ -588,6 +590,7 @@ void DeviceCleanup(WDFOBJECT deviceObject)
 {
     DeviceContext* context = GetDeviceContext(deviceObject);
     context->adapter.Reset();
+    context->deviceReset.Reset();
 #if defined(NV_RM_USER_LINK_PROBE)
     if (context->rmInitialized)
     {
@@ -929,6 +932,8 @@ NTSTATUS PrepareHardware(
     }
     context->rmGpuAttached = true;
 
+    context->deviceReset.Initialize(device);
+
     const NV_STATUS firmwareStatus = InitializeRmGpuFirmware(
         context->rmGpuContext);
     TraceEvents(
@@ -938,49 +943,30 @@ NTSTATUS PrepareHardware(
         firmwareStatus);
     if (firmwareStatus != NV_OK)
     {
-        DestroyRmGpuContext(context);
-        context->interrupt.Reset();
-        NvPlatformUnregisterDmaProvider(context->dmaRegistration);
-        context->dmaRegistration = nullptr;
-        context->dmaEngine.Reset();
-        NvPlatformUnregisterMmioAperture(context->mmioRegistration);
-        context->mmioRegistration = nullptr;
-        context->registerAperture.Reset();
-        NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
-        context->pciConfigRegistration = nullptr;
-        context->configSpace.Reset();
+        if (firmwareStatus == NV_ERR_TIMEOUT)
+        {
+            context->deviceReset.ResetDevice(0);
+        }
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
     context->rmGpuStateLoaded = true;
 
-    const NV_STATUS modesetRegisterStatus = identity != nullptr
-        ? NvKmsWindowsRegisterGpu(
+    const NV_STATUS modesetRegisterStatus = NvKmsWindowsRegisterGpu(
             context->rmGpuId,
             identity->domain,
             identity->bus,
             identity->device,
             identity->function,
-            context->rmGpuContext)
-        : NV_ERR_INVALID_STATE;
+            context->rmGpuContext);
     if (modesetRegisterStatus != NV_OK)
     {
-        DestroyRmGpuContext(context);
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
-    InterlockedExchange(&context->nvKmsWorkCanceled, 0);
-    InterlockedExchange(&context->nvKmsWorkCompleted, 0);
-    context->nvKmsThread = CreateThread(
-        nullptr,
-        0,
-        InitializeNvKms,
-        device,
-        0,
-        nullptr);
-    if (context->nvKmsThread == nullptr)
+    const NTSTATUS workerStatus = StartNvKmsInitialization(device);
+    if (!NT_SUCCESS(workerStatus))
     {
-        DestroyRmGpuContext(context);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return workerStatus;
     }
 #endif
 
@@ -993,6 +979,11 @@ DWORD WINAPI InitializeNvKms(void* parameter)
     const WDFDEVICE device = static_cast<WDFDEVICE>(parameter);
     DeviceContext* const context = GetDeviceContext(device);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "NVKMS worker begin");
+
+    if (InterlockedCompareExchange(&context->nvKmsWorkCanceled, 0, 0) != 0)
+    {
+        return 0;
+    }
 
     const NV_STATUS modesetProbeStatus = NvKmsWindowsInitialize();
     TraceEvents(
@@ -1067,6 +1058,7 @@ DWORD WINAPI InitializeNvKms(void* parameter)
         return 0;
     }
     context->rmDeviceOpened = true;
+
     InterlockedExchange(&context->nvKmsWorkCompleted, 1);
 
     AcquireSRWLockExclusive(&context->lifecycleLock);
@@ -1089,6 +1081,33 @@ DWORD WINAPI InitializeNvKms(void* parameter)
 #endif
 }
 
+NTSTATUS StartNvKmsInitialization(_In_ WDFDEVICE device) noexcept
+{
+#if defined(NV_RM_USER_LINK_PROBE)
+    DeviceContext* const context = GetDeviceContext(device);
+    if (context->nvKmsThread != nullptr)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    InterlockedExchange(&context->nvKmsWorkCanceled, 0);
+    InterlockedExchange(&context->nvKmsWorkCompleted, 0);
+    context->nvKmsThread = CreateThread(
+        nullptr,
+        0,
+        InitializeNvKms,
+        device,
+        0,
+        nullptr);
+    return context->nvKmsThread != nullptr
+        ? STATUS_SUCCESS
+        : STATUS_INSUFFICIENT_RESOURCES;
+#else
+    UNREFERENCED_PARAMETER(device);
+    return STATUS_SUCCESS;
+#endif
+}
+
 _Use_decl_annotations_
 NTSTATUS ReleaseHardware(
     WDFDEVICE device,
@@ -1107,6 +1126,7 @@ NTSTATUS ReleaseHardware(
     InterlockedExchange(&context->nvKmsWorkCompleted, 0);
     context->adapter.Reset();
     DestroyRmGpuContext(context);
+    context->deviceReset.Reset();
     context->interrupt.Reset();
     NvPlatformUnregisterDmaProvider(context->dmaRegistration);
     context->dmaRegistration = nullptr;
@@ -1121,12 +1141,12 @@ NTSTATUS ReleaseHardware(
 _Use_decl_annotations_
 NTSTATUS EnterD0(WDFDEVICE device, WDF_POWER_DEVICE_STATE previousState)
 {
-    UNREFERENCED_PARAMETER(previousState);
     DeviceContext* const context = GetDeviceContext(device);
     AcquireSRWLockExclusive(&context->lifecycleLock);
     InterlockedExchange(&context->d0Active, 1);
     const NTSTATUS status = context->adapter.EnterD0(device);
     ReleaseSRWLockExclusive(&context->lifecycleLock);
+
     TraceEvents(
         NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,
