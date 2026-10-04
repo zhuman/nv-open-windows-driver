@@ -473,6 +473,10 @@ struct NvKmsKapiEventDynamicDisplayConnected {
     NvKmsKapiDisplay display;
 };
 
+struct NvKmsKapiEventDynamicDisplayDisconnected {
+    NvKmsKapiDisplay display;
+};
+
 struct NvKmsKapiEventFlipOccurred {
     NvU32 head;
     NvU32 layer;
@@ -499,6 +503,7 @@ struct NvKmsKapiEvent {
     union {
         struct NvKmsKapiEventDisplayChanged displayChanged;
         struct NvKmsKapiEventDynamicDisplayConnected dynamicDisplayConnected;
+        struct NvKmsKapiEventDynamicDisplayDisconnected dynamicDisplayDisconnected;
         struct NvKmsKapiEventFlipOccurred flipOccurred;
     } u;
 };

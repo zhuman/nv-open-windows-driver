@@ -469,6 +469,10 @@ struct NvKmsKapiEventDynamicDisplayConnected {
     NvKmsKapiDisplay display;
 };
 
+struct NvKmsKapiEventDynamicDisplayDisconnected {
+    NvKmsKapiDisplay display;
+};
+
 struct NvKmsKapiEventFlipOccurred {
     NvU32 head;
     NvU32 layer;
@@ -495,6 +499,7 @@ struct NvKmsKapiEvent {
     union {
         struct NvKmsKapiEventDisplayChanged displayChanged;
         struct NvKmsKapiEventDynamicDisplayConnected dynamicDisplayConnected;
+        struct NvKmsKapiEventDynamicDisplayDisconnected dynamicDisplayDisconnected;
         struct NvKmsKapiEventFlipOccurred flipOccurred;
     } u;
 };
@@ -772,7 +777,8 @@ struct NvKmsKapiFunctionsTable {
      * This call does nothing if eventCallback is NULL when NvKmsKapiDevice
      * is allocated.
      *
-     * Supported events are DPY_CHANGED and DYNAMIC_DPY_CONNECTED.
+    * Supported events are DPY_CHANGED, DYNAMIC_DPY_CONNECTED, and
+    * DYNAMIC_DPY_DISCONNECTED.
      *
      * \param [in]  device        A device returned by allocateDevice().
      *

@@ -42,6 +42,7 @@ typedef struct NV_KMS_WINDOWS_MODE
 	NvU32 hSyncStart;
 	NvU32 hSyncEnd;
 	NvU32 hTotal;
+	NvU32 hSkew;
 	NvU32 vVisible;
 	NvU32 vSyncStart;
 	NvU32 vSyncEnd;
@@ -49,6 +50,11 @@ typedef struct NV_KMS_WINDOWS_MODE
 	NvU32 widthMillimeters;
 	NvU32 heightMillimeters;
 	NvBool interlaced;
+	NvBool doubleScan;
+	NvBool hSyncPos;
+	NvBool hSyncNeg;
+	NvBool vSyncPos;
+	NvBool vSyncNeg;
 	NvBool preferred;
 } NV_KMS_WINDOWS_MODE;
 
@@ -84,7 +90,7 @@ typedef struct NV_KMS_WINDOWS_LAYER
 typedef struct NV_KMS_WINDOWS_MODESET_OUTPUT
 {
 	NvU32 displayHandle;
-	NvU32 modeIndex;
+	NV_KMS_WINDOWS_MODE mode;
 	NV_KMS_WINDOWS_SURFACE* surface;
 	NvU32 assignedHead;
 } NV_KMS_WINDOWS_MODESET_OUTPUT;

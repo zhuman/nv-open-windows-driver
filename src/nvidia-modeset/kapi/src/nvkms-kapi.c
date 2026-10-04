@@ -72,6 +72,7 @@ ct_assert(NVKMS_KAPI_LAYER_MAX == NVKMS_MAX_LAYERS_PER_HEAD);
 #define NVKMS_KAPI_SUPPORTED_EVENTS_MASK             \
     ((1 << NVKMS_EVENT_TYPE_DPY_CHANGED) |           \
      (1 << NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED) | \
+    (1 << NVKMS_EVENT_TYPE_DYNAMIC_DPY_DISCONNECTED) | \
      (1 << NVKMS_EVENT_TYPE_FLIP_OCCURRED))
 
 static NvU32 EnumerateGpus(void (*gpuCallback)(const struct NvKmsKapiGpuInfo *info))
@@ -3931,6 +3932,11 @@ void nvKmsKapiHandleEventQueueChange
                 kapiEvent.u.dynamicDisplayConnected.display =
                     nvDpyIdToNvU32(kmsEventParams.
                                    reply.event.u.dynamicDpyConnected.dpyId);
+                break;
+            case NVKMS_EVENT_TYPE_DYNAMIC_DPY_DISCONNECTED:
+                kapiEvent.u.dynamicDisplayDisconnected.display =
+                    nvDpyIdToNvU32(kmsEventParams.
+                                   reply.event.u.dynamicDpyDisconnected.dpyId);
                 break;
             case NVKMS_EVENT_TYPE_FLIP_OCCURRED:
                 kapiEvent.u.flipOccurred.head =

@@ -311,6 +311,10 @@ void NvKmsEventCallback(const NvKmsKapiEvent* event)
     {
         display = event->u.dynamicDisplayConnected.display;
     }
+    else if (event->type == NVKMS_EVENT_TYPE_DYNAMIC_DPY_DISCONNECTED)
+    {
+        display = event->u.dynamicDisplayDisconnected.display;
+    }
 
     char traceMessage[112] = {};
     std::snprintf(
@@ -984,6 +988,20 @@ extern "C" NV_STATUS NvKmsWindowsInitialize(void)
     }
     NvKmsWindowsTraceMessage("NVKMS Windows initialize: device allocation complete");
 
+    const NvU32 displayEventInterest =
+        (1U << NVKMS_EVENT_TYPE_DPY_CHANGED) |
+        (1U << NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED) |
+        (1U << NVKMS_EVENT_TYPE_DYNAMIC_DPY_DISCONNECTED);
+    if (!kmsFunctions.declareEventInterest(kmsDevice, displayEventInterest))
+    {
+        NvKmsWindowsTraceMessage("NVKMS Windows initialize: event registration failed");
+        kmsFunctions.freeDevice(kmsDevice);
+        kmsDevice = nullptr;
+        nvKmsModuleUnload();
+        return NV_ERR_GENERIC;
+    }
+    NvKmsWindowsTraceMessage("NVKMS Windows initialize: event registration complete");
+
     if (!kmsFunctions.grabOwnership(kmsDevice))
     {
         NvKmsWindowsTraceMessage("NVKMS Windows initialize: ownership acquisition failed");
@@ -1312,6 +1330,7 @@ extern "C" NV_STATUS NvKmsWindowsGetDisplay(
                 mode->hSyncStart = kmsMode.timings.hSyncStart;
                 mode->hSyncEnd = kmsMode.timings.hSyncEnd;
                 mode->hTotal = kmsMode.timings.hTotal;
+                mode->hSkew = kmsMode.timings.hSkew;
                 mode->vVisible = kmsMode.timings.vVisible;
                 mode->vSyncStart = kmsMode.timings.vSyncStart;
                 mode->vSyncEnd = kmsMode.timings.vSyncEnd;
@@ -1319,6 +1338,11 @@ extern "C" NV_STATUS NvKmsWindowsGetDisplay(
                 mode->widthMillimeters = kmsMode.timings.widthMM;
                 mode->heightMillimeters = kmsMode.timings.heightMM;
                 mode->interlaced = kmsMode.timings.flags.interlaced;
+                mode->doubleScan = kmsMode.timings.flags.doubleScan;
+                mode->hSyncPos = kmsMode.timings.flags.hSyncPos;
+                mode->hSyncNeg = kmsMode.timings.flags.hSyncNeg;
+                mode->vSyncPos = kmsMode.timings.flags.vSyncPos;
+                mode->vSyncNeg = kmsMode.timings.flags.vSyncNeg;
                 mode->preferred = preferred;
                 if (preferred)
                 {
@@ -1563,18 +1587,36 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
         NvKmsWindowsTraceMessage(uploadMessage);
 #endif
 
-        NvBool valid = NV_FALSE;
-        NvBool preferred = NV_FALSE;
-        if (kmsFunctions.getDisplayMode(
-                kmsDevice,
-                outputs[index].displayHandle,
-                outputs[index].modeIndex,
-                &modes[index],
-                &valid,
-                &preferred) < 0 ||
-            !valid ||
-            outputs[index].surface->width != modes[index].timings.hVisible ||
-            outputs[index].surface->height != modes[index].timings.vVisible)
+        const NV_KMS_WINDOWS_MODE* const mode = &outputs[index].mode;
+        NvKmsKapiDisplayModeTimings* const timings = &modes[index].timings;
+        timings->refreshRate = mode->refreshRateMillihertz;
+        timings->pixelClockHz = mode->pixelClockHz;
+        timings->hVisible = mode->hVisible;
+        timings->hSyncStart = mode->hSyncStart;
+        timings->hSyncEnd = mode->hSyncEnd;
+        timings->hTotal = mode->hTotal;
+        timings->hSkew = mode->hSkew;
+        timings->vVisible = mode->vVisible;
+        timings->vSyncStart = mode->vSyncStart;
+        timings->vSyncEnd = mode->vSyncEnd;
+        timings->vTotal = mode->vTotal;
+        timings->widthMM = mode->widthMillimeters;
+        timings->heightMM = mode->heightMillimeters;
+        timings->flags.interlaced = mode->interlaced;
+        timings->flags.doubleScan = mode->doubleScan;
+        timings->flags.hSyncPos = mode->hSyncPos;
+        timings->flags.hSyncNeg = mode->hSyncNeg;
+        timings->flags.vSyncPos = mode->vSyncPos;
+        timings->flags.vSyncNeg = mode->vSyncNeg;
+        nvkms_snprintf(
+            modes[index].name,
+            sizeof(modes[index].name),
+            "%ux%u",
+            mode->hVisible,
+            mode->vVisible);
+
+        if (outputs[index].surface->width != timings->hVisible ||
+            outputs[index].surface->height != timings->vVisible)
         {
             return NV_ERR_INVALID_ARGUMENT;
         }

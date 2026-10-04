@@ -438,7 +438,14 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
         }
         requests[requestCount].displayHandle =
             outputs_[index]->DisplayState().displayHandle;
-        requests[requestCount].modeIndex = modeIndexes[index];
+        const auto* const mode = display_modes::FindDisplayMode(
+            outputs_[index]->DisplayState(), modeIndexes[index]);
+        if (mode == nullptr)
+        {
+            status = STATUS_GRAPHICS_MODE_NOT_PINNED;
+            goto cleanup;
+        }
+        requests[requestCount].mode = *mode;
         requests[requestCount].surface = surfaces[index];
         requestOutputs[requestCount++] = index;
     }
