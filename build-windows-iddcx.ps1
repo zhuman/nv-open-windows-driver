@@ -69,6 +69,7 @@ $msbuild = Find-MSBuild
 $arguments = @(
     $projectPath,
     "/t:$Target",
+    '/restore',
     '/m',
     "/p:Configuration=$Configuration",
     "/p:Platform=$Platform",

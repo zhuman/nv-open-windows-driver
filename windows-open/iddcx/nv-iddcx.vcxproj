@@ -10,6 +10,7 @@
     <ProjectGuid>{9269E1A1-9305-4BA4-894C-4D31BD78060E}</ProjectGuid>
     <RootNamespace>NvIddCx</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
+    <EnableNativePackageReferenceSupport>true</EnableNativePackageReferenceSupport>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
@@ -50,15 +51,21 @@
     <ClCompile Include="adapter.cpp" />
     <ClCompile Include="common_services.cpp" />
     <ClCompile Include="device.cpp" />
+    <ClCompile Include="display_modes.cpp" />
     <ClCompile Include="driver.cpp" />
     <ClCompile Include="hardware_services.cpp" />
+    <ClCompile Include="output.cpp" />
+    <ClCompile Include="swapchain_d3d11.cpp" />
     <Inf Include="nv-iddcx.inf" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="adapter.hpp" />
     <ClInclude Include="common_services.hpp" />
     <ClInclude Include="device.hpp" />
+    <ClInclude Include="display_modes.hpp" />
     <ClInclude Include="hardware_services.hpp" />
+    <ClInclude Include="output.hpp" />
+    <ClInclude Include="swapchain_d3d11.hpp" />
     <ClInclude Include="trace.h" />
   </ItemGroup>
   <ItemGroup>
@@ -80,6 +87,9 @@
     <ProjectReference Include="..\modeset\nvkms-user.vcxproj" Condition="'$(NvRmUserLinkProbe)' == 'true'">
       <Project>{845C8A81-EF0D-4B2E-A34A-69AB1B69D55C}</Project>
     </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.ImplementationLibrary" Version="1.0.260126.7" />
   </ItemGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />

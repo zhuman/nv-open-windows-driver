@@ -1,4 +1,6 @@
 #include "device.hpp"
+#include "display_modes.hpp"
+#include "output.hpp"
 #include "trace.h"
 
 #if defined(NV_RM_USER_LINK_PROBE)

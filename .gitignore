@@ -16,6 +16,7 @@ windows-open/platform/kernel/ARM64/
 # Visual C++ and WDK projects may emit beside the project when built directly.
 windows-open/**/x64/
 windows-open/**/ARM64/
+windows-open/**/obj/
 *.Build.CppClean.log
 *.FileListAbsolute.txt
 *.lastbuildstate
