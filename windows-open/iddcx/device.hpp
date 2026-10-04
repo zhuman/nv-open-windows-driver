@@ -37,6 +37,7 @@ struct DeviceContext final
     NvHandle rmDeviceHandle;
     NvHandle rmSubdeviceHandle;
     HANDLE nvKmsThread;
+    WDFWORKITEM displayChangeWorkItem;
     SRWLOCK lifecycleLock;
     volatile LONG nvKmsWorkCanceled;
     volatile LONG nvKmsWorkCompleted;
@@ -59,5 +60,6 @@ EVT_WDF_DEVICE_D0_EXIT ExitD0;
 EVT_WDF_OBJECT_CONTEXT_CLEANUP DeviceCleanup;
 NTSTATUS StartNvKmsInitialization(_In_ WDFDEVICE device) noexcept;
 DWORD WINAPI InitializeNvKms(_In_ void* parameter);
+EVT_WDF_WORKITEM DisplayChangeWorkItem;
 
 } // namespace nv::iddcx

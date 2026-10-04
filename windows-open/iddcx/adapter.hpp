@@ -37,6 +37,7 @@ public:
     void ExitD0() noexcept;
     void Reset() noexcept;
     bool IsReady() const noexcept;
+    NTSTATUS RefreshDisplays() noexcept;
     IDDCX_ADAPTER Handle() const noexcept { return handle_; }
     WDFDEVICE Device() const noexcept { return device_; }
     void OnOutputDestroyed(_In_ Output* output) noexcept;

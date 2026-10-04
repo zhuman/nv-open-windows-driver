@@ -140,11 +140,12 @@ NTSTATUS Adapter::CompleteInitialization(IDDCX_ADAPTER adapter,
 
 NTSTATUS Adapter::TryAnnounceMonitors() noexcept
 {
+    return RefreshDisplays();
+}
+
+NTSTATUS Adapter::RefreshDisplays() noexcept
+{
     if (!IsReady() || InterlockedCompareExchange(&displayReady_, 0, 0) == 0)
-    {
-        return STATUS_SUCCESS;
-    }
-    if (outputCount_ != 0)
     {
         return STATUS_SUCCESS;
     }
@@ -158,17 +159,52 @@ NTSTATUS Adapter::TryAnnounceMonitors() noexcept
         connectedCount = MaxOutputs;
     }
 
-    // Monitor contexts own Outputs; the adapter keeps only non-owning indexes.
+    NV_KMS_WINDOWS_DISPLAY_STATE displays[MaxOutputs] = {};
     for (NvU32 index = 0; index < connectedCount; ++index)
     {
-        Output* output = nullptr;
-        const NTSTATUS status = Output::Create(*this, index, &output);
+        const NTSTATUS status = display_modes::GetDisplayState(
+            index, &displays[index]);
         if (!NT_SUCCESS(status))
         {
-            ResetOutputs();
             return status;
         }
+    }
+
+    bool connected[MaxOutputs] = {};
+    bool topologyChanged = false;
+    for (NvU32 displayIndex = 0; displayIndex < connectedCount; ++displayIndex)
+    {
+        NvU32 outputIndex = 0;
+        while (outputIndex < outputCount_ &&
+               outputs_[outputIndex]->DisplayState().displayHandle !=
+                   displays[displayIndex].displayHandle)
+        {
+            ++outputIndex;
+        }
+        if (outputIndex < outputCount_)
+        {
+            connected[outputIndex] = true;
+            continue;
+        }
+
+        Output* output = nullptr;
+        const NTSTATUS status = Output::Create(
+            *this, displays[displayIndex], &output);
+        if (!NT_SUCCESS(status))
+        {
+            return status;
+        }
+        connected[outputCount_] = true;
         outputs_[outputCount_++] = output;
+        topologyChanged = true;
+    }
+    for (NvU32 index = 0; index < outputCount_; ++index)
+    {
+        topologyChanged = topologyChanged || !connected[index];
+    }
+    if (!topologyChanged)
+    {
+        return STATUS_SUCCESS;
     }
 
     ModePath paths[MaxOutputs] = {};
@@ -179,22 +215,51 @@ NTSTATUS Adapter::TryAnnounceMonitors() noexcept
             ? state.preferredModeIndex
             : 0;
         paths[index].monitor = outputs_[index]->Monitor();
-        paths[index].flags = IDDCX_PATH_FLAGS_ACTIVE;
-        display_modes::FillSignalInfo(
-            &paths[index].signalInfo,
-            state.modes[preferred],
-            false);
+        if (connected[index])
+        {
+            paths[index].flags = IDDCX_PATH_FLAGS_ACTIVE;
+            display_modes::FillSignalInfo(
+                &paths[index].signalInfo,
+                state.modes[preferred],
+                false);
+        }
     }
-    const NTSTATUS status = CommitDisplayModes(paths, outputCount_);
+    NTSTATUS status = CommitDisplayModes(paths, outputCount_);
     TraceEvents(
         NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,
-        "Preferred mode restore: %!STATUS! outputs=%u",
+        "Display topology modeset: %!STATUS! outputs=%u connected=%u",
         status,
-        outputCount_);
+        outputCount_,
+        connectedCount);
     if (!NT_SUCCESS(status))
     {
-        ResetOutputs();
+        return status;
+    }
+
+    for (NvU32 index = outputCount_; index-- > 0;)
+    {
+        if (connected[index])
+        {
+            continue;
+        }
+        Output* const output = outputs_[index];
+        const NTSTATUS departureStatus = IddCxMonitorDeparture(output->Monitor());
+        TraceEvents(
+            NT_SUCCESS(departureStatus)
+                ? TRACE_LEVEL_INFORMATION
+                : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "IddCxMonitorDeparture: %!STATUS! display=0x%08X",
+            departureStatus,
+            output->DisplayState().displayHandle);
+        if (!NT_SUCCESS(departureStatus))
+        {
+            status = departureStatus;
+            continue;
+        }
+        OnOutputDestroyed(output);
+        WdfObjectDelete(output->Monitor());
     }
     return status;
 }

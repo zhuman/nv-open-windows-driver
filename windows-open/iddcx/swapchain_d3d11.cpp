@@ -11,6 +11,10 @@
 
 #include "swapchain_d3d11.tmh"
 
+#ifndef NV_IDDCX_DROP_SWAPCHAIN_FRAMES
+#define NV_IDDCX_DROP_SWAPCHAIN_FRAMES 1
+#endif
+
 namespace nv::iddcx {
 
 SwapChainD3D11::SwapChainD3D11(
@@ -98,9 +102,15 @@ NTSTATUS SwapChainD3D11::Create(
 
 HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
 {
+#if !NV_IDDCX_DROP_SWAPCHAIN_FRAMES
     HRESULT result = CreateDevice(adapterLuid);
     if (FAILED(result))
     {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "AssignSwapChain: D3D device creation failed 0x%08X",
+            result);
         return result;
     }
     IDARG_IN_SWAPCHAINSETDEVICE setDevice = {};
@@ -108,8 +118,16 @@ HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
     result = IddCxSwapChainSetDevice(handle_, &setDevice);
     if (FAILED(result))
     {
+        TraceEvents(
+            TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "AssignSwapChain: set D3D device failed 0x%08X",
+            result);
         return result;
     }
+#else
+    UNREFERENCED_PARAMETER(adapterLuid);
+#endif
 
     WDF_WORKITEM_CONFIG workItemConfig;
     WDF_WORKITEM_CONFIG_INIT(&workItemConfig, FailureCleanup);
@@ -302,10 +320,11 @@ void SwapChainD3D11::Process() noexcept
         }
         if (buffer.MetaData.pSurface != nullptr)
         {
-            // Acquisition transfers one resource reference; scope it through copy/present.
+            // Acquisition transfers one resource reference; release it before finishing.
             wil::com_ptr_nothrow<IDXGIResource> surface;
             surface.attach(buffer.MetaData.pSurface);
 
+#if !NV_IDDCX_DROP_SWAPCHAIN_FRAMES
             // Keep mode and scanout ownership stable through both transfer stages.
             auto outputLock = output_->LockFrameStateShared();
             result = CopyFrame(surface.get());
@@ -335,6 +354,7 @@ void SwapChainD3D11::Process() noexcept
                 failed = true;
                 break;
             }
+#endif
         }
         result = IddCxSwapChainFinishedProcessingFrame(handle_);
         if (FAILED(result))

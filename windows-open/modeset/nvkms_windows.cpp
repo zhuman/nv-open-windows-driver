@@ -10,12 +10,17 @@ extern "C" {
 }
 
 #include <class/cl0000.h>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <windows.h>
 
 #ifndef NV_KMS_WINDOWS_VERIFY_SCANOUT_UPLOAD
 #define NV_KMS_WINDOWS_VERIFY_SCANOUT_UPLOAD 0
+#endif
+
+#ifndef NV_KMS_WINDOWS_BYPASS_COMPOSITION
+#define NV_KMS_WINDOWS_BYPASS_COMPOSITION 0
 #endif
 
 struct nvkms_ref_ptr
@@ -66,8 +71,55 @@ nv_gpu_info_t registeredGpu = {};
 NvBool gpuRegistered = NV_FALSE;
 NvKmsKapiFunctionsTable kmsFunctions = {};
 NvKmsKapiDevice* kmsDevice = nullptr;
+NV_KMS_WINDOWS_SURFACE* kmsDefaultLutSurface = nullptr;
 NvKmsKapiGpuInfo enumeratedKmsGpu = {};
 NvBool kmsGpuEnumerated = NV_FALSE;
+std::atomic<NV_KMS_WINDOWS_DISPLAY_CHANGE_CALLBACK>
+    displayChangeCallback{nullptr};
+std::atomic<void*> displayChangeContext{nullptr};
+
+constexpr NvU32 LutHeaderEntries = 4;
+constexpr NvU32 LutEntries = 1025;
+constexpr NvU32 LutSurfaceAlignment = 0x100;
+
+struct LutEntry
+{
+    NvU16 Red;
+    NvU16 Green;
+    NvU16 Blue;
+    NvU16 Reserved;
+};
+
+struct LutData
+{
+    LutEntry base[LutHeaderEntries + LutEntries];
+    alignas(LutSurfaceAlignment)
+        LutEntry output[LutHeaderEntries + LutEntries];
+};
+
+NvU16 Unorm10ToFp16(NvU16 value)
+{
+    if (value == 0)
+    {
+        return 0;
+    }
+
+    const float normalized = static_cast<float>(value) / 1023.0F;
+    NvU32 bits = 0;
+    std::memcpy(&bits, &normalized, sizeof(bits));
+
+    NvU32 exponent = (bits >> 23) & 0xFF;
+    NvU32 mantissa = bits & 0x7FFFFF;
+    mantissa += 0xFFF + ((mantissa >> 13) & 1);
+    if ((mantissa & 0x800000) != 0)
+    {
+        mantissa = 0;
+        ++exponent;
+    }
+
+    return static_cast<NvU16>(((exponent - 112) << 10) |
+                              (mantissa >> 13));
+}
 SRWLOCK kmsDeviceLock = SRWLOCK_INIT;
 INIT_ONCE kmsLockInitOnce = INIT_ONCE_STATIC_INIT;
 CRITICAL_SECTION kmsLock;
@@ -94,6 +146,128 @@ public:
     KmsDeviceLockGuard(const KmsDeviceLockGuard&) = delete;
     KmsDeviceLockGuard& operator=(const KmsDeviceLockGuard&) = delete;
 };
+
+void DestroySurface(NV_KMS_WINDOWS_SURFACE* surface)
+{
+    if (surface == nullptr)
+    {
+        return;
+    }
+
+    if (kmsDevice != nullptr)
+    {
+        if (surface->surface != nullptr)
+        {
+            kmsFunctions.destroySurface(kmsDevice, surface->surface);
+        }
+        if (surface->pixels != nullptr && surface->stagingMemory != nullptr)
+        {
+            kmsFunctions.unmapMemory(
+                kmsDevice, surface->stagingMemory,
+                NVKMS_KAPI_MAPPING_TYPE_USER,
+                surface->pixels);
+        }
+        if (surface->stagingMemory != nullptr)
+        {
+            kmsFunctions.freeMemory(kmsDevice, surface->stagingMemory);
+        }
+        if (surface->memory != nullptr)
+        {
+            kmsFunctions.freeMemory(kmsDevice, surface->memory);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, surface);
+}
+
+NV_STATUS EnsureDefaultLutSurface()
+{
+    if (kmsDefaultLutSurface != nullptr)
+    {
+        return NV_OK;
+    }
+
+    const NvU64 size =
+        (sizeof(LutData) + LutSurfaceAlignment - 1) &
+        ~(static_cast<NvU64>(LutSurfaceAlignment) - 1);
+    auto* const lut = static_cast<NV_KMS_WINDOWS_SURFACE*>(
+        HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                  sizeof(NV_KMS_WINDOWS_SURFACE)));
+    if (lut == nullptr)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    NvU8 compressible = 0;
+    NvKmsKapiAllocateMemoryParams memoryParams = {};
+    memoryParams.layout = NvKmsSurfaceMemoryLayoutPitch;
+    memoryParams.type = NVKMS_KAPI_ALLOCATION_TYPE_SCANOUT;
+    memoryParams.size = size;
+    memoryParams.noDisplayCaching = NV_TRUE;
+    memoryParams.useVideoMemory = NV_TRUE;
+    memoryParams.compressible = &compressible;
+    lut->memory = kmsFunctions.allocateMemory(kmsDevice, &memoryParams);
+    if (lut->memory == nullptr)
+    {
+        DestroySurface(lut);
+        return NV_ERR_NO_MEMORY;
+    }
+
+    memoryParams.useVideoMemory = NV_FALSE;
+    lut->stagingMemory = kmsFunctions.allocateMemory(kmsDevice, &memoryParams);
+    if (lut->stagingMemory == nullptr ||
+        !kmsFunctions.mapMemory(
+            kmsDevice, lut->stagingMemory, NVKMS_KAPI_MAPPING_TYPE_USER,
+            &lut->pixels))
+    {
+        DestroySurface(lut);
+        return NV_ERR_NO_MEMORY;
+    }
+
+    lut->size = size;
+    lut->width = static_cast<NvU32>(size / sizeof(LutEntry));
+    lut->height = 1;
+    lut->pitch = static_cast<NvU32>(size);
+
+    auto* const data = static_cast<LutData*>(lut->pixels);
+    std::memset(data, 0, static_cast<size_t>(size));
+    for (NvU32 index = 0; index < 1024; ++index)
+    {
+        data->base[LutHeaderEntries + index].Red =
+        data->base[LutHeaderEntries + index].Green =
+        data->base[LutHeaderEntries + index].Blue =
+            Unorm10ToFp16(static_cast<NvU16>(index));
+        data->output[LutHeaderEntries + index].Red =
+        data->output[LutHeaderEntries + index].Green =
+        data->output[LutHeaderEntries + index].Blue =
+            static_cast<NvU16>(index << 6);
+    }
+    data->base[LutHeaderEntries + 1024] =
+        data->base[LutHeaderEntries + 1023];
+    data->output[LutHeaderEntries + 1024] =
+        data->output[LutHeaderEntries + 1023];
+
+    NvKmsKapiCreateSurfaceParams surfaceParams = {};
+    surfaceParams.planes[0].memory = lut->memory;
+    surfaceParams.planes[0].pitch = lut->pitch;
+    surfaceParams.width = lut->width;
+    surfaceParams.height = lut->height;
+    surfaceParams.format = NvKmsSurfaceMemoryFormatR16G16B16A16;
+    surfaceParams.explicit_layout = NV_TRUE;
+    surfaceParams.layout = NvKmsSurfaceMemoryLayoutPitch;
+    lut->surface = kmsFunctions.createSurface(kmsDevice, &surfaceParams);
+    FlushProcessWriteBuffers();
+    if (lut->surface == nullptr ||
+        !kmsFunctions.copyMemory(
+            kmsDevice, lut->memory, lut->stagingMemory, lut->size))
+    {
+        DestroySurface(lut);
+        return NV_ERR_GENERIC;
+    }
+
+    kmsDefaultLutSurface = lut;
+    NvKmsWindowsTraceMessage("NVKMS default LUT uploaded to vidmem");
+    return NV_OK;
+}
 
 BOOL CALLBACK NvKmsInitializeLock(PINIT_ONCE, void*, void**)
 {
@@ -128,17 +302,39 @@ void NvKmsEventCallback(const NvKmsKapiEvent* event)
         return;
     }
 
-    char traceMessage[96] = {};
+    NvKmsKapiDisplay display = 0;
+    if (event->type == NVKMS_EVENT_TYPE_DPY_CHANGED)
+    {
+        display = event->u.displayChanged.display;
+    }
+    else if (event->type == NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED)
+    {
+        display = event->u.dynamicDisplayConnected.display;
+    }
+
+    char traceMessage[112] = {};
     std::snprintf(
         traceMessage,
         sizeof(traceMessage),
-        "NVKMS event: type=%u head=%u layer=%u",
+        "NVKMS event: type=%u display=0x%08X head=%u layer=%u",
         static_cast<NvU32>(event->type),
+        display,
         event->type == NVKMS_EVENT_TYPE_FLIP_OCCURRED ?
             event->u.flipOccurred.head : 0,
         event->type == NVKMS_EVENT_TYPE_FLIP_OCCURRED ?
             event->u.flipOccurred.layer : 0);
     NvKmsWindowsTraceMessage(traceMessage);
+
+    if (event->type == NVKMS_EVENT_TYPE_DPY_CHANGED ||
+        event->type == NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED ||
+        event->type == NVKMS_EVENT_TYPE_DYNAMIC_DPY_DISCONNECTED)
+    {
+        const auto callback = displayChangeCallback.load(std::memory_order_acquire);
+        if (callback != nullptr)
+        {
+            callback(displayChangeContext.load(std::memory_order_relaxed));
+        }
+    }
 }
 
 DWORD WINAPI NvKmsTimerCleanup(void* context)
@@ -727,6 +923,21 @@ extern "C" NV_STATUS NvKmsWindowsProbeRmClient(NvHandle* clientHandle)
     return status;
 }
 
+extern "C" void NvKmsWindowsSetDisplayChangeCallback(
+    NV_KMS_WINDOWS_DISPLAY_CHANGE_CALLBACK callback,
+    void* context)
+{
+    if (callback == nullptr)
+    {
+        displayChangeCallback.store(nullptr, std::memory_order_release);
+        displayChangeContext.store(nullptr, std::memory_order_relaxed);
+        return;
+    }
+
+    displayChangeContext.store(context, std::memory_order_relaxed);
+    displayChangeCallback.store(callback, std::memory_order_release);
+}
+
 extern "C" NV_STATUS NvKmsWindowsInitialize(void)
 {
     KmsDeviceLockGuard lock;
@@ -792,6 +1003,8 @@ extern "C" void NvKmsWindowsShutdown(void)
 
     if (kmsDevice != nullptr)
     {
+        DestroySurface(kmsDefaultLutSurface);
+        kmsDefaultLutSurface = nullptr;
         kmsFunctions.releaseOwnership(kmsDevice);
         kmsFunctions.freeDevice(kmsDevice);
         kmsDevice = nullptr;
@@ -1276,29 +1489,7 @@ extern "C" void NvKmsWindowsDestroyScanoutSurface(
     }
 
     KmsDeviceLockGuard lock;
-    if (kmsDevice != nullptr)
-    {
-        if (surface->surface != nullptr)
-        {
-            kmsFunctions.destroySurface(kmsDevice, surface->surface);
-        }
-        if (surface->pixels != nullptr && surface->memory != nullptr)
-        {
-            kmsFunctions.unmapMemory(
-                kmsDevice, surface->stagingMemory,
-                NVKMS_KAPI_MAPPING_TYPE_USER,
-                surface->pixels);
-        }
-        if (surface->stagingMemory != nullptr)
-        {
-            kmsFunctions.freeMemory(kmsDevice, surface->stagingMemory);
-        }
-        if (surface->memory != nullptr)
-        {
-            kmsFunctions.freeMemory(kmsDevice, surface->memory);
-        }
-    }
-    HeapFree(GetProcessHeap(), 0, surface);
+    DestroySurface(surface);
 }
 
 extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
@@ -1322,6 +1513,13 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
         outputCount > resources.numHeads)
     {
         return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    const NV_STATUS lutStatus = EnsureDefaultLutSurface();
+    if (lutStatus != NV_OK)
+    {
+        NvKmsWindowsTraceMessage("NVKMS default LUT upload failed");
+        return lutStatus;
     }
 
     NvKmsKapiDisplayMode modes[NVKMS_KAPI_MAX_HEADS] = {};
@@ -1432,7 +1630,8 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
 
         NvKmsKapiRequestedModeSetConfig requested = {};
         NvKmsKapiModeSetReplyConfig reply = {};
-        requested.bypassComposition = NV_TRUE;
+        requested.bypassComposition =
+            NV_KMS_WINDOWS_BYPASS_COMPOSITION ? NV_TRUE : NV_FALSE;
         for (NvU32 index = 0; index < outputCount; ++index)
         {
             const NvU32 head = assignedHeads[index];
@@ -1446,6 +1645,13 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             headConfig->modeSetConfig.colorBpcSpecified = NV_TRUE;
             headConfig->modeSetConfig.olutFpNormScale =
                 NVKMS_OLUT_FP_NORM_SCALE_DEFAULT;
+            headConfig->modeSetConfig.olut.enabled = NV_TRUE;
+            headConfig->modeSetConfig.olut.lutSurface =
+                kmsDefaultLutSurface->surface;
+            headConfig->modeSetConfig.olut.offset =
+                static_cast<NvU32>(offsetof(LutData, output));
+            headConfig->modeSetConfig.olut.lutEntries =
+                LutEntries;
             headConfig->flags.activeChanged = NV_TRUE;
             headConfig->flags.displaysChanged = NV_TRUE;
             headConfig->flags.modeChanged = NV_TRUE;
@@ -1483,6 +1689,11 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             auto* const layer =
                 &headConfig->layerRequestedConfig[NVKMS_KAPI_LAYER_PRIMARY_IDX];
             layer->config.surface = outputs[index].surface->surface;
+            layer->config.ilut.enabled = NV_TRUE;
+            layer->config.ilut.lutSurface = kmsDefaultLutSurface->surface;
+            layer->config.ilut.offset =
+                static_cast<NvU32>(offsetof(LutData, base));
+            layer->config.ilut.lutEntries = LutEntries;
             layer->config.srcWidth =
                 static_cast<NvU16>(modes[index].timings.hVisible);
             layer->config.srcHeight =

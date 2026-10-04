@@ -394,6 +394,11 @@ void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
 #if defined(NV_RM_USER_LINK_PROBE)
     if (context->nvKmsInitialized)
     {
+        NvKmsWindowsSetDisplayChangeCallback(nullptr, nullptr);
+        if (context->displayChangeWorkItem != nullptr)
+        {
+            WdfWorkItemFlush(context->displayChangeWorkItem);
+        }
         NvKmsWindowsShutdown();
         context->nvKmsInitialized = false;
     }
@@ -538,6 +543,21 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     void* contextStorage = GetDeviceContext(device);
     auto* context = new (contextStorage) DeviceContext{};
     InitializeSRWLock(&context->lifecycleLock);
+
+    WDF_WORKITEM_CONFIG workItemConfig;
+    WDF_WORKITEM_CONFIG_INIT(&workItemConfig, DisplayChangeWorkItem);
+    WDF_OBJECT_ATTRIBUTES workItemAttributes;
+    WDF_OBJECT_ATTRIBUTES_INIT(&workItemAttributes);
+    workItemAttributes.ParentObject = device;
+    status = WdfWorkItemCreate(
+        &workItemConfig,
+        &workItemAttributes,
+        &context->displayChangeWorkItem);
+    if (!NT_SUCCESS(status))
+    {
+        WdfObjectDelete(device);
+        return status;
+    }
 
     const NV_STATUS nvStatus = nvCommonHostInitialize(
         &context->commonHost,
@@ -998,6 +1018,20 @@ DWORD WINAPI InitializeNvKms(void* parameter)
         return 0;
     }
     context->nvKmsInitialized = true;
+    NvKmsWindowsSetDisplayChangeCallback(
+        [](void* callbackContext)
+        {
+            const WDFDEVICE callbackDevice =
+                static_cast<WDFDEVICE>(callbackContext);
+            DeviceContext* const callbackDeviceContext =
+                GetDeviceContext(callbackDevice);
+            if (callbackDeviceContext->displayChangeWorkItem != nullptr)
+            {
+                WdfWorkItemEnqueue(
+                    callbackDeviceContext->displayChangeWorkItem);
+            }
+        },
+        device);
 
     NV_KMS_WINDOWS_DISPLAY_INFO displayInfo = {};
     const NV_STATUS displayProbeStatus = NvKmsWindowsProbeDisplays(&displayInfo);
@@ -1108,6 +1142,30 @@ NTSTATUS StartNvKmsInitialization(_In_ WDFDEVICE device) noexcept
     UNREFERENCED_PARAMETER(device);
     return STATUS_SUCCESS;
 #endif
+}
+
+_Use_decl_annotations_
+void DisplayChangeWorkItem(WDFWORKITEM workItem)
+{
+    const WDFDEVICE device = static_cast<WDFDEVICE>(
+        WdfWorkItemGetParentObject(workItem));
+    DeviceContext* const context = GetDeviceContext(device);
+
+    AcquireSRWLockExclusive(&context->lifecycleLock);
+    NTSTATUS status = STATUS_DEVICE_NOT_READY;
+    if (context->nvKmsInitialized &&
+        InterlockedCompareExchange(&context->d0Active, 0, 0) != 0 &&
+        InterlockedCompareExchange(&context->nvKmsWorkCanceled, 0, 0) == 0)
+    {
+        status = context->adapter.RefreshDisplays();
+    }
+    ReleaseSRWLockExclusive(&context->lifecycleLock);
+
+    TraceEvents(
+        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "Display change refresh: %!STATUS!",
+        status);
 }
 
 _Use_decl_annotations_

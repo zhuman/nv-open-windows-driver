@@ -75,17 +75,10 @@ Output::~Output() noexcept
 
 NTSTATUS Output::Create(
     Adapter& owner,
-    NvU32 displayIndex,
+    const NV_KMS_WINDOWS_DISPLAY_STATE& state,
     Output** output) noexcept
 {
     *output = nullptr;
-    NV_KMS_WINDOWS_DISPLAY_STATE state = {};
-    NTSTATUS status = display_modes::GetDisplayState(displayIndex, &state);
-    if (!NT_SUCCESS(status))
-    {
-        return status;
-    }
-
     IDDCX_MONITOR_INFO info = {};
     info.Size = sizeof(info);
     info.MonitorType = display_modes::GetOutputTechnology(state.connectorType);
@@ -93,7 +86,7 @@ NTSTATUS Output::Create(
     info.MonitorDescription.Size = sizeof(info.MonitorDescription);
     info.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
     info.MonitorDescription.DataSize = state.edidBytes;
-    info.MonitorDescription.pData = state.edid;
+    info.MonitorDescription.pData = const_cast<NvU8*>(state.edid);
     info.MonitorContainerId = {
         0x1500c36c ^ state.displayHandle, 0x73e5, 0x4bd2,
         { 0x93, 0xa7, 0xe6, 0x8c, 0x59, 0xd4, 0xe7, 0x9c } };
@@ -105,7 +98,7 @@ NTSTATUS Output::Create(
     input.ObjectAttributes = &attributes;
     input.pMonitorInfo = &info;
     IDARG_OUT_MONITORCREATE createOutput = {};
-    status = IddCxMonitorCreate(owner.Handle(), &input, &createOutput);
+    NTSTATUS status = IddCxMonitorCreate(owner.Handle(), &input, &createOutput);
     TraceEvents(
         NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,

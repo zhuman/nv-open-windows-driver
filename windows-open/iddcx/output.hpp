@@ -22,7 +22,7 @@ class Output final
 public:
     static NTSTATUS Create(
         Adapter& owner,
-        NvU32 displayIndex,
+        const NV_KMS_WINDOWS_DISPLAY_STATE& state,
         Output** output) noexcept;
     ~Output() noexcept;
 

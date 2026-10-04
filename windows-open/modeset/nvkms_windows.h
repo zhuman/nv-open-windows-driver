@@ -31,6 +31,7 @@ typedef struct NV_KMS_WINDOWS_DISPLAY_INFO
 #define NV_KMS_WINDOWS_MAX_LAYERS 8
 
 typedef struct NV_KMS_WINDOWS_SURFACE NV_KMS_WINDOWS_SURFACE;
+typedef void (*NV_KMS_WINDOWS_DISPLAY_CHANGE_CALLBACK)(void* context);
 
 typedef struct NV_KMS_WINDOWS_MODE
 {
@@ -119,6 +120,9 @@ NV_STATUS NvKmsWindowsPresentLayers(
 	const NV_KMS_WINDOWS_LAYER* layers,
 	NvU32 layerCount);
 NV_STATUS NvKmsWindowsProbeRmClient(NvHandle* clientHandle);
+void NvKmsWindowsSetDisplayChangeCallback(
+	NV_KMS_WINDOWS_DISPLAY_CHANGE_CALLBACK callback,
+	void* context);
 NV_STATUS NvKmsWindowsInitialize(void);
 void NvKmsWindowsShutdown(void);
 

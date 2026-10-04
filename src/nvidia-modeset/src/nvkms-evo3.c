@@ -53,6 +53,18 @@
 #include <class/clc573.h> // NVC573_DISP_CAPABILITIES
 #include <class/clc57d.h> // NVC57D_CORE_CHANNEL_DMA
 #include <class/clc57e.h> // NVC57E_WINDOW_CHANNEL_DMA
+
+#ifndef NV_WINDOWS_IDDCX_BYPASS_WINDOW_COMPOSITION
+#define NV_WINDOWS_IDDCX_BYPASS_WINDOW_COMPOSITION 0
+#endif
+
+#ifndef NV_WINDOWS_IDDCX_BYPASS_OUTPUT_COLOR
+#define NV_WINDOWS_IDDCX_BYPASS_OUTPUT_COLOR 0
+#endif
+
+#ifndef NV_WINDOWS_IDDCX_BYPASS_INPUT_COLOR
+#define NV_WINDOWS_IDDCX_BYPASS_INPUT_COLOR 0
+#endif
 #include <class/clc57esw.h>
 #include <class/clc673.h> // NVC673_DISP_CAPABILITIES
 #include <class/clc67d.h> // NVC67D_CORE_CHANNEL_DMA
@@ -4385,6 +4397,10 @@ EvoFlipC5Common(NVDevEvoPtr pDevEvo,
         }
     }
 
+#if defined(NV_WINDOWS_IDDCX) && NV_WINDOWS_IDDCX_BYPASS_INPUT_COLOR
+    pLutSurfaceEvo = NULL;
+#endif
+
     if (pLutSurfaceEvo) {
         nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_ILUT_CONTROL, 1);
         nvDmaSetEvoMethodData(pChannel,
@@ -4758,6 +4774,13 @@ UpdateCompositionC5(NVDevEvoPtr pDevEvo,
                     NvBool bypassComposition,
                     enum NvKmsSurfaceMemoryFormat format)
 {
+#if defined(NV_WINDOWS_IDDCX) && NV_WINDOWS_IDDCX_BYPASS_WINDOW_COMPOSITION
+    if (!bypassComposition) {
+        EvoBypassCompositionC5(pDevEvo, pChannel, updateState);
+        return;
+    }
+#endif
+
     if (bypassComposition) {
         EvoBypassCompositionC5(pDevEvo, pChannel, updateState);
     } else {
@@ -5004,6 +5027,10 @@ static void EvoSetOutputLutC5(NVDevEvoPtr pDevEvo,
                               NVEvoUpdateState *updateState,
                               NvBool bypassComposition)
 {
+#if defined(NV_WINDOWS_IDDCX) && NV_WINDOWS_IDDCX_BYPASS_OUTPUT_COLOR
+    bypassComposition = TRUE;
+#endif
+
     const NVDispEvoRec *pDispEvo = pDevEvo->pDispEvo[sd];
     NVEvoChannelPtr pChannel = pDevEvo->core;
     NvBool enableOutputLut = (pOutputLut->pLutSurfaceEvo != NULL);
