@@ -36,6 +36,7 @@ struct OutputState final
     HANDLE swapchainThread;
     HANDLE swapchainStopEvent;
     HANDLE nextSurfaceEvent;
+    ID3D11Texture2D* readbackTexture;
     SRWLOCK swapchainLock;
     NV_KMS_WINDOWS_SURFACE* scanoutSurface;
     void* scanoutPixels;

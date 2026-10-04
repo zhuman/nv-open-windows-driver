@@ -9,6 +9,10 @@
 
 #include "adapter.tmh"
 
+#ifndef NV_IDDCX_STATIC_GRADIENT
+#define NV_IDDCX_STATIC_GRADIENT 1
+#endif
+
 namespace {
 
 constexpr wchar_t EndpointFriendlyName[] = L"NVIDIA Indirect Display Adapter";
@@ -327,6 +331,126 @@ HRESULT CreateSwapChainDevice(
 } // namespace
 
 namespace nv::iddcx {
+
+HRESULT CopySwapChainFrame(
+    _Inout_ OutputState* output,
+    _In_ IDXGIResource* surface) noexcept
+{
+    if (output->scanoutPixels == nullptr || output->scanoutPitch == 0)
+    {
+        return E_UNEXPECTED;
+    }
+
+    const NV_KMS_WINDOWS_MODE* const mode =
+        FindDisplayMode(output->displayState, output->activeModeIndex);
+    if (mode == nullptr)
+    {
+        return E_UNEXPECTED;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> source;
+    HRESULT result = surface->QueryInterface(IID_PPV_ARGS(&source));
+    if (FAILED(result))
+    {
+        return result;
+    }
+
+    D3D11_TEXTURE2D_DESC sourceDesc = {};
+    source->GetDesc(&sourceDesc);
+    if (sourceDesc.Width != mode->hVisible ||
+        sourceDesc.Height != mode->vVisible ||
+        (sourceDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
+         sourceDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB &&
+         sourceDesc.Format != DXGI_FORMAT_B8G8R8X8_UNORM &&
+         sourceDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM &&
+         sourceDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB))
+    {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    source->GetDevice(&device);
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(&context);
+
+    ID3D11Texture2D* mappedTexture = source.Get();
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    result = context->Map(mappedTexture, 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(result))
+    {
+        bool replaceReadback = output->readbackTexture == nullptr;
+        if (!replaceReadback)
+        {
+            D3D11_TEXTURE2D_DESC readbackDesc = {};
+            output->readbackTexture->GetDesc(&readbackDesc);
+            replaceReadback = readbackDesc.Width != sourceDesc.Width ||
+                readbackDesc.Height != sourceDesc.Height ||
+                readbackDesc.Format != sourceDesc.Format;
+        }
+
+        if (replaceReadback)
+        {
+            if (output->readbackTexture != nullptr)
+            {
+                output->readbackTexture->Release();
+                output->readbackTexture = nullptr;
+            }
+            D3D11_TEXTURE2D_DESC readbackDesc = sourceDesc;
+            readbackDesc.MipLevels = 1;
+            readbackDesc.ArraySize = 1;
+            readbackDesc.SampleDesc.Count = 1;
+            readbackDesc.SampleDesc.Quality = 0;
+            readbackDesc.Usage = D3D11_USAGE_STAGING;
+            readbackDesc.BindFlags = 0;
+            readbackDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            readbackDesc.MiscFlags = 0;
+            result = device->CreateTexture2D(
+                &readbackDesc, nullptr, &output->readbackTexture);
+            if (FAILED(result))
+            {
+                return result;
+            }
+        }
+
+        mappedTexture = output->readbackTexture;
+        context->CopyResource(mappedTexture, source.Get());
+        result = context->Map(mappedTexture, 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(result))
+        {
+            return result;
+        }
+    }
+
+    auto* const destination = static_cast<NvU8*>(output->scanoutPixels);
+    const auto* const sourceBytes = static_cast<const NvU8*>(mapped.pData);
+    const size_t rowBytes = static_cast<size_t>(mode->hVisible) * 4;
+    if (output->scanoutPitch < rowBytes)
+    {
+        context->Unmap(mappedTexture, 0);
+        return E_UNEXPECTED;
+    }
+    const bool rgba = sourceDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+        sourceDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    for (NvU32 y = 0; y < mode->vVisible; ++y)
+    {
+        NvU8* const destinationRow = destination + output->scanoutPitch * y;
+        const NvU8* const sourceRow = sourceBytes + mapped.RowPitch * y;
+        if (!rgba)
+        {
+            std::memcpy(destinationRow, sourceRow, rowBytes);
+            continue;
+        }
+        for (NvU32 x = 0; x < mode->hVisible; ++x)
+        {
+            destinationRow[x * 4 + 0] = sourceRow[x * 4 + 2];
+            destinationRow[x * 4 + 1] = sourceRow[x * 4 + 1];
+            destinationRow[x * 4 + 2] = sourceRow[x * 4 + 0];
+            destinationRow[x * 4 + 3] = 0xff;
+        }
+    }
+    context->Unmap(mappedTexture, 0);
+    return S_OK;
+}
 
 Adapter::Adapter() noexcept
     : handle_(nullptr),
@@ -758,7 +882,38 @@ void Adapter::ProcessSwapChain(_Inout_ OutputState* output) noexcept
 
         if (buffer.MetaData.pSurface != nullptr)
         {
+            result = CopySwapChainFrame(output, buffer.MetaData.pSurface);
             buffer.MetaData.pSurface->Release();
+            if (FAILED(result))
+            {
+                processingFailed = true;
+                break;
+            }
+
+            const NV_KMS_WINDOWS_MODE* const mode =
+                FindDisplayMode(output->displayState, output->activeModeIndex);
+            if (mode == nullptr)
+            {
+                result = E_UNEXPECTED;
+                processingFailed = true;
+                break;
+            }
+
+            NV_KMS_WINDOWS_LAYER layer = {};
+            layer.surface = output->scanoutSurface;
+            layer.sourceWidth = mode->hVisible;
+            layer.sourceHeight = mode->vVisible;
+            layer.destinationWidth = mode->hVisible;
+            layer.destinationHeight = mode->vVisible;
+            layer.opacity = 255;
+            const NV_STATUS presentStatus = NvKmsWindowsPresentLayers(
+                output->assignedHead, &layer, 1);
+            if (presentStatus != NV_OK && presentStatus != NV_ERR_IN_USE)
+            {
+                result = E_FAIL;
+                processingFailed = true;
+                break;
+            }
         }
 
         result = IddCxSwapChainFinishedProcessingFrame(swapchain);
@@ -815,6 +970,8 @@ void Adapter::StopSwapChain(_Inout_ OutputState* output) noexcept
     HANDLE stopEvent = output->swapchainStopEvent;
     output->swapchainStopEvent = nullptr;
     output->nextSurfaceEvent = nullptr;
+    ID3D11Texture2D* readbackTexture = output->readbackTexture;
+    output->readbackTexture = nullptr;
     ReleaseSRWLockExclusive(&output->swapchainLock);
 
     if (swapchain != nullptr)
@@ -828,6 +985,10 @@ void Adapter::StopSwapChain(_Inout_ OutputState* output) noexcept
     if (stopEvent != nullptr)
     {
         CloseHandle(stopEvent);
+    }
+    if (readbackTexture != nullptr)
+    {
+        readbackTexture->Release();
     }
 }
 
@@ -993,12 +1154,19 @@ NTSTATUS Adapter::CommitDisplayModes(
                     STATUS_INSUFFICIENT_RESOURCES : STATUS_DEVICE_NOT_READY;
                 goto cleanup;
             }
+#if NV_IDDCX_STATIC_GRADIENT
             FillGradient(
                 newPixels[outputIndex],
                 newPitches[outputIndex],
                 mode->hVisible,
                 mode->vVisible,
                 outputIndex);
+#else
+            std::memset(
+                newPixels[outputIndex],
+                0,
+                static_cast<size_t>(newPitches[outputIndex]) * mode->vVisible);
+#endif
             surfaces[outputIndex] = newSurfaces[outputIndex];
         }
     }

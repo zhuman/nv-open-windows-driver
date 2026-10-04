@@ -14,6 +14,10 @@ extern "C" {
 #include <cstring>
 #include <windows.h>
 
+#ifndef NV_KMS_WINDOWS_VERIFY_SCANOUT_UPLOAD
+#define NV_KMS_WINDOWS_VERIFY_SCANOUT_UPLOAD 0
+#endif
+
 struct nvkms_ref_ptr
 {
     volatile LONG references;
@@ -68,6 +72,7 @@ SRWLOCK kmsDeviceLock = SRWLOCK_INIT;
 INIT_ONCE kmsLockInitOnce = INIT_ONCE_STATIC_INIT;
 CRITICAL_SECTION kmsLock;
 
+#if NV_KMS_WINDOWS_VERIFY_SCANOUT_UPLOAD
 NvU32 HashSurface(const void* pixels, NvU64 size)
 {
     const auto* const bytes = static_cast<const NvU8*>(pixels);
@@ -78,6 +83,7 @@ NvU32 HashSurface(const void* pixels, NvU64 size)
     }
     return hash;
 }
+#endif
 
 class KmsDeviceLockGuard
 {
@@ -1338,6 +1344,7 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             return NV_ERR_GENERIC;
         }
 
+#if NV_KMS_WINDOWS_VERIFY_SCANOUT_UPLOAD
         const NvU32 uploadHash = HashSurface(surface->pixels, surface->size);
         const NvBool readbackSucceeded = kmsFunctions.copyMemory(
             kmsDevice,
@@ -1356,6 +1363,7 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             readbackSucceeded,
             readbackHash);
         NvKmsWindowsTraceMessage(uploadMessage);
+#endif
 
         NvBool valid = NV_FALSE;
         NvBool preferred = NV_FALSE;
@@ -1595,6 +1603,16 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
             layer->sourceY + layer->sourceHeight > layer->surface->height)
         {
             return NV_ERR_INVALID_ARGUMENT;
+        }
+
+        FlushProcessWriteBuffers();
+        if (!kmsFunctions.copyMemory(
+                kmsDevice,
+                layer->surface->memory,
+                layer->surface->stagingMemory,
+                layer->surface->size))
+        {
+            return NV_ERR_GENERIC;
         }
 
         auto* const config = &requestedLayer->config;
