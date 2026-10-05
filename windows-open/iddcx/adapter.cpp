@@ -9,6 +9,52 @@ namespace {
 constexpr wchar_t EndpointFriendlyName[] = L"NVIDIA Indirect Display Adapter";
 constexpr wchar_t EndpointManufacturerName[] = L"NVIDIA";
 constexpr wchar_t EndpointModelName[] = L"Open GPU Kernel Modules";
+
+bool GetRgbBitsPerComponent(
+    const IDDCX_WIRE_BITS_PER_COMPONENT& bits,
+    NvU8* colorBpc) noexcept
+{
+    if (bits.YCbCr444 != IDDCX_BITS_PER_COMPONENT_NONE ||
+        bits.YCbCr422 != IDDCX_BITS_PER_COMPONENT_NONE ||
+        bits.YCbCr420 != IDDCX_BITS_PER_COMPONENT_NONE)
+    {
+        return false;
+    }
+    switch (bits.Rgb)
+    {
+    case IDDCX_BITS_PER_COMPONENT_8:
+        *colorBpc = 8;
+        return true;
+    case IDDCX_BITS_PER_COMPONENT_10:
+        *colorBpc = 10;
+        return true;
+    case IDDCX_BITS_PER_COMPONENT_12:
+        *colorBpc = 12;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool GetColorSpace(
+    IDDCX_COLOR_SPACE colorSpace,
+    NV_KMS_WINDOWS_COLOR_SPACE* kmsColorSpace) noexcept
+{
+    switch (colorSpace)
+    {
+    case IDDCX_COLOR_SPACE_G22_P709:
+        *kmsColorSpace = NV_KMS_WINDOWS_COLOR_SPACE_SDR;
+        return true;
+    case IDDCX_COLOR_SPACE_G22_P709_WCG:
+        *kmsColorSpace = NV_KMS_WINDOWS_COLOR_SPACE_SDR_WCG;
+        return true;
+    case IDDCX_COLOR_SPACE_G2084_P2020:
+        *kmsColorSpace = NV_KMS_WINDOWS_COLOR_SPACE_HDR10;
+        return true;
+    default:
+        return false;
+    }
+}
 } // namespace
 
 namespace nv::iddcx {
@@ -37,6 +83,10 @@ NTSTATUS Adapter::EnterD0(WDFDEVICE device) noexcept
     IDDCX_ADAPTER_CAPS caps = {};
     caps.Size = sizeof(caps);
     caps.Flags = IDDCX_ADAPTER_FLAGS_NONE;
+    if (IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2))
+    {
+        caps.Flags |= IDDCX_ADAPTER_FLAGS_CAN_PROCESS_FP16;
+    }
     caps.MaxDisplayPipelineRate = static_cast<UINT64>(7680) * 4320 * 240;
     caps.MaxMonitorsSupported = MaxOutputs;
     caps.EndPointDiagnostics.Size = sizeof(caps.EndPointDiagnostics);
@@ -46,7 +96,7 @@ NTSTATUS Adapter::EnterD0(WDFDEVICE device) noexcept
     caps.EndPointDiagnostics.pEndPointModelName = EndpointModelName;
     caps.EndPointDiagnostics.pHardwareVersion = &version;
     caps.EndPointDiagnostics.pFirmwareVersion = &version;
-    caps.EndPointDiagnostics.GammaSupport = IDDCX_FEATURE_IMPLEMENTATION_NONE;
+    caps.EndPointDiagnostics.GammaSupport = IDDCX_FEATURE_IMPLEMENTATION_HARDWARE;
 
     WDF_OBJECT_ATTRIBUTES attributes;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, AdapterObjectContext);
@@ -172,6 +222,7 @@ NTSTATUS Adapter::RefreshDisplays() noexcept
 
     bool connected[MaxOutputs] = {};
     bool topologyChanged = false;
+    bool hasDeparture = false;
     for (NvU32 displayIndex = 0; displayIndex < connectedCount; ++displayIndex)
     {
         NvU32 outputIndex = 0;
@@ -201,40 +252,58 @@ NTSTATUS Adapter::RefreshDisplays() noexcept
     for (NvU32 index = 0; index < outputCount_; ++index)
     {
         topologyChanged = topologyChanged || !connected[index];
+        hasDeparture = hasDeparture || !connected[index];
     }
     if (!topologyChanged)
     {
         return STATUS_SUCCESS;
     }
 
-    ModePath paths[MaxOutputs] = {};
-    for (NvU32 index = 0; index < outputCount_; ++index)
+    NTSTATUS status = STATUS_SUCCESS;
+    if (hasDeparture)
     {
-        const auto& state = outputs_[index]->DisplayState();
-        const NvU32 preferred = state.preferredModeIndex < state.modeCount
-            ? state.preferredModeIndex
-            : 0;
-        paths[index].monitor = outputs_[index]->Monitor();
-        if (connected[index])
+        ModePath paths[MaxOutputs] = {};
+        for (NvU32 index = 0; index < outputCount_; ++index)
         {
+            Output* const output = outputs_[index];
+            paths[index].monitor = output->Monitor();
+            if (!connected[index])
+            {
+                continue;
+            }
+
+            auto lock = output->LockFrameStateShared();
+            if (!output->Active())
+            {
+                continue;
+            }
+            const auto* const mode = display_modes::FindDisplayMode(
+                output->DisplayState(), output->ActiveModeIndex());
+            if (mode == nullptr)
+            {
+                return STATUS_GRAPHICS_MODE_NOT_PINNED;
+            }
             paths[index].flags = IDDCX_PATH_FLAGS_ACTIVE;
             display_modes::FillSignalInfo(
                 &paths[index].signalInfo,
-                state.modes[preferred],
+                *mode,
                 false);
+            paths[index].colorBpc = output->ColorBpc();
+            paths[index].colorSpace = output->ColorSpace();
         }
-    }
-    NTSTATUS status = CommitDisplayModes(paths, outputCount_);
-    TraceEvents(
-        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
-        TRACE_DRIVER,
-        "Display topology modeset: %!STATUS! outputs=%u connected=%u",
-        status,
-        outputCount_,
-        connectedCount);
-    if (!NT_SUCCESS(status))
-    {
-        return status;
+
+        status = CommitDisplayModes(paths, outputCount_);
+        TraceEvents(
+            NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "Display departure modeset: %!STATUS! outputs=%u connected=%u",
+            status,
+            outputCount_,
+            connectedCount);
+        if (!NT_SUCCESS(status))
+        {
+            return status;
+        }
     }
 
     for (NvU32 index = outputCount_; index-- > 0;)
@@ -319,6 +388,8 @@ NTSTATUS Adapter::CommitModes(
         paths[index].monitor = arguments->pPaths[index].MonitorObject;
         paths[index].flags = arguments->pPaths[index].Flags;
         paths[index].signalInfo = arguments->pPaths[index].TargetVideoSignalInfo;
+        paths[index].colorBpc = 8;
+        paths[index].colorSpace = NV_KMS_WINDOWS_COLOR_SPACE_SDR;
     }
     return CommitDisplayModes(paths, arguments->PathCount);
 }
@@ -346,6 +417,24 @@ NTSTATUS Adapter::CommitModes2(
         paths[index].monitor = arguments->pPaths[index].MonitorObject;
         paths[index].flags = arguments->pPaths[index].Flags;
         paths[index].signalInfo = arguments->pPaths[index].TargetVideoSignalInfo;
+        if ((paths[index].flags & IDDCX_PATH_FLAGS_ACTIVE) != 0 &&
+            (!GetRgbBitsPerComponent(
+                arguments->pPaths[index].WireFormatInfo.BitsPerComponent,
+                &paths[index].colorBpc) ||
+             !GetColorSpace(
+                arguments->pPaths[index].WireFormatInfo.ColorSpace,
+                &paths[index].colorSpace)))
+        {
+            return STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+        }
+        TraceEvents(
+            TRACE_LEVEL_INFORMATION,
+            TRACE_DRIVER,
+            "CommitModes2[%u]: active=%u colorSpace=%u RGB=%u bpc",
+            index,
+            (paths[index].flags & IDDCX_PATH_FLAGS_ACTIVE) != 0,
+            arguments->pPaths[index].WireFormatInfo.ColorSpace,
+            paths[index].colorBpc);
     }
     return CommitDisplayModes(paths, arguments->PathCount);
 }
@@ -358,6 +447,11 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
     NV_KMS_WINDOWS_SURFACE* newSurfaces[MaxOutputs] = {};
     void* newPixels[MaxOutputs] = {};
     NvU32 newPitches[MaxOutputs] = {};
+    NvU8 colorBpc[MaxOutputs] = {};
+    NV_KMS_WINDOWS_COLOR_SPACE colorSpaces[MaxOutputs] = {};
+    NV_KMS_WINDOWS_SCANOUT_FORMAT scanoutFormats[MaxOutputs] = {};
+    NV_KMS_WINDOWS_HDR_METADATA hdrMetadata[MaxOutputs] = {};
+    bool hdrMetadataEnabled[MaxOutputs] = {};
     NV_KMS_WINDOWS_MODESET_OUTPUT requests[MaxOutputs] = {};
     NvU32 requestOutputs[MaxOutputs] = {};
     NvU32 requestCount = 0;
@@ -367,6 +461,19 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
         active[index] = outputs_[index]->Active();
         modeIndexes[index] = outputs_[index]->ActiveModeIndex();
         surfaces[index] = outputs_[index]->ScanoutSurface();
+        colorBpc[index] = outputs_[index]->ColorBpc();
+        colorSpaces[index] = outputs_[index]->ColorSpace();
+        scanoutFormats[index] = outputs_[index]->ScanoutFormat();
+        hdrMetadata[index] = outputs_[index]->DefaultHdrMetadata();
+        hdrMetadataEnabled[index] = outputs_[index]->HasDefaultHdrMetadata();
+    }
+    for (NvU32 index = 0; index < outputCount_; ++index)
+    {
+        outputs_[index]->PauseCursor();
+        if (active[index])
+        {
+            outputs_[index]->QuiesceSwapChain();
+        }
     }
 
     NTSTATUS status = STATUS_SUCCESS;
@@ -389,6 +496,13 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
             goto cleanup;
         }
         active[outputIndex] = (paths[pathIndex].flags & IDDCX_PATH_FLAGS_ACTIVE) != 0;
+        colorBpc[outputIndex] = paths[pathIndex].colorBpc;
+        colorSpaces[outputIndex] = paths[pathIndex].colorSpace;
+        scanoutFormats[outputIndex] =
+            paths[pathIndex].colorBpc > 8 ||
+            paths[pathIndex].colorSpace != NV_KMS_WINDOWS_COLOR_SPACE_SDR
+                ? NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16
+                : NV_KMS_WINDOWS_SCANOUT_FORMAT_XRGB8;
         if (!active[outputIndex])
         {
             surfaces[outputIndex] = nullptr;
@@ -407,13 +521,15 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
         {
             auto lock = output->LockFrameStateShared();
             needsScanout = output->ScanoutSurface() == nullptr ||
-                output->ActiveModeIndex() != mode->kmsModeIndex;
+                output->ActiveModeIndex() != mode->kmsModeIndex ||
+                output->ScanoutFormat() != scanoutFormats[outputIndex];
         }
         if (needsScanout)
         {
             status = output->PrepareScanout(
                 *mode,
                 outputIndex,
+                scanoutFormats[outputIndex],
                 &newSurfaces[outputIndex],
                 &newPixels[outputIndex],
                 &newPitches[outputIndex]);
@@ -447,6 +563,11 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
         }
         requests[requestCount].mode = *mode;
         requests[requestCount].surface = surfaces[index];
+        requests[requestCount].colorBpc = colorBpc[index];
+        requests[requestCount].colorSpace = colorSpaces[index];
+        requests[requestCount].hdrMetadata = hdrMetadata[index];
+        requests[requestCount].hdrMetadataEnabled =
+            hdrMetadataEnabled[index] ? NV_TRUE : NV_FALSE;
         requestOutputs[requestCount++] = index;
     }
 
@@ -476,7 +597,10 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
             modeIndexes[index],
             newSurfaces[index],
             newPixels[index],
-            newPitches[index]);
+            newPitches[index],
+            scanoutFormats[index],
+            colorBpc[index],
+            colorSpaces[index]);
         newSurfaces[index] = nullptr;
     }
     for (NvU32 index = 0; index < requestCount; ++index)
@@ -488,6 +612,10 @@ cleanup:
     for (NvU32 index = 0; index < outputCount_; ++index)
     {
         NvKmsWindowsDestroyScanoutSurface(newSurfaces[index]);
+        if (!NT_SUCCESS(status))
+        {
+            outputs_[index]->ResumeCursor();
+        }
     }
     return status;
 }
@@ -551,10 +679,13 @@ NTSTATUS AdapterQueryTargetInfo(IDDCX_ADAPTER adapter, IDARG_IN_QUERYTARGET_INFO
     {
         return STATUS_INVALID_PARAMETER;
     }
-    output->TargetCaps = IDDCX_TARGET_CAPS_NONE;
+    output->TargetCaps = static_cast<IDDCX_TARGET_CAPS>(
+        IDDCX_TARGET_CAPS_WIDE_COLOR_SPACE |
+        IDDCX_TARGET_CAPS_HIGH_COLOR_SPACE);
     output->DitheringSupport = {};
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
-        "AdapterQueryTargetInfo: connector=%u SDR only", input->ConnectorIndex);
+        "AdapterQueryTargetInfo: connector=%u HDR10+SDR_WCG RGB10",
+        input->ConnectorIndex);
     return STATUS_SUCCESS;
 }
 

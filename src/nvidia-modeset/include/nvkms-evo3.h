@@ -31,6 +31,11 @@
 
 #include <ctrl/ctrlc372/ctrlc372chnc.h>
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool nvEvoGetPqOutputLutC5(void *data, NvU32 size,
+                           NvU32 *lutEntries, NvU32 *vssSegments);
+#endif
+
 #if defined(_WIN32)
 #include "nvplatform_mmio_rm.h"
 #endif

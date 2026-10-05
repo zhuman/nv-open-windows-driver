@@ -2,8 +2,10 @@
 #include "adapter.hpp"
 #include "display_modes.hpp"
 #include "swapchain_d3d11.hpp"
+#include "hwcursor.h"
 #include "trace.h"
 
+#include <cmath>
 #include <cstring>
 #include <new>
 
@@ -15,6 +17,60 @@
 
 namespace nv::iddcx {
 namespace {
+
+constexpr NV_KMS_WINDOWS_COLOR_TRANSFORM IdentityColorTransform = {
+    {
+        { 0x10000, 0, 0, 0 },
+        { 0, 0x10000, 0, 0 },
+        { 0, 0, 0x10000, 0 },
+    },
+    {}, {}, {}, NV_FALSE, NV_FALSE,
+};
+
+NvS32 FloatToCsc(float value) noexcept
+{
+    if (!std::isfinite(value))
+    {
+        return 0;
+    }
+    constexpr float Minimum = -8.0F;
+    constexpr float Maximum = 524287.0F / 65536.0F;
+    const float clamped = value < Minimum ? Minimum : value > Maximum ? Maximum : value;
+    const float scaled = clamped * 65536.0F;
+    return static_cast<NvS32>(scaled + (scaled >= 0.0F ? 0.5F : -0.5F));
+}
+
+NvU16 FloatToUnorm16(float value) noexcept
+{
+    if (!std::isfinite(value) || value <= 0.0F)
+    {
+        return 0;
+    }
+    if (value >= 1.0F)
+    {
+        return 0xffff;
+    }
+    return static_cast<NvU16>(value * 65535.0F + 0.5F);
+}
+
+void CopyHdrMetadata(
+    const IDDCX_HDR10_METADATA& source,
+    NV_KMS_WINDOWS_HDR_METADATA* destination) noexcept
+{
+    const USHORT* primaries[] = {
+        source.RedPrimary, source.GreenPrimary, source.BluePrimary };
+    for (NvU32 primary = 0; primary < 3; ++primary)
+    {
+        destination->displayPrimaries[primary][0] = primaries[primary][0];
+        destination->displayPrimaries[primary][1] = primaries[primary][1];
+    }
+    destination->whitePoint[0] = source.WhitePoint[0];
+    destination->whitePoint[1] = source.WhitePoint[1];
+    destination->maxMasteringLuminance = source.MaxMasteringLuminance;
+    destination->minMasteringLuminance = source.MinMasteringLuminance;
+    destination->maxContentLightLevel = source.MaxContentLightLevel;
+    destination->maxFrameAverageLightLevel = source.MaxFrameAverageLightLevel;
+}
 
 // The optional startup pattern proves scanout before the first OS frame arrives.
 void FillGradient(
@@ -55,6 +111,12 @@ Output::Output(
             scanoutPitch_(0),
             activeModeIndex_(0),
             assignedHead_(0),
+            scanoutFormat_(NV_KMS_WINDOWS_SCANOUT_FORMAT_XRGB8),
+            colorBpc_(8),
+            colorSpace_(NV_KMS_WINDOWS_COLOR_SPACE_SDR),
+            defaultHdrMetadata_{},
+            hasDefaultHdrMetadata_(false),
+            colorTransform_(IdentityColorTransform),
             active_(false),
             stateLock_(),
             swapChain_(nullptr)
@@ -63,8 +125,9 @@ Output::Output(
 
 Output::~Output() noexcept
 {
+    cursor_.reset();
     // The monitor outlives its swapchain context and scanout allocation.
-    StopSwapChain();
+    QuiesceSwapChain();
     DestroyScanout();
     if (owner_ != nullptr)
     {
@@ -146,23 +209,61 @@ NTSTATUS Output::Create(
 NTSTATUS Output::PrepareScanout(
     const NV_KMS_WINDOWS_MODE& mode,
     NvU32 outputIndex,
+    NV_KMS_WINDOWS_SCANOUT_FORMAT format,
     NV_KMS_WINDOWS_SURFACE** surface,
     void** pixels,
     NvU32* pitch) noexcept
 {
     const NV_STATUS status = NvKmsWindowsCreateScanoutSurface(
-        mode.hVisible, mode.vVisible, surface, pixels, pitch);
+        mode.hVisible, mode.vVisible, format, surface, pixels, pitch);
     if (status != NV_OK)
     {
         return status == NV_ERR_NO_MEMORY
             ? STATUS_INSUFFICIENT_RESOURCES
             : STATUS_DEVICE_NOT_READY;
     }
-#if NV_IDDCX_STATIC_GRADIENT
-    FillGradient(*pixels, *pitch, mode.hVisible, mode.vVisible, outputIndex);
-#else
     std::memset(*pixels, 0, static_cast<size_t>(*pitch) * mode.vVisible);
+#if NV_IDDCX_STATIC_GRADIENT
+    if (format == NV_KMS_WINDOWS_SCANOUT_FORMAT_XRGB8)
+    {
+        FillGradient(*pixels, *pitch, mode.hVisible, mode.vVisible, outputIndex);
+    }
 #endif
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS Output::PrepareBackBuffer() noexcept
+{
+    auto lock = stateLock_.lock_exclusive();
+    if (backSurface_)
+    {
+        return STATUS_SUCCESS;
+    }
+    const auto* mode = display_modes::FindDisplayMode(displayState_, activeModeIndex_);
+    if (!active_ || !scanoutSurface_ || mode == nullptr)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    NV_KMS_WINDOWS_SURFACE* surface = nullptr;
+    void* pixels = nullptr;
+    NvU32 pitch = 0;
+    const NV_STATUS status = NvKmsWindowsCreateScanoutSurface(
+        mode->hVisible, mode->vVisible, scanoutFormat_, &surface, &pixels, &pitch);
+    if (status != NV_OK)
+    {
+        return status == NV_ERR_NO_MEMORY ?
+            STATUS_INSUFFICIENT_RESOURCES : STATUS_DEVICE_NOT_READY;
+    }
+    unique_nvkms_surface allocation(surface);
+    if (pitch != scanoutPitch_)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    backSurface_ = std::move(allocation);
+    backPixels_ = pixels;
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+        "Scanout double buffering: %ux%u pitch=%u format=%u",
+        mode->hVisible, mode->vVisible, pitch, scanoutFormat_);
     return STATUS_SUCCESS;
 }
 
@@ -171,7 +272,10 @@ void Output::CommitMode(
     NvU32 modeIndex,
     NV_KMS_WINDOWS_SURFACE* newSurface,
     void* newPixels,
-    NvU32 newPitch) noexcept
+    NvU32 newPitch,
+    NV_KMS_WINDOWS_SCANOUT_FORMAT format,
+    NvU8 colorBpc,
+    NV_KMS_WINDOWS_COLOR_SPACE colorSpace) noexcept
 {
     // Frame processing holds the shared side through copy and present.
     auto lock = stateLock_.lock_exclusive();
@@ -188,12 +292,132 @@ void Output::CommitMode(
     }
     active_ = active;
     activeModeIndex_ = modeIndex;
+    scanoutFormat_ = format;
+    colorBpc_ = colorBpc;
+    colorSpace_ = colorSpace;
 }
 
 void Output::SetAssignedHead(NvU32 head) noexcept
 {
     auto lock = stateLock_.lock_exclusive();
     assignedHead_ = head;
+}
+
+NTSTATUS Output::SetDefaultHdrMetadata(
+    const IDARG_IN_MONITOR_SET_DEFAULT_HDR_METADATA* arguments) noexcept
+{
+    if (arguments == nullptr ||
+        arguments->Type != IDDCX_HDRMETADATA_TYPE_HDR10 ||
+        arguments->Size != sizeof(IDDCX_HDR10_METADATA) ||
+        arguments->Data.pHdr10 == nullptr)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    auto lock = stateLock_.lock_exclusive();
+    CopyHdrMetadata(*arguments->Data.pHdr10, &defaultHdrMetadata_);
+    hasDefaultHdrMetadata_ = true;
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "Default HDR10 metadata: MaxCLL=%u MaxFALL=%u",
+        defaultHdrMetadata_.maxContentLightLevel,
+        defaultHdrMetadata_.maxFrameAverageLightLevel);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS Output::SetGammaRamp(const IDARG_IN_SET_GAMMARAMP* arguments) noexcept
+{
+    if (arguments == nullptr)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    NV_KMS_WINDOWS_COLOR_TRANSFORM transform = IdentityColorTransform;
+    switch (arguments->Type)
+    {
+    case IDDCX_GAMMARAMP_TYPE_DEFAULT:
+        if (arguments->GammaRampSizeInBytes != 0 ||
+            arguments->pGammaRampData != nullptr)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        break;
+    case IDDCX_GAMMARAMP_TYPE_RGB256x3x16:
+        if (arguments->GammaRampSizeInBytes !=
+                sizeof(IDDCX_GAMMARAMP_RGB256x3x16) ||
+            arguments->pGammaRampData == nullptr)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        {
+            const auto* ramp = static_cast<const IDDCX_GAMMARAMP_RGB256x3x16*>(
+                arguments->pGammaRampData);
+            for (NvU32 index = 0; index < NV_KMS_WINDOWS_GAMMA_ENTRIES; ++index)
+            {
+                const NvU32 source = index * 255U /
+                    (NV_KMS_WINDOWS_GAMMA_ENTRIES - 1U);
+                transform.gammaRed[index] = ramp->Red[source];
+                transform.gammaGreen[index] = ramp->Green[source];
+                transform.gammaBlue[index] = ramp->Blue[source];
+            }
+            transform.gammaEnabled = NV_TRUE;
+        }
+        break;
+    case IDDCX_GAMMARAMP_TYPE_3x4_COLORSPACE_TRANSFORM:
+        if (arguments->GammaRampSizeInBytes !=
+                sizeof(IDDCX_GAMMARAMP_3X4_COLORSPACE_TRANSFORM) ||
+            arguments->pGammaRampData == nullptr)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        {
+            const auto* ramp =
+                static_cast<const IDDCX_GAMMARAMP_3X4_COLORSPACE_TRANSFORM*>(
+                    arguments->pGammaRampData);
+            if (ramp->MatrixEnabled)
+            {
+                for (NvU32 row = 0; row < 3; ++row)
+                {
+                    for (NvU32 column = 0; column < 4; ++column)
+                    {
+                        transform.csc[row][column] = FloatToCsc(
+                            ramp->ColorMatrix3x4[row][column] *
+                            ramp->ScalarMultiplier);
+                    }
+                }
+                transform.cscEnabled = NV_TRUE;
+            }
+            if (ramp->LutEnabled)
+            {
+                for (NvU32 index = 0; index < NV_KMS_WINDOWS_GAMMA_ENTRIES; ++index)
+                {
+                    const NvU32 source = index * 4095U /
+                        (NV_KMS_WINDOWS_GAMMA_ENTRIES - 1U);
+                    transform.gammaRed[index] =
+                        FloatToUnorm16(ramp->LookupTable1D[source].Red);
+                    transform.gammaGreen[index] =
+                        FloatToUnorm16(ramp->LookupTable1D[source].Green);
+                    transform.gammaBlue[index] =
+                        FloatToUnorm16(ramp->LookupTable1D[source].Blue);
+                }
+                transform.gammaEnabled = NV_TRUE;
+            }
+        }
+        break;
+    default:
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    auto lock = stateLock_.lock_exclusive();
+    colorTransform_ = transform;
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "Gamma ramp: type=%u csc=%u lut=%u",
+        arguments->Type,
+        colorTransform_.cscEnabled,
+        colorTransform_.gammaEnabled);
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS Output::AssignSwapChain(
@@ -204,7 +428,7 @@ NTSTATUS Output::AssignSwapChain(
     {
         return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
     }
-    StopSwapChain();
+    QuiesceSwapChain();
     SwapChainD3D11* swapChain = nullptr;
     const NTSTATUS status = SwapChainD3D11::Create(*this, *arguments, &swapChain);
     if (!NT_SUCCESS(status))
@@ -225,8 +449,19 @@ NTSTATUS Output::AssignSwapChain(
             TRACE_DRIVER,
             "AssignSwapChain: worker start failed 0x%08X",
             startResult);
-        StopSwapChain();
+        QuiesceSwapChain();
         return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
+    }
+    if (displayState_.maxCursorSize != 0)
+    {
+        if (!cursor_)
+        {
+            cursor_.reset(new (std::nothrow) HwCursor(*this));
+        }
+        if (cursor_)
+        {
+            cursor_->Setup();
+        }
     }
     return STATUS_SUCCESS;
 }
@@ -237,7 +472,7 @@ NTSTATUS Output::UnassignSwapChain(IDDCX_MONITOR monitor) noexcept
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
-    StopSwapChain();
+    QuiesceSwapChain();
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "UnassignSwapChain");
     return STATUS_SUCCESS;
 }
@@ -251,7 +486,7 @@ void Output::OnSwapChainDestroyed(SwapChainD3D11* swapChain) noexcept
     }
 }
 
-void Output::StopSwapChain() noexcept
+void Output::QuiesceSwapChain() noexcept
 {
     SwapChainD3D11* swapChain = nullptr;
     {
@@ -265,8 +500,27 @@ void Output::StopSwapChain() noexcept
     }
 }
 
+void Output::PauseCursor() noexcept
+{
+    if (cursor_)
+    {
+        cursor_->Pause();
+    }
+}
+
+void Output::ResumeCursor() noexcept
+{
+    if (cursor_)
+    {
+        cursor_->Resume();
+    }
+}
+
 void Output::DestroyScanout() noexcept
 {
+    backSurface_.reset();
+    backPixels_ = nullptr;
+    frontBufferIndex_.store(0);
     scanoutSurface_.reset();
     scanoutPixels_ = nullptr;
     scanoutPitch_ = 0;
@@ -373,6 +627,26 @@ NTSTATUS UnassignSwapChain(IDDCX_MONITOR monitor)
     return context == nullptr
         ? STATUS_INVALID_DEVICE_STATE
         : context->UnassignSwapChain(monitor);
+}
+
+_Use_decl_annotations_
+NTSTATUS SetDefaultHdrMetadata(
+    IDDCX_MONITOR monitor,
+    const IDARG_IN_MONITOR_SET_DEFAULT_HDR_METADATA* input)
+{
+    Output* context = GetOutput(monitor);
+    return context == nullptr
+        ? STATUS_INVALID_DEVICE_STATE
+        : context->SetDefaultHdrMetadata(input);
+}
+
+_Use_decl_annotations_
+NTSTATUS SetGammaRamp(IDDCX_MONITOR monitor, const IDARG_IN_SET_GAMMARAMP* input)
+{
+    Output* context = GetOutput(monitor);
+    return context == nullptr
+        ? STATUS_INVALID_DEVICE_STATE
+        : context->SetGammaRamp(input);
 }
 
 } // namespace nv::iddcx

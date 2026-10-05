@@ -729,6 +729,30 @@ static void ConfigureCsc0C5(NVDevEvoPtr pDevEvo,
         csc00Matrix = pHwState->csc00Override.matrix;
     }
 
+#if defined(NV_WINDOWS)
+    if (pHwState->fmtOverride.enabled &&
+        ((pHwState->pSurfaceEvo[NVKMS_LEFT]->format ==
+            NvKmsSurfaceMemoryFormatRF16GF16BF16AF16) ||
+         (pHwState->pSurfaceEvo[NVKMS_LEFT]->format ==
+            NvKmsSurfaceMemoryFormatRF16GF16BF16XF16))) {
+        struct NvKmsCscMatrix composed = { };
+        for (NvU32 row = 0; row < 3; ++row) {
+            for (NvU32 column = 0; column < 4; ++column) {
+                NvS64 value = column == 3 ?
+                    (NvS64)csc00Matrix.m[row][3] * 0x10000 : 0;
+                for (NvU32 component = 0; component < 3; ++component) {
+                    value += (NvS64)csc00Matrix.m[row][component] *
+                        pHwState->fmtOverride.matrix.m[component][column];
+                }
+                value = (value + 0x8000) >> 16;
+                composed.m[row][column] = (NvS32)(value < -0x80000 ?
+                    -0x80000 : value > 0x7ffff ? 0x7ffff : value);
+            }
+        }
+        csc00Matrix = composed;
+    }
+#endif
+
     if (pHwState->csc01Override.enabled) {
         csc01Matrix = pHwState->csc01Override.matrix;
     }
@@ -4278,6 +4302,7 @@ EvoFlipC5Common(NVDevEvoPtr pDevEvo,
 {
 #if defined(NV_WINDOWS_IDDCX)
     if (pHwState->pSurfaceEvo[NVKMS_LEFT] == NULL) {
+        EvoFlipC3Common(pDevEvo, pChannel, pHwState, updateState);
         return;
     }
 #endif
@@ -4904,6 +4929,33 @@ skipInit:
     *isLutModeVss = TRUE;
 }
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool nvEvoGetPqOutputLutC5(void *data, NvU32 size,
+                           NvU32 *lutEntries, NvU32 *vssSegments)
+{
+    NVEvoLutDataRec *pData;
+    enum NvKmsLUTState lutState = NvKmsLUTStateUninitialized;
+    NvBool isLutModeVss = FALSE;
+    const NvU32 bytes = (NV_LUT_VSS_HEADER_SIZE +
+                        ARRAY_LEN(OetfPQ512Entries) + 1) *
+                       sizeof(NVEvoLutEntryRec);
+
+    if (data == NULL || size < bytes || lutEntries == NULL ||
+        vssSegments == NULL) {
+        return FALSE;
+    }
+    pData = nvCalloc(1, sizeof(*pData));
+    if (pData == NULL) {
+        return FALSE;
+    }
+    EvoSetupPQOetfOutputLutC5(pData, &lutState, lutEntries, &isLutModeVss);
+    nvkms_memcpy(data, pData->output, bytes);
+    *vssSegments = ARRAY_LEN(OetfPQ512SegSizesLog2);
+    nvFree(pData);
+    return TRUE;
+}
+#endif
+
 static void EvoSetupIdentityOutputLutC5(NVEvoLutDataRec *pData,
                                         enum NvKmsLUTState *lutState,
                                         NvU32 *lutSize,
@@ -5063,6 +5115,13 @@ static void EvoSetOutputLutC5(NVDevEvoPtr pDevEvo,
                       &disableOcsc0,
                       &fpNormScale,
                       &isLutModeVss);
+
+#if defined(NV_WINDOWS_IDDCX)
+    if (pHeadState->tf == NVKMS_OUTPUT_TF_PQ &&
+        pOutputLut->fromOverride && isLutModeVss) {
+        disableOcsc0 = TRUE;
+    }
+#endif
 
     if (disableOcsc0) {
         nvDmaSetStartEvoMethod(pChannel, NVC57D_HEAD_SET_OCSC0CONTROL(head), 1);
@@ -6133,6 +6192,17 @@ static void EvoSetCursorImageC3(NVDevEvoPtr pDevEvo, const int head,
     nvDmaSetStartEvoMethod(pChannel, NVC37D_HEAD_SET_CONTROL_CURSOR(head), 1);
     nvDmaSetEvoMethodData(pChannel, headSetControlCursorValue);
 
+#if defined(NV_WINDOWS)
+    if (pChannel->hwclass >= NVC57D_CORE_CHANNEL_DMA) {
+        const NvU16 colorNormScale = pCursorCompParams->cursorColorNormScale;
+        nvDmaSetStartEvoMethod(pChannel,
+            NVC57D_HEAD_SET_CURSOR_COLOR_NORM_SCALE(head), 1);
+        nvDmaSetEvoMethodData(pChannel,
+            DRF_NUM(C57D, _HEAD_SET_CURSOR_COLOR_NORM_SCALE, _VALUE,
+                colorNormScale != 0 ? colorNormScale : 0x3c00));
+    }
+#endif
+
     nvDmaSetStartEvoMethod(pChannel,
             NVC37D_HEAD_SET_CONTROL_CURSOR_COMPOSITION(head), 1);
     switch (pCursorCompParams->blendingMode[1]) {
@@ -6809,6 +6879,40 @@ static NvBool EvoForceIdleSatelliteChannelsWithAccel(
 
             /* Wait for the flips to complete. */
             if (!PollForChannelIdle(pDevEvo, pChannel)) {
+                NvU32 channelState = 0;
+                NvU32 getOffset = nvDmaLoadPioMethod(pChannel->pb.control,
+                                                    NVC57D_GET);
+                NvU32 methodIndex = getOffset / sizeof(NvU32);
+                GetChannelState(pDevEvo, pChannel, 0, &channelState);
+                nvEvoLogDev(pDevEvo, EVO_LOG_ERROR,
+                            "Idle failed: window=%u class=0x%08x state=%u accel=0x%08x",
+                            window, pChannel->hwclass, channelState,
+                            GetAccelerators(pDevEvo, pChannel, 0));
+                nvEvoLogDev(pDevEvo, EVO_LOG_ERROR,
+                            "Idle queue: window=%u get=0x%x put=0x%x coreGet=0x%x corePut=0x%x",
+                            window, getOffset, pChannel->pb.put_offset,
+                            nvDmaLoadPioMethod(pDevEvo->core->pb.control,
+                                              NVC57D_GET),
+                            pDevEvo->core->pb.put_offset);
+                if (getOffset <= pChannel->pb.offset_max && methodIndex >= 4) {
+                    nvEvoLogDev(pDevEvo, EVO_LOG_ERROR,
+                                "Idle methods: before=%08x %08x %08x %08x at=%08x",
+                                pChannel->pb.base[methodIndex - 4],
+                                pChannel->pb.base[methodIndex - 3],
+                                pChannel->pb.base[methodIndex - 2],
+                                pChannel->pb.base[methodIndex - 1],
+                                pChannel->pb.base[methodIndex]);
+                }
+#if defined(NV_WINDOWS_IDDCX)
+                {
+                    nvEvoLogDev(pDevEvo, EVO_LOG_ERROR,
+                                "Idle immediate: window=%u get=0x%x put=0x%x",
+                                window,
+                                nvDmaLoadPioMethod(pChannel->imm.dma->pb.control,
+                                                  NVC57D_GET),
+                                pChannel->imm.dma->pb.put_offset);
+                }
+#endif
                 nvEvoLogDevDebug(pDevEvo, EVO_LOG_ERROR,
                                  "Timed out while idling base channel");
                 goto done;

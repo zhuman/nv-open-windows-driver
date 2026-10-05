@@ -344,6 +344,9 @@ struct NvKmsKapiCursorRequestedConfig {
     struct {
         enum NvKmsCompositionBlendingMode compMode;
         NvU8 surfaceAlpha;
+    #if defined(NV_WINDOWS)
+        NvU16 colorNormScale;
+    #endif
     } compParams;
 
     NvS16 dstX, dstY;
@@ -352,6 +355,12 @@ struct NvKmsKapiCursorRequestedConfig {
         NvBool surfaceChanged : 1;
         NvBool dstXYChanged   : 1;
     } flags;
+};
+
+enum NvKmsKapiRequestedColorFormat {
+    NVKMS_KAPI_REQUESTED_COLOR_FORMAT_RGB = 0,
+    NVKMS_KAPI_REQUESTED_COLOR_FORMAT_YCbCr422 = 1,
+    NVKMS_KAPI_REQUESTED_COLOR_FORMAT_YCbCr444 = 2,
 };
 
 struct NvKmsKapiHeadModeSetConfig {
@@ -379,6 +388,9 @@ struct NvKmsKapiHeadModeSetConfig {
     struct NvKmsKapiDisplayMode mode;
 
     NvBool vrrEnabled;
+
+    enum NvKmsKapiRequestedColorFormat colorFormat;
+    NvBool colorFormatSpecified;
 
     NvU8 colorBpc;
     NvBool colorBpcSpecified;
@@ -1178,6 +1190,15 @@ struct NvKmsKapiFunctionsTable {
     (
         struct NvKmsKapiDevice *device,
         NvKmsKapiDisplay display, const struct NvKmsKapiDisplayMode *mode
+    );
+
+    NvBool (*validateDisplayModeColor)
+    (
+        struct NvKmsKapiDevice *device,
+        NvKmsKapiDisplay display,
+        const struct NvKmsKapiDisplayMode *mode,
+        enum NvKmsKapiRequestedColorFormat colorFormat,
+        NvU8 colorBpc
     );
 
     /*!

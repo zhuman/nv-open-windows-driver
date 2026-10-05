@@ -45,7 +45,17 @@ IDDCX_MONITOR_MODE2 CreateMonitorMode2(
     mode.Size = sizeof(mode);
     mode.Origin = origin;
     FillSignalInfo(&mode.MonitorVideoSignalInfo, displayMode, true);
-    mode.BitsPerComponent.Rgb = IDDCX_BITS_PER_COMPONENT_8;
+    mode.BitsPerComponent.Rgb = IDDCX_BITS_PER_COMPONENT_NONE;
+    if (displayMode.rgb8Supported)
+    {
+        mode.BitsPerComponent.Rgb = static_cast<IDDCX_BITS_PER_COMPONENT>(
+            mode.BitsPerComponent.Rgb | IDDCX_BITS_PER_COMPONENT_8);
+    }
+    if (displayMode.rgb10Supported)
+    {
+        mode.BitsPerComponent.Rgb = static_cast<IDDCX_BITS_PER_COMPONENT>(
+            mode.BitsPerComponent.Rgb | IDDCX_BITS_PER_COMPONENT_10);
+    }
     return mode;
 }
 
@@ -70,7 +80,17 @@ IDDCX_TARGET_MODE2 CreateTargetMode2(const NV_KMS_WINDOWS_MODE& displayMode) noe
         false);
     mode.RequiredBandwidth =
         mode.TargetVideoSignalInfo.targetVideoSignalInfo.pixelRate;
-    mode.BitsPerComponent.Rgb = IDDCX_BITS_PER_COMPONENT_8;
+    mode.BitsPerComponent.Rgb = IDDCX_BITS_PER_COMPONENT_NONE;
+    if (displayMode.rgb8Supported)
+    {
+        mode.BitsPerComponent.Rgb = static_cast<IDDCX_BITS_PER_COMPONENT>(
+            mode.BitsPerComponent.Rgb | IDDCX_BITS_PER_COMPONENT_8);
+    }
+    if (displayMode.rgb10Supported)
+    {
+        mode.BitsPerComponent.Rgb = static_cast<IDDCX_BITS_PER_COMPONENT>(
+            mode.BitsPerComponent.Rgb | IDDCX_BITS_PER_COMPONENT_10);
+    }
     return mode;
 }
 

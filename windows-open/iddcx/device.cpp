@@ -477,6 +477,7 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     iddConfiguration.EvtIddCxMonitorQueryTargetModes = QueryTargetModes;
     iddConfiguration.EvtIddCxMonitorAssignSwapChain = AssignSwapChain;
     iddConfiguration.EvtIddCxMonitorUnassignSwapChain = UnassignSwapChain;
+    iddConfiguration.EvtIddCxMonitorSetGammaRamp = SetGammaRamp;
 
         if (IDD_IS_FIELD_AVAILABLE(
             IDD_CX_CLIENT_CONFIG,
@@ -503,6 +504,13 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
             EvtIddCxMonitorQueryTargetModes2))
         {
         iddConfiguration.EvtIddCxMonitorQueryTargetModes2 = QueryTargetModes2;
+        }
+        if (IDD_IS_FIELD_AVAILABLE(
+            IDD_CX_CLIENT_CONFIG,
+            EvtIddCxMonitorSetDefaultHdrMetaData))
+        {
+        iddConfiguration.EvtIddCxMonitorSetDefaultHdrMetaData =
+            SetDefaultHdrMetadata;
         }
 
     NTSTATUS status = IddCxDeviceInitConfig(deviceInit, &iddConfiguration);

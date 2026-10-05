@@ -156,6 +156,15 @@ static void RmFreeDevice(struct NvKmsKapiDevice *device)
         device->smgComputeInstSubscriptionHdl = 0x0;
     }
 
+#if defined(NV_WINDOWS)
+    if (device->hRmCopyCeUtils != 0x0) {
+        nvRmApiFree(device->hRmClient, device->hRmSubDevice,
+                    device->hRmCopyCeUtils);
+        nvKmsKapiFreeRmHandle(device, device->hRmCopyCeUtils);
+        device->hRmCopyCeUtils = 0x0;
+    }
+#endif
+
     if (device->hRmSubDevice != 0x0) {
         nvRmApiFree(device->hRmClient,
                     device->hRmDevice,
@@ -2244,7 +2253,7 @@ static NvBool CopyMemory
 {
     NV0050_ALLOCATION_PARAMETERS allocParams = {0};
     NV0050_CTRL_MEMCOPY_PARAMS copyParams = {0};
-    NvU32 hCeUtils;
+    NvU32 hCeUtils = 0;
     NvU32 status;
 
     if (device == NULL || dstMemory == NULL || srcMemory == NULL ||
@@ -2252,34 +2261,49 @@ static NvBool CopyMemory
         return NV_FALSE;
     }
 
-    hCeUtils = nvKmsKapiGenerateRmHandle(device);
+#if defined(NV_WINDOWS)
+    hCeUtils = device->hRmCopyCeUtils;
+#endif
     if (hCeUtils == 0) {
-        return NV_FALSE;
+        hCeUtils = nvKmsKapiGenerateRmHandle(device);
+        if (hCeUtils == 0) {
+            return NV_FALSE;
+        }
+
+        allocParams.flags =
+            DRF_DEF(0050_CEUTILS, _FLAGS, _VIRTUAL_MODE, _TRUE) |
+            DRF_DEF(0050_CEUTILS, _FLAGS, _NO_BAR1_USE, _TRUE);
+
+        status = nvRmApiAlloc(device->hRmClient,
+                              device->hRmSubDevice,
+                              hCeUtils,
+                              NV_CE_UTILS,
+                              &allocParams);
+        if (status != NVOS_STATUS_SUCCESS) {
+            nvKmsKapiFreeRmHandle(device, hCeUtils);
+            nvKmsKapiLogDeviceDebug(device,
+                                    "Failed to allocate copy engine: 0x%x",
+                                    status);
+            return NV_FALSE;
+        }
+#if defined(NV_WINDOWS)
+        device->hRmCopyCeUtils = hCeUtils;
+#endif
     }
 
-    allocParams.flags =
-        DRF_DEF(0050_CEUTILS, _FLAGS, _VIRTUAL_MODE, _TRUE) |
-        DRF_DEF(0050_CEUTILS, _FLAGS, _NO_BAR1_USE, _TRUE);
-
-    status = nvRmApiAlloc(device->hRmClient,
-                          device->hRmSubDevice,
-                          hCeUtils,
-                          NV_CE_UTILS,
-                          &allocParams);
-    if (status == NVOS_STATUS_SUCCESS) {
-        copyParams.hDstMemory = dstMemory->hRmHandle;
-        copyParams.hSrcMemory = srcMemory->hRmHandle;
-        copyParams.length = size;
-        copyParams.flags = NV0050_CTRL_MEMCOPY_FLAGS_DEFAULT;
-        status = nvRmApiControl(device->hRmClient,
-                                hCeUtils,
-                                NV0050_CTRL_CMD_MEMCOPY,
-                                &copyParams,
-                                sizeof(copyParams));
-        nvRmApiFree(device->hRmClient, device->hRmSubDevice, hCeUtils);
-    }
-
+    copyParams.hDstMemory = dstMemory->hRmHandle;
+    copyParams.hSrcMemory = srcMemory->hRmHandle;
+    copyParams.length = size;
+    copyParams.flags = NV0050_CTRL_MEMCOPY_FLAGS_DEFAULT;
+    status = nvRmApiControl(device->hRmClient,
+                            hCeUtils,
+                            NV0050_CTRL_CMD_MEMCOPY,
+                            &copyParams,
+                            sizeof(copyParams));
+#if !defined(NV_WINDOWS)
+    nvRmApiFree(device->hRmClient, device->hRmSubDevice, hCeUtils);
     nvKmsKapiFreeRmHandle(device, hCeUtils);
+#endif
     if (status != NVOS_STATUS_SUCCESS) {
         nvKmsKapiLogDeviceDebug(device,
                                 "Failed to copy memory to scanout: 0x%x",
@@ -2686,10 +2710,14 @@ static void NvKmsKapiDisplayModeToKapi
     timings->sizeMM.h = mode->timings.heightMM;
 }
 
-static NvBool ValidateDisplayMode
+static NvBool ValidateDisplayModeInternal
 (
     struct NvKmsKapiDevice *device,
-    NvKmsKapiDisplay display, const struct NvKmsKapiDisplayMode *mode
+    NvKmsKapiDisplay display,
+    const struct NvKmsKapiDisplayMode *mode,
+    NvBool colorSpecified,
+    enum NvKmsKapiRequestedColorFormat colorFormat,
+    NvU8 colorBpc
 )
 {
     struct NvKmsValidateModeParams paramsValidate;
@@ -2709,6 +2737,14 @@ static NvBool ValidateDisplayMode
     InitNvKmsModeValidationParams(device,
                                   &paramsValidate.request.modeValidation);
 
+    if (colorSpecified) {
+        paramsValidate.request.dpyOutputColor.format =
+            (enum NvKmsDpyAttributeRequestedColorFormatValue)colorFormat;
+        paramsValidate.request.dpyOutputColor.formatSpecified = NV_TRUE;
+        paramsValidate.request.dpyOutputColor.bpc =
+            (enum NvKmsDpyAttributeColorBpcValue)colorBpc;
+        paramsValidate.request.dpyOutputColor.bpcSpecified = NV_TRUE;
+    }
 
     NvKmsKapiDisplayModeToKapi(mode, &paramsValidate.request.mode);
 
@@ -2728,6 +2764,30 @@ static NvBool ValidateDisplayMode
     }
 
     return paramsValidate.reply.valid;
+}
+
+static NvBool ValidateDisplayMode
+(
+    struct NvKmsKapiDevice *device,
+    NvKmsKapiDisplay display, const struct NvKmsKapiDisplayMode *mode
+)
+{
+    return ValidateDisplayModeInternal(
+        device, display, mode, NV_FALSE,
+        NVKMS_KAPI_REQUESTED_COLOR_FORMAT_RGB, 0);
+}
+
+static NvBool ValidateDisplayModeColor
+(
+    struct NvKmsKapiDevice *device,
+    NvKmsKapiDisplay display,
+    const struct NvKmsKapiDisplayMode *mode,
+    enum NvKmsKapiRequestedColorFormat colorFormat,
+    NvU8 colorBpc
+)
+{
+    return ValidateDisplayModeInternal(
+        device, display, mode, NV_TRUE, colorFormat, colorBpc);
 }
 
 static NvBool AssignSyncObjectConfig(
@@ -2875,6 +2935,10 @@ static void NvKmsKapiCursorConfigToKms(
             requestedConfig->compParams.compMode;
         params->cursor.image.cursorCompParams.surfaceAlpha =
             requestedConfig->compParams.surfaceAlpha;
+    #if defined(NV_WINDOWS)
+        params->cursor.image.cursorCompParams.cursorColorNormScale =
+            requestedConfig->compParams.colorNormScale;
+    #endif
     }
 
     if (requestedConfig->flags.dstXYChanged || bFromKmsSetMode) {
@@ -3033,6 +3097,9 @@ static NvBool NvKmsKapiOverlayLayerConfigToKms(
             NvU32 nextIndexOffsetInBytes =
                 NVKMS_KAPI_NOTIFIER_OFFSET(head,
                         layer, nextIndex);
+
+            nvKmsResetNotifier(NVKMS_KAPI_NOTIFIER_INDEX(head, layer, nextIndex),
+                               device->notifier.pLinearAddress);
 
             params->layer[layer].completionNotifier.val.
                 surface.surfaceHandle = device->notifier.hKmsHandle;
@@ -3233,6 +3300,10 @@ static NvBool NvKmsKapiPrimaryLayerConfigToKms(
             NvU32 nextIndexOffsetInBytes =
                 NVKMS_KAPI_NOTIFIER_OFFSET(head,
                                            NVKMS_MAIN_LAYER, nextIndex);
+
+            nvKmsResetNotifier(
+                NVKMS_KAPI_NOTIFIER_INDEX(head, NVKMS_MAIN_LAYER, nextIndex),
+                device->notifier.pLinearAddress);
 
             params->layer[NVKMS_MAIN_LAYER].completionNotifier.
                 val.surface.surfaceHandle = device->notifier.hKmsHandle;
@@ -3508,6 +3579,11 @@ static NvBool NvKmsKapiRequestedModeSetConfigToKms(
 
         paramsHead->allowGsync = NV_TRUE;
         paramsHead->allowAdaptiveSync = NVKMS_ALLOW_ADAPTIVE_SYNC_ALL;
+        paramsHead->colorFormat =
+            (enum NvKmsDpyAttributeRequestedColorFormatValue)
+                headModeSetConfig->colorFormat;
+        paramsHead->colorFormatSpecified =
+            headModeSetConfig->colorFormatSpecified;
         paramsHead->colorBpc =
             (enum NvKmsDpyAttributeColorBpcValue)headModeSetConfig->colorBpc;
         paramsHead->colorBpcSpecified = headModeSetConfig->colorBpcSpecified;
@@ -3836,9 +3912,19 @@ static NvBool ApplyModeSetConfig(
 {
     NvBool bRequiredModeset = NV_FALSE;
     NvU32  head;
+    NvU32 notifierIndices[NVKMS_KAPI_MAX_HEADS][NVKMS_MAX_LAYERS_PER_HEAD];
+    NvBool status;
+    NvU32 layer;
 
     if (device == NULL || requestedConfig == NULL) {
         return NV_FALSE;
+    }
+
+    for (head = 0; head < device->numHeads; head++) {
+        for (layer = 0; layer < device->numLayers[head]; layer++) {
+            notifierIndices[head][layer] =
+                device->layerState[head][layer].currFlipNotifierIndex;
+        }
     }
 
     for (head = 0;
@@ -3876,10 +3962,20 @@ static NvBool ApplyModeSetConfig(
     }
 
     if (bRequiredModeset) {
-        return KmsSetMode(device, requestedConfig, replyConfig, commit);
+        status = KmsSetMode(device, requestedConfig, replyConfig, commit);
+    } else {
+        status = KmsFlip(device, requestedConfig, replyConfig, commit);
     }
 
-    return KmsFlip(device, requestedConfig, replyConfig, commit);
+    if (!status && commit) {
+        for (head = 0; head < device->numHeads; head++) {
+            for (layer = 0; layer < device->numLayers[head]; layer++) {
+                device->layerState[head][layer].currFlipNotifierIndex =
+                    notifierIndices[head][layer];
+            }
+        }
+    }
+    return status;
 }
 
 /*
@@ -4055,6 +4151,27 @@ void nvKmsKapiProbe
 
         pCallbacks->probe(&kapi_gpu_info);
     }
+}
+
+static NvBool GetFlipPendingStatus(
+    const struct NvKmsKapiDevice *device,
+    const NvU32 head,
+    const NvU32 layer,
+    NvBool *pending)
+{
+    struct nvKmsParsedNotifier notifier = { };
+
+    if (pending == NULL || head >= device->numHeads ||
+        layer >= device->numLayers[head] || !device->notifier.mapped) {
+        return NV_FALSE;
+    }
+
+    nvKmsParseNotifier(NVKMS_KAPI_NOTIFIER_INDEX(head, layer,
+                          device->layerState[head][layer].currFlipNotifierIndex),
+                        device->notifier.pLinearAddress, &notifier);
+    *pending = notifier.status == NVKMS_NOTIFIER_STATUS_NOT_BEGUN ||
+               !notifier.timeStampValid;
+    return NV_TRUE;
 }
 
 static NvBool CheckLutNotifier
@@ -4247,8 +4364,10 @@ NvBool nvKmsKapiGetFunctionsTableInternal
 
     funcsTable->getDisplayMode      = GetDisplayMode;
     funcsTable->validateDisplayMode = ValidateDisplayMode;
+    funcsTable->validateDisplayModeColor = ValidateDisplayModeColor;
 
     funcsTable->applyModeSetConfig   = ApplyModeSetConfig;
+    funcsTable->getFlipPendingStatus = GetFlipPendingStatus;
 
     funcsTable->allocateChannelEvent = nvKmsKapiAllocateChannelEvent;
     funcsTable->freeChannelEvent = nvKmsKapiFreeChannelEvent;

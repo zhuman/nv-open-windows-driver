@@ -23,6 +23,8 @@ struct ModePath final
     IDDCX_MONITOR monitor;
     IDDCX_PATH_FLAGS flags;
     DISPLAYCONFIG_VIDEO_SIGNAL_INFO signalInfo;
+    NvU8 colorBpc;
+    NV_KMS_WINDOWS_COLOR_SPACE colorSpace;
 };
 
 class Adapter final

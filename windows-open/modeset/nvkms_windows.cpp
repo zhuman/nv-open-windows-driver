@@ -13,6 +13,7 @@ extern "C" {
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <windows.h>
 
 #ifndef NV_KMS_WINDOWS_VERIFY_SCANOUT_UPLOAD
@@ -60,9 +61,13 @@ struct NV_KMS_WINDOWS_SURFACE
     NvU32 width;
     NvU32 height;
     NvU32 pitch;
+    NV_KMS_WINDOWS_SCANOUT_FORMAT format;
+    NvBool presented;
 };
 
 extern "C" void NvKmsWindowsTraceMessage(const char* message);
+extern "C" NvBool nvEvoGetPqOutputLutC5(
+    void* data, NvU32 size, NvU32* lutEntries, NvU32* vssSegments);
 
 namespace {
 
@@ -72,6 +77,7 @@ NvBool gpuRegistered = NV_FALSE;
 NvKmsKapiFunctionsTable kmsFunctions = {};
 NvKmsKapiDevice* kmsDevice = nullptr;
 NV_KMS_WINDOWS_SURFACE* kmsDefaultLutSurface = nullptr;
+NV_KMS_WINDOWS_SURFACE* kmsGammaSurfaces[NVKMS_KAPI_MAX_HEADS] = {};
 NvKmsKapiGpuInfo enumeratedKmsGpu = {};
 NvBool kmsGpuEnumerated = NV_FALSE;
 std::atomic<NV_KMS_WINDOWS_DISPLAY_CHANGE_CALLBACK>
@@ -81,6 +87,20 @@ std::atomic<void*> displayChangeContext{nullptr};
 constexpr NvU32 LutHeaderEntries = 4;
 constexpr NvU32 LutEntries = 1025;
 constexpr NvU32 LutSurfaceAlignment = 0x100;
+NvU32 pqLutEntries = 0;
+NvU32 pqLutSegments = 0;
+
+struct HeadGammaCache
+{
+    NvU16 red[NV_KMS_WINDOWS_GAMMA_ENTRIES];
+    NvU16 green[NV_KMS_WINDOWS_GAMMA_ENTRIES];
+    NvU16 blue[NV_KMS_WINDOWS_GAMMA_ENTRIES];
+    NvBool valid;
+};
+
+HeadGammaCache gammaCache[NVKMS_KAPI_MAX_HEADS] = {};
+NvKmsKapiLayerConfig
+    layerCache[NVKMS_KAPI_MAX_HEADS][NVKMS_KAPI_LAYER_MAX] = {};
 
 struct LutEntry
 {
@@ -95,18 +115,19 @@ struct LutData
     LutEntry base[LutHeaderEntries + LutEntries];
     alignas(LutSurfaceAlignment)
         LutEntry output[LutHeaderEntries + LutEntries];
+    alignas(LutSurfaceAlignment)
+        LutEntry pqOutput[LutHeaderEntries + LutEntries];
 };
 
-NvU16 Unorm10ToFp16(NvU16 value)
+NvU16 FloatToFp16(float value)
 {
     if (value == 0)
     {
         return 0;
     }
 
-    const float normalized = static_cast<float>(value) / 1023.0F;
     NvU32 bits = 0;
-    std::memcpy(&bits, &normalized, sizeof(bits));
+    std::memcpy(&bits, &value, sizeof(bits));
 
     NvU32 exponent = (bits >> 23) & 0xFF;
     NvU32 mantissa = bits & 0x7FFFFF;
@@ -119,6 +140,32 @@ NvU16 Unorm10ToFp16(NvU16 value)
 
     return static_cast<NvU16>(((exponent - 112) << 10) |
                               (mantissa >> 13));
+}
+
+NvU16 Unorm10ToFp16(NvU16 value)
+{
+    return FloatToFp16(static_cast<float>(value) / 1023.0F);
+}
+
+void CopyHdrMetadata(
+    const NV_KMS_WINDOWS_HDR_METADATA& source,
+    NvKmsHDRStaticMetadata* destination)
+{
+    for (NvU32 primary = 0; primary < 3; ++primary)
+    {
+        destination->displayPrimaries[primary].x =
+            source.displayPrimaries[primary][0];
+        destination->displayPrimaries[primary].y =
+            source.displayPrimaries[primary][1];
+    }
+    destination->whitePoint.x = source.whitePoint[0];
+    destination->whitePoint.y = source.whitePoint[1];
+    destination->maxDisplayMasteringLuminance =
+        source.maxMasteringLuminance;
+    destination->minDisplayMasteringLuminance =
+        source.minMasteringLuminance;
+    destination->maxCLL = source.maxContentLightLevel;
+    destination->maxFALL = source.maxFrameAverageLightLevel;
 }
 SRWLOCK kmsDeviceLock = SRWLOCK_INIT;
 INIT_ONCE kmsLockInitOnce = INIT_ONCE_STATIC_INIT;
@@ -146,6 +193,13 @@ public:
     KmsDeviceLockGuard(const KmsDeviceLockGuard&) = delete;
     KmsDeviceLockGuard& operator=(const KmsDeviceLockGuard&) = delete;
 };
+
+NvU64 PerformanceCounter()
+{
+    LARGE_INTEGER counter = {};
+    QueryPerformanceCounter(&counter);
+    return static_cast<NvU64>(counter.QuadPart);
+}
 
 void DestroySurface(NV_KMS_WINDOWS_SURFACE* surface)
 {
@@ -179,13 +233,23 @@ void DestroySurface(NV_KMS_WINDOWS_SURFACE* surface)
     HeapFree(GetProcessHeap(), 0, surface);
 }
 
-NV_STATUS EnsureDefaultLutSurface()
+NvU16 SampleGamma(const NvU16* ramp, NvU16 value)
 {
-    if (kmsDefaultLutSurface != nullptr)
-    {
-        return NV_OK;
-    }
+    const NvU32 position = static_cast<NvU32>(value) *
+        (NV_KMS_WINDOWS_GAMMA_ENTRIES - 1);
+    const NvU32 lower = position / 65535;
+    const NvU32 upper = lower + 1 < NV_KMS_WINDOWS_GAMMA_ENTRIES ?
+        lower + 1 : lower;
+    const NvU32 fraction = position % 65535;
+    return static_cast<NvU16>(
+        (static_cast<NvU32>(ramp[lower]) * (65535 - fraction) +
+         static_cast<NvU32>(ramp[upper]) * fraction + 32767) / 65535);
+}
 
+NV_STATUS CreateLutSurface(
+    const NV_KMS_WINDOWS_COLOR_TRANSFORM* transform,
+    NV_KMS_WINDOWS_SURFACE** result)
+{
     const NvU64 size =
         (sizeof(LutData) + LutSurfaceAlignment - 1) &
         ~(static_cast<NvU64>(LutSurfaceAlignment) - 1);
@@ -245,6 +309,34 @@ NV_STATUS EnsureDefaultLutSurface()
         data->base[LutHeaderEntries + 1023];
     data->output[LutHeaderEntries + 1024] =
         data->output[LutHeaderEntries + 1023];
+    if (!nvEvoGetPqOutputLutC5(
+            data->pqOutput, sizeof(data->pqOutput),
+            &pqLutEntries, &pqLutSegments))
+    {
+        DestroySurface(lut);
+        return NV_ERR_GENERIC;
+    }
+    if (transform != nullptr && transform->gammaEnabled)
+    {
+        for (NvU32 index = LutHeaderEntries;
+             index < LutHeaderEntries + LutEntries;
+             ++index)
+        {
+            auto& entry = data->output[index];
+            entry.Red = SampleGamma(transform->gammaRed, entry.Red);
+            entry.Green = SampleGamma(transform->gammaGreen, entry.Green);
+            entry.Blue = SampleGamma(transform->gammaBlue, entry.Blue);
+        }
+        for (NvU32 index = LutHeaderEntries;
+             index < LutHeaderEntries + pqLutEntries;
+             ++index)
+        {
+            auto& entry = data->pqOutput[index];
+            entry.Red = SampleGamma(transform->gammaRed, entry.Red);
+            entry.Green = SampleGamma(transform->gammaGreen, entry.Green);
+            entry.Blue = SampleGamma(transform->gammaBlue, entry.Blue);
+        }
+    }
 
     NvKmsKapiCreateSurfaceParams surfaceParams = {};
     surfaceParams.planes[0].memory = lut->memory;
@@ -264,9 +356,31 @@ NV_STATUS EnsureDefaultLutSurface()
         return NV_ERR_GENERIC;
     }
 
-    kmsDefaultLutSurface = lut;
-    NvKmsWindowsTraceMessage("NVKMS default LUT uploaded to vidmem");
+    *result = lut;
+    NvKmsWindowsTraceMessage("NVKMS LUT uploaded to vidmem");
     return NV_OK;
+}
+
+NV_STATUS EnsureDefaultLutSurface()
+{
+    return kmsDefaultLutSurface != nullptr ? NV_OK :
+        CreateLutSurface(nullptr, &kmsDefaultLutSurface);
+}
+
+void SetOutputLut(NvKmsKapiHeadRequestedConfig* headConfig,
+                  NV_KMS_WINDOWS_SURFACE* surface, NvBool hdr)
+{
+    headConfig->modeSetConfig.olut.enabled = NV_TRUE;
+    headConfig->modeSetConfig.olut.lutSurface = surface->surface;
+    headConfig->modeSetConfig.olut.offset = hdr ?
+        offsetof(LutData, pqOutput) : offsetof(LutData, output);
+    headConfig->modeSetConfig.olut.vssSegments = hdr ? pqLutSegments : 0;
+    headConfig->modeSetConfig.olut.lutEntries = hdr ? pqLutEntries : LutEntries;
+    headConfig->modeSetConfig.olutFpNormScale = hdr ?
+        NVKMS_OLUT_FP_NORM_SCALE_DEFAULT / 125 :
+        NVKMS_OLUT_FP_NORM_SCALE_DEFAULT;
+    headConfig->flags.olutChanged = NV_TRUE;
+    headConfig->flags.olutFpNormScaleChanged = NV_TRUE;
 }
 
 BOOL CALLBACK NvKmsInitializeLock(PINIT_ONCE, void*, void**)
@@ -1021,6 +1135,11 @@ extern "C" void NvKmsWindowsShutdown(void)
 
     if (kmsDevice != nullptr)
     {
+        for (auto*& surface : kmsGammaSurfaces)
+        {
+            DestroySurface(surface);
+            surface = nullptr;
+        }
         DestroySurface(kmsDefaultLutSurface);
         kmsDefaultLutSurface = nullptr;
         kmsFunctions.releaseOwnership(kmsDevice);
@@ -1209,6 +1328,15 @@ extern "C" NV_STATUS NvKmsWindowsGetDisplay(
     }
 
     displayState->headCount = resources.numHeads;
+    if ((resources.caps.supportedCursorSurfaceMemoryFormats &
+         NVBIT64(NvKmsSurfaceMemoryFormatA8R8G8B8)) != 0 &&
+        (resources.caps.validCursorCompositionModes &
+         NVBIT(NVKMS_COMPOSITION_BLENDING_MODE_PREMULT_ALPHA)) != 0)
+    {
+        displayState->maxCursorSize =
+            resources.caps.maxCursorSizeInPixels > 512 ?
+                512 : resources.caps.maxCursorSizeInPixels;
+    }
     for (NvU32 head = 0; head < resources.numHeads; ++head)
     {
         if (resources.numLayers[head] > displayState->maxLayersPerHead)
@@ -1319,7 +1447,14 @@ extern "C" NV_STATUS NvKmsWindowsGetDisplay(
                 goto done;
             }
 
-            if (valid)
+            const NvBool rgb8Supported = valid ?
+                kmsFunctions.validateDisplayModeColor(
+                    kmsDevice,
+                    displays[displayIndex],
+                    &kmsMode,
+                    NVKMS_KAPI_REQUESTED_COLOR_FORMAT_RGB,
+                    8) : NV_FALSE;
+            if (rgb8Supported)
             {
                 NV_KMS_WINDOWS_MODE* const mode =
                     &displayState->modes[displayState->modeCount];
@@ -1337,6 +1472,14 @@ extern "C" NV_STATUS NvKmsWindowsGetDisplay(
                 mode->vTotal = kmsMode.timings.vTotal;
                 mode->widthMillimeters = kmsMode.timings.widthMM;
                 mode->heightMillimeters = kmsMode.timings.heightMM;
+                mode->rgb8Supported = NV_TRUE;
+                mode->rgb10Supported =
+                    kmsFunctions.validateDisplayModeColor(
+                        kmsDevice,
+                        displays[displayIndex],
+                        &kmsMode,
+                        NVKMS_KAPI_REQUESTED_COLOR_FORMAT_RGB,
+                        10);
                 mode->interlaced = kmsMode.timings.flags.interlaced;
                 mode->doubleScan = kmsMode.timings.flags.doubleScan;
                 mode->hSyncPos = kmsMode.timings.flags.hSyncPos;
@@ -1376,11 +1519,16 @@ extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
 extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     NvU32 width,
     NvU32 height,
+    NV_KMS_WINDOWS_SCANOUT_FORMAT format,
     NV_KMS_WINDOWS_SURFACE** surface,
     void** pixels,
     NvU32* pitch)
 {
-    if (width == 0 || height == 0 || surface == nullptr ||
+    if (width == 0 || height == 0 ||
+        (format != NV_KMS_WINDOWS_SCANOUT_FORMAT_XRGB8 &&
+         format != NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16 &&
+         format != NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8) ||
+        surface == nullptr ||
         pixels == nullptr || pitch == nullptr)
     {
         return NV_ERR_INVALID_ARGUMENT;
@@ -1402,15 +1550,28 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     {
         return NV_ERR_GENERIC;
     }
-        if ((resources.supportedSurfaceMemoryFormats[0] &
-            NVBIT64(NvKmsSurfaceMemoryFormatX8R8G8B8)) == 0)
+    const NvKmsSurfaceMemoryFormat kmsFormat =
+        format == NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16
+            ? NvKmsSurfaceMemoryFormatRF16GF16BF16AF16
+            : format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8
+                ? NvKmsSurfaceMemoryFormatA8R8G8B8
+                : NvKmsSurfaceMemoryFormatX8R8G8B8;
+    const NvU64 supportedFormats =
+        format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8 ?
+            resources.caps.supportedCursorSurfaceMemoryFormats :
+            resources.supportedSurfaceMemoryFormats[0];
+    if ((supportedFormats & NVBIT64(kmsFormat)) == 0 ||
+        (format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8 &&
+         (width != height || width > resources.caps.maxCursorSizeInPixels)))
     {
         return NV_ERR_NOT_SUPPORTED;
     }
 
     const NvU32 alignment = resources.caps.pitchAlignment == 0 ?
         1 : resources.caps.pitchAlignment;
-    const NvU64 rowBytes = static_cast<NvU64>(width) * 4;
+    const NvU64 bytesPerPixel =
+        format == NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16 ? 8 : 4;
+    const NvU64 rowBytes = static_cast<NvU64>(width) * bytesPerPixel;
     const NvU64 alignedPitch =
         ((rowBytes + alignment - 1) / alignment) * alignment;
     const NvU64 allocationSize = alignedPitch * height;
@@ -1477,13 +1638,14 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     scanout->width = width;
     scanout->height = height;
     scanout->pitch = static_cast<NvU32>(alignedPitch);
+    scanout->format = format;
 
     NvKmsKapiCreateSurfaceParams surfaceParams = {};
     surfaceParams.planes[0].memory = scanout->memory;
     surfaceParams.planes[0].pitch = scanout->pitch;
     surfaceParams.width = width;
     surfaceParams.height = height;
-    surfaceParams.format = NvKmsSurfaceMemoryFormatX8R8G8B8;
+    surfaceParams.format = kmsFormat;
     surfaceParams.explicit_layout = NV_TRUE;
     surfaceParams.layout = NvKmsSurfaceMemoryLayoutPitch;
     scanout->surface = kmsFunctions.createSurface(kmsDevice, &surfaceParams);
@@ -1683,17 +1845,57 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             headConfig->modeSetConfig.numDisplays = 1;
             headConfig->modeSetConfig.displays[0] = outputs[index].displayHandle;
             headConfig->modeSetConfig.mode = modes[index];
-            headConfig->modeSetConfig.colorBpc = 8;
+            headConfig->modeSetConfig.colorFormat =
+                NVKMS_KAPI_REQUESTED_COLOR_FORMAT_RGB;
+            headConfig->modeSetConfig.colorFormatSpecified = NV_TRUE;
+            headConfig->modeSetConfig.colorBpc = outputs[index].colorBpc;
             headConfig->modeSetConfig.colorBpcSpecified = NV_TRUE;
+            switch (outputs[index].colorSpace)
+            {
+            case NV_KMS_WINDOWS_COLOR_SPACE_HDR10:
+                headConfig->modeSetConfig.hdrInfoFrame.enabled =
+                    outputs[index].hdrMetadataEnabled;
+                headConfig->modeSetConfig.hdrInfoFrame.eotf =
+                    NVKMS_INFOFRAME_EOTF_ST2084;
+                if (outputs[index].hdrMetadataEnabled)
+                {
+                    CopyHdrMetadata(
+                        outputs[index].hdrMetadata,
+                        &headConfig->modeSetConfig.hdrInfoFrame.staticMetadata);
+                }
+                headConfig->modeSetConfig.colorimetry =
+                    NVKMS_OUTPUT_COLORIMETRY_BT2100;
+                break;
+            case NV_KMS_WINDOWS_COLOR_SPACE_SDR_WCG:
+                headConfig->modeSetConfig.colorimetry =
+                    NVKMS_OUTPUT_COLORIMETRY_BT709;
+                break;
+            case NV_KMS_WINDOWS_COLOR_SPACE_SDR:
+            default:
+                headConfig->modeSetConfig.colorimetry =
+                    NVKMS_OUTPUT_COLORIMETRY_DEFAULT;
+                break;
+            }
             headConfig->modeSetConfig.olutFpNormScale =
+                outputs[index].colorSpace == NV_KMS_WINDOWS_COLOR_SPACE_HDR10 ?
+                NVKMS_OLUT_FP_NORM_SCALE_DEFAULT / 125 :
                 NVKMS_OLUT_FP_NORM_SCALE_DEFAULT;
             headConfig->modeSetConfig.olut.enabled = NV_TRUE;
-            headConfig->modeSetConfig.olut.lutSurface =
-                kmsDefaultLutSurface->surface;
-            headConfig->modeSetConfig.olut.offset =
-                static_cast<NvU32>(offsetof(LutData, output));
-            headConfig->modeSetConfig.olut.lutEntries =
-                LutEntries;
+            if (headConfig->modeSetConfig.olut.enabled)
+            {
+                headConfig->modeSetConfig.olut.lutSurface =
+                    kmsDefaultLutSurface->surface;
+                headConfig->modeSetConfig.olut.offset =
+                    outputs[index].colorSpace == NV_KMS_WINDOWS_COLOR_SPACE_HDR10 ?
+                    static_cast<NvU32>(offsetof(LutData, pqOutput)) :
+                    static_cast<NvU32>(offsetof(LutData, output));
+                headConfig->modeSetConfig.olut.vssSegments =
+                    outputs[index].colorSpace == NV_KMS_WINDOWS_COLOR_SPACE_HDR10 ?
+                    pqLutSegments : 0;
+                headConfig->modeSetConfig.olut.lutEntries =
+                    outputs[index].colorSpace == NV_KMS_WINDOWS_COLOR_SPACE_HDR10 ?
+                    pqLutEntries : LutEntries;
+            }
             headConfig->flags.activeChanged = NV_TRUE;
             headConfig->flags.displaysChanged = NV_TRUE;
             headConfig->flags.modeChanged = NV_TRUE;
@@ -1731,11 +1933,33 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             auto* const layer =
                 &headConfig->layerRequestedConfig[NVKMS_KAPI_LAYER_PRIMARY_IDX];
             layer->config.surface = outputs[index].surface->surface;
-            layer->config.ilut.enabled = NV_TRUE;
-            layer->config.ilut.lutSurface = kmsDefaultLutSurface->surface;
-            layer->config.ilut.offset =
-                static_cast<NvU32>(offsetof(LutData, base));
-            layer->config.ilut.lutEntries = LutEntries;
+            if (outputs[index].surface->format ==
+                NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16)
+            {
+                layer->config.inputTf = NVKMS_INPUT_TF_LINEAR;
+                layer->config.inputColorSpace = NVKMS_INPUT_COLOR_SPACE_SCRGB;
+                layer->config.outputTf =
+                    outputs[index].colorSpace == NV_KMS_WINDOWS_COLOR_SPACE_HDR10 ?
+                    NVKMS_OUTPUT_TF_PQ : NVKMS_OUTPUT_TF_TRADITIONAL_GAMMA_SDR;
+            }
+            else
+            {
+                layer->config.inputTf = NVKMS_INPUT_TF_LINEAR;
+                layer->config.inputColorSpace = NVKMS_INPUT_COLOR_SPACE_BT709;
+                layer->config.outputTf = NVKMS_OUTPUT_TF_NONE;
+                layer->config.ilut.enabled = NV_TRUE;
+                layer->config.ilut.lutSurface = kmsDefaultLutSurface->surface;
+                layer->config.ilut.offset =
+                    static_cast<NvU32>(offsetof(LutData, base));
+                layer->config.ilut.lutEntries = LutEntries;
+            }
+            layer->config.inputColorRange = NVKMS_INPUT_COLOR_RANGE_FULL;
+            if (outputs[index].hdrMetadataEnabled)
+            {
+                layer->config.hdrMetadata.enabled = NV_TRUE;
+                CopyHdrMetadata(outputs[index].hdrMetadata,
+                                &layer->config.hdrMetadata.val);
+            }
             layer->config.srcWidth =
                 static_cast<NvU16>(modes[index].timings.hVisible);
             layer->config.srcHeight =
@@ -1779,6 +2003,16 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
         for (NvU32 index = 0; index < outputCount; ++index)
         {
             outputs[index].assignedHead = assignedHeads[index];
+            outputs[index].surface->presented = NV_TRUE;
+            gammaCache[assignedHeads[index]].valid = NV_FALSE;
+            for (NvU32 layerIndex = 0;
+                 layerIndex < resources.numLayers[assignedHeads[index]];
+                 ++layerIndex)
+            {
+                layerCache[assignedHeads[index]][layerIndex] =
+                    requested.headRequestedConfig[assignedHeads[index]].
+                        layerRequestedConfig[layerIndex].config;
+            }
 
             char assignmentMessage[128] = {};
             nvkms_snprintf(
@@ -1796,18 +2030,114 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
     return NV_ERR_NOT_SUPPORTED;
 }
 
-extern "C" NV_STATUS NvKmsWindowsPresentLayers(
+extern "C" NV_STATUS NvKmsWindowsUpdateCursor(
     NvU32 head,
-    const NV_KMS_WINDOWS_LAYER* layers,
-    NvU32 layerCount)
+    NvU32 displayHandle,
+    NV_KMS_WINDOWS_SURFACE* surface,
+    NvBool surfaceChanged,
+    NvS32 x,
+    NvS32 y,
+    NvU32 sdrWhiteLevel)
 {
-    if ((layers == nullptr && layerCount != 0) ||
-        layerCount > NV_KMS_WINDOWS_MAX_LAYERS)
+    if (displayHandle == 0 || x < -32768 || x > 32767 ||
+        y < -32768 || y > 32767 || sdrWhiteLevel == 0 ||
+        sdrWhiteLevel > 10000)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
 
     KmsDeviceLockGuard lock;
+    NvKmsKapiDeviceResourcesInfo resources = {};
+    if (kmsDevice == nullptr)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources) ||
+        head >= resources.numHeads)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (surfaceChanged && surface != nullptr)
+    {
+        if (surface->format != NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8)
+        {
+            return NV_ERR_INVALID_ARGUMENT;
+        }
+        FlushProcessWriteBuffers();
+        if (!kmsFunctions.copyMemory(
+            kmsDevice, surface->memory, surface->stagingMemory,
+                surface->size))
+        {
+            return NV_ERR_GENERIC;
+        }
+    }
+
+    NvKmsKapiRequestedModeSetConfig requested = {};
+    NvKmsKapiModeSetReplyConfig reply = {};
+    requested.headsMask = 1U << head;
+    auto& headConfig = requested.headRequestedConfig[head];
+    headConfig.modeSetConfig.bActive = NV_TRUE;
+    headConfig.modeSetConfig.numDisplays = 1;
+    headConfig.modeSetConfig.displays[0] = displayHandle;
+    auto& cursor = headConfig.cursorRequestedConfig;
+    cursor.surface = surface == nullptr ? nullptr : surface->surface;
+    cursor.compParams.compMode = NVKMS_COMPOSITION_BLENDING_MODE_PREMULT_ALPHA;
+    cursor.compParams.surfaceAlpha = 0;
+    cursor.compParams.colorNormScale =
+        FloatToFp16(static_cast<float>(sdrWhiteLevel) / 80.0F);
+    cursor.dstX = static_cast<NvS16>(x);
+    cursor.dstY = static_cast<NvS16>(y);
+    cursor.flags.surfaceChanged = surfaceChanged;
+    cursor.flags.dstXYChanged = NV_TRUE;
+    if (!kmsFunctions.applyModeSetConfig(
+            kmsDevice, &requested, &reply, NV_TRUE))
+    {
+        char message[128] = {};
+        nvkms_snprintf(message, sizeof(message),
+                      "NVKMS cursor failed: head=%u flipResult=%u image=%u",
+                      head, reply.flipResult, surfaceChanged);
+        NvKmsWindowsTraceMessage(message);
+        return reply.flipResult == NV_KMS_FLIP_RESULT_IN_PROGRESS ?
+            NV_ERR_IN_USE : NV_ERR_INVALID_STATE;
+    }
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvKmsWindowsPresentLayers(
+    NvU32 head,
+    NvU32 displayHandle,
+    const NV_KMS_WINDOWS_LAYER* layers,
+    NvU32 layerCount)
+{
+    return NvKmsWindowsPresentLayersTimed(
+        head, displayHandle, layers, layerCount, NV_FALSE, nullptr);
+}
+
+extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
+    NvU32 head,
+    NvU32 displayHandle,
+    const NV_KMS_WINDOWS_LAYER* layers,
+    NvU32 layerCount,
+    NvBool preserveFrontBuffer,
+    NV_KMS_WINDOWS_PRESENT_TIMING* timing)
+{
+    NV_KMS_WINDOWS_PRESENT_TIMING localTiming = {};
+    if (timing == nullptr)
+    {
+        timing = &localTiming;
+    }
+    *timing = {};
+    if (displayHandle == 0 ||
+        (layers == nullptr && layerCount != 0) ||
+        layerCount > NV_KMS_WINDOWS_MAX_LAYERS)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    const NvU64 lockStart = PerformanceCounter();
+    KmsDeviceLockGuard lock;
+    timing->lockTicks = PerformanceCounter() - lockStart;
     if (kmsDevice == nullptr)
     {
         return NV_ERR_INVALID_STATE;
@@ -1820,12 +2150,52 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
         return NV_ERR_INVALID_ARGUMENT;
     }
 
+    if (preserveFrontBuffer)
+    {
+        const NvU64 pendingStart = PerformanceCounter();
+        for (NvU32 layerIndex = 0; layerIndex < layerCount; ++layerIndex)
+        {
+            NvBool pending = NV_FALSE;
+            if (layers[layerIndex].surface != nullptr &&
+                layers[layerIndex].surface->presented &&
+                !kmsFunctions.getFlipPendingStatus(kmsDevice, head, layerIndex, &pending))
+            {
+                return NV_ERR_INVALID_STATE;
+            }
+            timing->pendingTicks = PerformanceCounter() - pendingStart;
+            if (pending)
+            {
+                return NV_ERR_IN_USE;
+            }
+            if (layers[layerIndex].surface != nullptr &&
+                layerCache[head][layerIndex].surface == layers[layerIndex].surface->surface)
+            {
+                return NV_ERR_INVALID_STATE;
+            }
+        }
+    }
+
+    const NvU64 prepareStart = PerformanceCounter();
     NvKmsKapiRequestedModeSetConfig requested = {};
     NvKmsKapiModeSetReplyConfig reply = {};
     requested.headsMask = 1U << head;
     auto* const headConfig = &requested.headRequestedConfig[head];
     headConfig->modeSetConfig.bActive = NV_TRUE;
     headConfig->modeSetConfig.numDisplays = 1;
+    headConfig->modeSetConfig.displays[0] = displayHandle;
+    std::unique_ptr<NV_KMS_WINDOWS_SURFACE, decltype(&DestroySurface)>
+        pendingGamma(nullptr, &DestroySurface);
+    const NV_KMS_WINDOWS_COLOR_TRANSFORM* appliedGamma = nullptr;
+    const auto* primaryTransform = layerCount != 0 ?
+        layers[NVKMS_KAPI_LAYER_PRIMARY_IDX].colorTransform : nullptr;
+    const NvBool resetGamma = layerCount != 0 && gammaCache[head].valid &&
+        (primaryTransform == nullptr || !primaryTransform->gammaEnabled);
+    if (resetGamma)
+    {
+        SetOutputLut(headConfig, kmsDefaultLutSurface,
+                     layers[NVKMS_KAPI_LAYER_PRIMARY_IDX].colorSpace ==
+                         NV_KMS_WINDOWS_COLOR_SPACE_HDR10);
+    }
 
     for (NvU32 layerIndex = 0;
          layerIndex < resources.numLayers[head];
@@ -1833,11 +2203,18 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
     {
         auto* const requestedLayer =
             &headConfig->layerRequestedConfig[layerIndex];
-        requestedLayer->flags.surfaceChanged = NV_TRUE;
+        const auto& previous = layerCache[head][layerIndex];
+        requestedLayer->config = previous;
         if (layerIndex >= layerCount)
         {
+            if (previous.surface != nullptr)
+            {
+                requestedLayer->config.surface = nullptr;
+                requestedLayer->flags.surfaceChanged = NV_TRUE;
+            }
             continue;
         }
+        requestedLayer->flags.surfaceChanged = NV_TRUE;
 
         const NV_KMS_WINDOWS_LAYER* const layer = &layers[layerIndex];
         if (layer->surface == nullptr || layer->sourceWidth == 0 ||
@@ -1859,6 +2236,7 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
         }
 
         FlushProcessWriteBuffers();
+        const NvU64 uploadStart = PerformanceCounter();
         if (!kmsFunctions.copyMemory(
                 kmsDevice,
                 layer->surface->memory,
@@ -1867,6 +2245,7 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
         {
             return NV_ERR_GENERIC;
         }
+        timing->uploadTicks += PerformanceCounter() - uploadStart;
 
         auto* const config = &requestedLayer->config;
         config->surface = layer->surface->surface;
@@ -1884,17 +2263,169 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
         config->compParams.surfaceAlpha = layer->opacity;
         config->minPresentInterval = 1;
 
-        requestedLayer->flags.srcXYChanged = NV_TRUE;
-        requestedLayer->flags.srcWHChanged = NV_TRUE;
-        requestedLayer->flags.dstXYChanged = NV_TRUE;
-        requestedLayer->flags.dstWHChanged = NV_TRUE;
+        switch (layer->colorSpace)
+        {
+        case NV_KMS_WINDOWS_COLOR_SPACE_HDR10:
+            config->inputTf = NVKMS_INPUT_TF_LINEAR;
+            config->inputColorSpace = NVKMS_INPUT_COLOR_SPACE_SCRGB;
+            config->outputTf = NVKMS_OUTPUT_TF_PQ;
+            break;
+        case NV_KMS_WINDOWS_COLOR_SPACE_SDR_WCG:
+            config->inputTf = NVKMS_INPUT_TF_LINEAR;
+            config->inputColorSpace = NVKMS_INPUT_COLOR_SPACE_SCRGB;
+            config->outputTf = NVKMS_OUTPUT_TF_TRADITIONAL_GAMMA_SDR;
+            break;
+        case NV_KMS_WINDOWS_COLOR_SPACE_SDR:
+        default:
+            config->inputTf = NVKMS_INPUT_TF_LINEAR;
+            config->inputColorSpace = NVKMS_INPUT_COLOR_SPACE_BT709;
+            config->outputTf = NVKMS_OUTPUT_TF_NONE;
+            break;
+        }
+        config->inputColorRange = NVKMS_INPUT_COLOR_RANGE_FULL;
+
+        config->hdrMetadata.enabled = layer->hdrMetadataEnabled;
+        if (layer->hdrMetadataEnabled)
+        {
+            config->hdrMetadata.enabled = NV_TRUE;
+            CopyHdrMetadata(layer->hdrMetadata, &config->hdrMetadata.val);
+        }
+
+        config->csc = NVKMS_IDENTITY_CSC_MATRIX;
+        config->matrixOverrides.enabled.fmtCtm = NV_FALSE;
+        if (layer->colorTransform != nullptr)
+        {
+            if (layer->colorTransform->cscEnabled)
+            {
+                const bool hdr = layer->colorSpace == NV_KMS_WINDOWS_COLOR_SPACE_HDR10;
+                config->matrixOverrides.enabled.fmtCtm = hdr ? NV_TRUE : NV_FALSE;
+                for (NvU32 row = 0; row < 3; ++row)
+                {
+                    for (NvU32 column = 0; column < 4; ++column)
+                    {
+                        auto& matrix = hdr ? config->matrixOverrides.fmtCtm : config->csc;
+                        matrix.m[row][column] =
+                            layer->colorTransform->csc[row][column];
+                    }
+                }
+            }
+            if (layerIndex == NVKMS_KAPI_LAYER_PRIMARY_IDX &&
+                layer->colorTransform->gammaEnabled)
+            {
+                const HeadGammaCache& cached = gammaCache[head];
+                if (!cached.valid ||
+                    std::memcmp(
+                        cached.red,
+                        layer->colorTransform->gammaRed,
+                        sizeof(cached.red)) != 0 ||
+                    std::memcmp(
+                        cached.green,
+                        layer->colorTransform->gammaGreen,
+                        sizeof(cached.green)) != 0 ||
+                    std::memcmp(
+                        cached.blue,
+                        layer->colorTransform->gammaBlue,
+                        sizeof(cached.blue)) != 0)
+                {
+                    NV_KMS_WINDOWS_SURFACE* surface = nullptr;
+                    const NV_STATUS status =
+                        CreateLutSurface(layer->colorTransform, &surface);
+                    if (status != NV_OK)
+                    {
+                        return status;
+                    }
+                    pendingGamma.reset(surface);
+                    SetOutputLut(headConfig, surface,
+                                 layer->colorSpace ==
+                                     NV_KMS_WINDOWS_COLOR_SPACE_HDR10);
+                    appliedGamma = layer->colorTransform;
+                }
+            }
+        }
+
+        requestedLayer->flags.srcXYChanged =
+            config->srcX != previous.srcX || config->srcY != previous.srcY;
+        requestedLayer->flags.srcWHChanged =
+            config->srcWidth != previous.srcWidth ||
+            config->srcHeight != previous.srcHeight;
+        requestedLayer->flags.dstXYChanged =
+            config->dstX != previous.dstX || config->dstY != previous.dstY;
+        requestedLayer->flags.dstWHChanged =
+            config->dstWidth != previous.dstWidth ||
+            config->dstHeight != previous.dstHeight;
+        requestedLayer->flags.cscChanged =
+            std::memcmp(&config->csc, &previous.csc, sizeof(config->csc)) != 0;
+        requestedLayer->flags.matrixOverridesChanged =
+            std::memcmp(&config->matrixOverrides, &previous.matrixOverrides,
+                        sizeof(config->matrixOverrides)) != 0;
+        requestedLayer->flags.inputTfChanged =
+            config->inputTf != previous.inputTf;
+        requestedLayer->flags.outputTfChanged =
+            previous.surface == nullptr || config->outputTf != previous.outputTf;
+        requestedLayer->flags.inputColorSpaceChanged =
+            config->inputColorSpace != previous.inputColorSpace;
+        requestedLayer->flags.inputColorRangeChanged =
+            config->inputColorRange != previous.inputColorRange;
+        requestedLayer->flags.hdrMetadataChanged =
+            config->hdrMetadata.enabled != previous.hdrMetadata.enabled ||
+            (config->hdrMetadata.enabled &&
+             std::memcmp(&config->hdrMetadata.val, &previous.hdrMetadata.val,
+                         sizeof(config->hdrMetadata.val)) != 0);
     }
 
-    if (!kmsFunctions.applyModeSetConfig(
-            kmsDevice, &requested, &reply, NV_TRUE))
+    timing->prepareTicks = PerformanceCounter() - prepareStart - timing->uploadTicks;
+    const NvU64 submitStart = PerformanceCounter();
+    const NvBool committed = kmsFunctions.applyModeSetConfig(
+        kmsDevice, &requested, &reply, NV_TRUE);
+    timing->submitTicks = PerformanceCounter() - submitStart;
+    if (!committed)
     {
+        char failureMessage[128] = {};
+        nvkms_snprintf(
+            failureMessage,
+            sizeof(failureMessage),
+            "NVKMS present failed: head=%u flipResult=%u",
+            head,
+            reply.flipResult);
+        NvKmsWindowsTraceMessage(failureMessage);
         return reply.flipResult == NV_KMS_FLIP_RESULT_IN_PROGRESS ?
             NV_ERR_IN_USE : NV_ERR_INVALID_STATE;
+    }
+    for (NvU32 layerIndex = 0;
+         layerIndex < resources.numLayers[head];
+         ++layerIndex)
+    {
+        layerCache[head][layerIndex] =
+            headConfig->layerRequestedConfig[layerIndex].config;
+        if (layerIndex < layerCount)
+        {
+            layers[layerIndex].surface->presented = NV_TRUE;
+        }
+    }
+    if (appliedGamma != nullptr)
+    {
+        auto* const oldSurface = kmsGammaSurfaces[head];
+        kmsGammaSurfaces[head] = pendingGamma.release();
+        DestroySurface(oldSurface);
+        std::memcpy(
+            gammaCache[head].red,
+            appliedGamma->gammaRed,
+            sizeof(gammaCache[head].red));
+        std::memcpy(
+            gammaCache[head].green,
+            appliedGamma->gammaGreen,
+            sizeof(gammaCache[head].green));
+        std::memcpy(
+            gammaCache[head].blue,
+            appliedGamma->gammaBlue,
+            sizeof(gammaCache[head].blue));
+        gammaCache[head].valid = NV_TRUE;
+    }
+    else if (resetGamma)
+    {
+        gammaCache[head].valid = NV_FALSE;
+        DestroySurface(kmsGammaSurfaces[head]);
+        kmsGammaSurfaces[head] = nullptr;
     }
     return NV_OK;
 }

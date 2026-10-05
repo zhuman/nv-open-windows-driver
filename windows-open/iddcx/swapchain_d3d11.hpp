@@ -8,6 +8,8 @@
 #include <wil/com.h>
 #include <wil/resource.h>
 
+#include "nvkms_windows.h"
+
 namespace nv::iddcx {
 
 class Output;
@@ -43,9 +45,13 @@ private:
     static DWORD WINAPI ThreadEntry(void* context) noexcept;
     HRESULT Initialize(LUID adapterLuid) noexcept;
     HRESULT CreateDevice(LUID adapterLuid) noexcept;
-    HRESULT CopyFrame(IDXGIResource* surface) noexcept;
+    HRESULT CopyFrame(wil::com_ptr_nothrow<IDXGIResource>& surface) noexcept;
+    HRESULT CopyFrame(const IDDCX_SYSTEM_BUFFER_INFO& buffer) noexcept;
+    HRESULT FinishFrame() noexcept;
+    void UpdateHdrMetadata(const IDDCX_METADATA2& metadata) noexcept;
     void Process() noexcept;
     void Stop() noexcept;
+    NvU64 Microseconds(NvU64 ticks) const noexcept;
     void* operator new(size_t) = delete;
     void operator delete(void*) = delete;
 
@@ -58,7 +64,22 @@ private:
     wil::unique_handle thread_;
     wil::srwlock stateLock_;
     WDFWORKITEM failureWorkItem_;
+    NV_KMS_WINDOWS_HDR_METADATA currentHdrMetadata_;
+    bool hasCurrentHdrMetadata_;
+    bool useBuffer2_;
+    bool useSystemMemory_;
     bool deletionStarted_;
+    LARGE_INTEGER counterFrequency_ = {};
+    struct
+    {
+        NvU64 stagingTicks;
+        NvU64 readbackTicks;
+        NvU64 mapTicks;
+        NvU64 copyTicks;
+        NvU64 unmapTicks;
+        NvU64 finishTicks;
+        bool frameQueued;
+    } copyTiming_ = {};
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(SwapChainD3D11, GetSwapChainD3D11);

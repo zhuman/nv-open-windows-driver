@@ -88,6 +88,9 @@ struct NvKmsKapiDevice {
 
     NvU32 hRmClient;
     NvU32 hRmDevice, hRmSubDevice;
+#if defined(NV_WINDOWS)
+    NvU32 hRmCopyCeUtils;
+#endif
     NvU32 deviceInstance;
 
     NVUnixRmHandleAllocatorRec handleAllocator;

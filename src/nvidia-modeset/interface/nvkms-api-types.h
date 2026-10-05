@@ -467,6 +467,9 @@ struct NvKmsCompositionParams {
      * '0' then default depth value will get used.
      */
     NvU8 depth;
+#if defined(NV_WINDOWS)
+    NvU16 cursorColorNormScale;
+#endif
 };
 
 /*!
