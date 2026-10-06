@@ -1,3 +1,140 @@
+# 🖥️ Windows Display-Only Driver Harness for Nvidia GPUs
+
+This fork hosts the common, OS-agnostic portions of NVIDIA's open Linux GPU
+driver inside a **Windows UMDF 2 / IddCx display driver**. It already drives
+real NVIDIA display outputs; it is not just a virtual-monitor sample.
+The project is an independent, experimental port, not an official NVIDIA
+Windows driver.
+
+## 🧩 How it works
+
+The Windows harness replaces the Linux-facing OS services with Windows
+backends for memory, synchronization, threads, timers, PCI configuration, BAR
+access, interrupts, and WDF DMA/common buffers. It hosts NVIDIA's **Resource
+Manager (RM), GSP host code, and NVKMS display engine**, using the NVKMS KAPI
+for connector discovery, modesetting, surfaces, color processing, and flips.
+Matching NVIDIA GSP firmware is still required.
+
+Windows/DWM renders on a source GPU and supplies frames through IddCx.
+The default native D3D12 path copies those frames directly into imported
+WDF common-buffer memory; the NVIDIA copy engine (CE) uploads that memory
+to VRAM for physical scanout:
+
+```text
+Windows / DWM on the rendering GPU
+  -> IddCx D3D12 acquisition -> shared system-memory common buffer
+  -> NVIDIA CE upload -> VRAM -> NVKMS -> physical display
+```
+
+This path avoids an extra CPU pixel memcpy and remains **pure UMDF**, without
+a custom kernel-mode transport companion. A working D3D11 staging path and
+D3D12 reference modes remain available. This is **display-only**: it does not
+provide an NVIDIA Windows rendering UMD, Direct3D acceleration on the target
+GPU, or CUDA.
+
+### 🛠️ UMDF is the hardware host
+
+UMDF/WDF provides the Windows-managed hardware and lifecycle contracts, not
+just the IddCx frame-delivery interface:
+
+- **PCIe BARs:** translated PnP resources, bus-interface configuration access,
+  and framework-managed MMIO mappings.
+- **MSI interrupts:** WDF interrupt objects and callbacks feed the RM interrupt
+  path using Windows-assigned resources.
+- **PnP and power:** prepare/release-hardware and D0 entry/exit callbacks own
+  initialization, quiescing, and resource cleanup.
+- **DMA memory:** WDF DMA enablers and common buffers provide the backing
+  allocations used by the frame-transfer path.
+
+This keeps hardware access tied to the device's Windows resource ownership.
+It is not a claim of complete sleep/resume or production power certification.
+
+## ✅ Confirmed working
+
+Hardware validation has used an **RTX 4070 connected over USB4** on Windows 11.
+These are demonstrated features, not a claim that every GPU in the inherited
+supported-device table has been tested.
+
+| Area | Working functionality |
+| --- | --- |
+| Hardware bring-up | PCI/BAR access, interrupts, GSP boot, RM/NVKMS initialization, and scanout allocation. |
+| Physical displays | Connector/EDID discovery, mode enumeration and validation, Windows monitor arrival, modesetting, and live desktop/window presentation. |
+| Hotplug | HDMI and DisplayPort arrival/departure, connector reconciliation, and topology updates. |
+| Color and composition | SDR/HDR transitions, FP16/scRGB input, RGB10 HDR output, HDR10 metadata, gamma/LUT processing, and Windows color matrices including Night Light. |
+| Hardware cursor | Alpha cursor images, visibility/position updates, and rebinding across SDR/HDR modesets. XOR cursors are not advertised. |
+| Frame transfer | Native IddCx D3D12 common-buffer copying, D3D11 staging, and selectable reference/readback modes. |
+| Damage tracking | Per-buffer accumulated dirty regions, conservative full-refresh recovery, and at most two non-overlapping horizontal copy bands. |
+| Pipelined presentation | Overlapped source-GPU copy and CE upload, independent RAM/VRAM leases, two/three/four buffers, and safe latest-ready coalescing with notifier-based retirement. |
+| Lifecycle and diagnostics | Device restart and mode changes, native swapchain invalidation/recreation, WPP/ETW stage timing, and complete-image verification. |
+| Scheduling | MMCSS `DisplayPostProcessing` registration and D3D11 realtime-GPU priority requests. Native D3D12 priority rejection falls back explicitly to a normal queue. |
+
+Dirty copies always use the **current complete incoming image**. RAM and VRAM
+damage histories are independent, and coalescing retains skipped-frame damage
+without recycling GPU/CE-active or still-displayed storage.
+
+### ⚙️ Presentation defaults
+
+Controls live in the framework-managed UMDF `nv-iddcx\Parameters` registry key;
+missing values select these defaults:
+
+| Parameter | Default | Alternatives |
+| --- | --- | --- |
+| `VrrPreference` | `1`: prefer VRR when supported | `0`: no VRR activation |
+| `FlipMode` | `1`: interval-zero, non-tearing/latest-ready | `0`: synchronized, non-tearing |
+| `FramePipeline` | `1`: overlap producer and CE consumer | `0`: serial processing |
+| `ScanoutBufferCount` | `3`: triple buffering | `2` or `4` |
+
+Native D3D12 direct copies and dirty regions are enabled by default. API,
+readback, pixel-cache, and scheduling overrides remain available; see
+[the implementation and validation plan](PLAN-WINDOWS.md).
+
+### 📊 Measured, not promised
+
+With sparse animated damage at **1920x1080 / ~59.94 Hz**, the native-default
+120-second measured window averaged **59.00 uploads/s**, versus **49.66** for
+the serial/synchronized/two-buffer control: about **19% higher throughput**
+for the combined changes. Mean CE time was **4.29 ms**; observed latch records
+averaged **57.60/s**. D3D11 pipelining averaged **58.97 uploads/s** in a
+60-second measured window.
+
+Fence/Map-completion brackets proved source-GPU work completed during earlier
+frames' CE uploads. Full-image checks and ShadowCast physical captures verified
+image correctness; focused tests cover **100,000 damage frames and 900,000
+ownership/damage schedules**.
+
+## 🚧 Experimental status and limits
+
+- **KMDOD is also in progress:** an experimental WDDM kernel-mode display-only
+  variant and shared kernel portability projects build, but do not yet have
+  the validated IddCx feature set. Production KMDOD remains gated from RM
+  activation. IddCx and KMDOD are alternative function drivers, not packages
+  to install simultaneously on the same GPU.
+- **VRR is capability-gated, not hardware-certified here.** The capture sink
+  reports no VRR support; fixed-refresh operation is verified. Interval-zero
+  presentation explicitly disables tearing.
+- **60+ displayed FPS is not established.** The original 4K mode is ~29.97 Hz,
+  one-second dips remain, and full 4K FP16 transfers are bandwidth-limited.
+  Upload counts and 30-FPS camera captures are not proof of displayed FPS.
+- HDR absolute luminance/cursor calibration, broad GPU compatibility, and
+  production power-management/reliability certification remain open.
+  Experimental D3D11 `ReadFromSubresource` modes work but are much slower
+  than the preferred paths.
+
+**Start here:** [Windows build/platform notes](windows-open/README.md),
+[IddCx build script](build-windows-iddcx.ps1), and
+[architecture, controls, measurements, and remaining work](PLAN-WINDOWS.md).
+Development currently uses WDK **10.0.28000.0**, UMDF **2.35**, and IddCx
+**1.11** with a **1.10** minimum; native D3D12 requires the newer runtime.
+Use a dedicated test system and a test-signing/deployment environment.
+
+---
+
+## 📚 Upstream Linux project documentation
+
+The original NVIDIA Linux build and contribution documentation follows.
+Its Linux installation instructions are not instructions for the Windows
+harness above.
+
 # NVIDIA Linux Open GPU Kernel Module Source
 
 This is the source release of the NVIDIA Linux open GPU kernel modules,
