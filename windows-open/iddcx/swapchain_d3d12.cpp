@@ -3,6 +3,7 @@
 #include "device.hpp"
 #include "driver_parameters.hpp"
 #include "swapchain_pixels.hpp"
+#include "swapchain_priority.hpp"
 #include "trace.h"
 
 #include <d3d12sdklayers.h>
@@ -224,7 +225,13 @@ HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
 
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
     queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
-    result = device_->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(queue_.put()));
+    bool realtimePriority = false;
+    result = ReadRealtimeGpuPriority(&realtimePriority);
+    if (FAILED(result))
+    {
+        return result;
+    }
+    result = CreateSourceCopyQueue(device_.get(), realtimePriority, queue_.put());
     if (FAILED(result))
     {
         return result;
@@ -289,7 +296,12 @@ HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
     IDARG_IN_SWAPCHAINSETDEVICE2 setDevice = {};
     setDevice.Type = IDDCX_SWAPCHAIN_DEVICE_TYPE_D3D12;
     setDevice.Device.pD3d12Device = device_.get();
-    return IddCxSwapChainSetDevice2(handle_, &setDevice);
+    result = IddCxSwapChainSetDevice2(handle_, &setDevice);
+    if (SUCCEEDED(result) && realtimePriority)
+    {
+        TrySetRealtimeGpuPriority(handle_, device_.get(), "D3D12");
+    }
+    return result;
 }
 
 HRESULT SwapChainD3D12::ImportBuffer(NvU32 index) noexcept
@@ -444,6 +456,7 @@ void SwapChainD3D12::Stop() noexcept
 
 DWORD WINAPI SwapChainD3D12::ThreadEntry(void* context) noexcept
 {
+    SwapChainThreadScheduling scheduling("D3D12");
     static_cast<SwapChainD3D12*>(context)->Process();
     return 0;
 }

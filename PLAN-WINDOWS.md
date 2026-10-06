@@ -897,6 +897,21 @@ Restart the device after changing these experimental values:
 - `DirtyRects` absent/1: per-slot accumulated damage; explicit 0: original
   full-frame behavior. Enabling also requests precise IddCx present regions.
   Other values are rejected rather than silently treated as enabled.
+- `RealtimeGpuPriority` absent/1: request source-GPU realtime scheduling.
+  D3D11 uses the availability-checked `IddCxSetRealtimeGPUPriority` API on
+  the actual bound `IDXGIDevice`. Native D3D12 requests a `GLOBAL_REALTIME`
+  COPY queue after checking queue-priority support; unsupported or rejected
+  requests are logged and retain a NORMAL queue. Its `IDXGIDevice` query is
+  also logged; no unrelated D3D11 device or interface cast is used.
+  Explicit 0 preserves ordinary GPU scheduling; other values are rejected.
+- `MmcssDisplayPostProcessing` absent/1: each D3D11/D3D12 swap-chain worker
+  calls `AvSetMmThreadCharacteristicsW(L"DisplayPostProcessing", ...)` from
+  its own thread. Thread-local RAII calls `AvRevertMmThreadCharacteristics`
+  on that same thread when processing exits. Registration/revert failures
+  are explicitly logged; unavailable MMCSS does not disable display output.
+  Explicit 0 preserves ordinary CPU scheduling. Invalid values/errors are
+  logged without claiming registration succeeded. No system MMCSS task
+  definitions are modified.
 
 Native initialization failures log the HRESULT and use D3D11 on the same
 swapchain. Runtime failures abandon that swapchain and select D3D11 on the next
@@ -1255,6 +1270,67 @@ The ETL decoded with zero losses, unknowns, or format errors. ShadowCast
 confirmed the intact animated scene and final desktop. The validation task and
 owned loggers were removed; no rollback, reboot, or registry override remains
 after this successful deployment. The original exported package is retained.
+
+#### Source GPU priority and MMCSS experiment (2026-10-06)
+
+Both source-device paths now support the independently configurable scheduling
+requests described above. The D3D11 source device accepted
+`IddCxSetRealtimeGPUPriority` with `S_OK`. Native D3D12 returned
+`E_NOINTERFACE` (`0x80004002`) when queried for `IDXGIDevice`, so the IddCx API
+was not invoked with an incompatible pointer. The native COPY engine advertised
+GLOBAL_REALTIME support, but actual queue creation returned
+`DXGI_ERROR_ACCESS_DENIED` (`0x887A002B`). A NORMAL queue was then created and
+its actual descriptor priority was verified as 0. No privilege, system task,
+source-device bridging, or adapter-wide scheduling settings were changed.
+
+`AvSetMmThreadCharacteristicsW(L"DisplayPostProcessing", ...)` succeeded on
+the actual D3D11 and native D3D12 swap-chain worker threads. Teardown traces
+also verified successful `AvRevertMmThreadCharacteristics` calls on those same
+threads. The target already had the DisplayPostProcessing task configured
+with High scheduling category; no task definition needed modification.
+
+Ten matched 60-second sparse-scene runs used the same signed DLL and the
+same +5 through +55 second steady window, excluding warm-up and image-check
+frames. There were 14,250 measured frames and 12,011 accepted uploads.
+Every accepted upload transferred 9,000,960 bytes in at most two regions.
+Transfer means below include source GPU completion waiting and use all
+measured frames; CE and total means use accepted uploads only.
+
+| Source path / requests | Measured | Accepted | Mean transfer ms | Mean CE ms | Median CE ms | Mean accepted total ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| D3D12, both off | 1377 | 958 | 0.926 | 12.308 | 12.315 | 13.465 |
+| D3D12, GPU request only (denied) | 1388 | 1175 | 0.906 | 12.289 | 12.303 | 13.406 |
+| D3D12, MMCSS only | 1388 | 1360 | 0.918 | 12.273 | 12.293 | 13.397 |
+| D3D12, MMCSS + denied GPU request | 1394 | 1388 | 0.939 | 12.252 | 12.288 | 13.407 |
+| D3D11, both off | 1491 | 1341 | 1.643 | 12.258 | 12.293 | 14.144 |
+| D3D11, realtime GPU only | 1486 | 1458 | 1.618 | 12.295 | 12.317 | 14.142 |
+| D3D11, MMCSS only | 1484 | 1108 | 1.634 | 12.259 | 12.307 | 14.164 |
+| D3D11, realtime GPU + MMCSS | 1479 | 1350 | 1.648 | 12.294 | 12.309 | 14.170 |
+| D3D12, both off (repeat) | 1381 | 1024 | 0.946 | 12.252 | 12.293 | 13.440 |
+| D3D12, default MMCSS + denied GPU request (repeat) | 1382 | 849 | 0.914 | 12.261 | 12.295 | 13.405 |
+
+The approximately 12.3 ms CE floor did not materially improve. Native GPU-wait
+means remained 0.765-0.802 ms; D3D11 transfer means remained 1.618-1.648 ms.
+An initially promising reduction in dropped uploads did not reproduce:
+native combined-request acceptance changed from 1388/1394 to 849/1382.
+Therefore these runs do not establish a consistent drop-rate/throughput
+benefit. They verify successful MMCSS registration and D3D11 realtime
+authorization, not a realtime native queue or an intrinsic DMA-speed gain.
+This was the existing sparse workload, not a source-GPU contention stress test.
+
+The new scheduling build was left installed as `oem182.inf`, loaded DLL
+SHA-256 `D127DC63587B71A53A92C3C00EEE80CA4C615CDC9B87D8AF65EE4E76C08DE027`.
+Fresh final verification showed problem 0 and all eight experiment DWORDs
+absent: native direct path 5, accumulated damage, MMCSS registration enabled,
+and the explicitly logged NORMAL-queue fallback. The final default run passed
+18 full 66,355,200-byte image comparisons, including 16 after partial updates
+and both destination slots. All ten ETLs decoded without losses, unknowns,
+or format errors; ShadowCast confirmed both API paths and the final desktop.
+The owned scene task and logger were removed. The previous working DF20
+native-default package was exported and hash-verified before replacement and
+remains available for rollback. Focused policy/model tests and the signed
+Debug build/catalog passed. The scheduling implementation and measurement
+record are committed; no push was performed.
 
 If pure UMDF cannot bridge WDF's DMA mapping to an RM/GPU-visible address, keep
 the CPU path fully functional and choose explicitly between shipping without

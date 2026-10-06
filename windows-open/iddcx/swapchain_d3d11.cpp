@@ -4,6 +4,7 @@
 #include "driver_parameters.hpp"
 #include "output.hpp"
 #include "swapchain_pixels.hpp"
+#include "swapchain_priority.hpp"
 #include "trace.h"
 
 #include <cstring>
@@ -126,7 +127,13 @@ HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
     }
     useBuffer2_ = IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2);
 #if !NV_IDDCX_DROP_SWAPCHAIN_FRAMES
-    HRESULT result = CreateDevice(adapterLuid);
+    bool realtimePriority = false;
+    HRESULT result = ReadRealtimeGpuPriority(&realtimePriority);
+    if (FAILED(result))
+    {
+        return result;
+    }
+    result = CreateDevice(adapterLuid);
     if (FAILED(result))
     {
         TraceEvents(
@@ -147,6 +154,10 @@ HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
             "AssignSwapChain: set D3D device failed 0x%08X",
             result);
         return result;
+    }
+    if (realtimePriority)
+    {
+        TrySetRealtimeGpuPriority(handle_, device_.get(), "D3D11");
     }
     if (useBuffer2_ && IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainInSystemMemory))
     {
@@ -357,6 +368,7 @@ void SwapChainD3D11::Stop() noexcept
 
 DWORD WINAPI SwapChainD3D11::ThreadEntry(void* context) noexcept
 {
+    SwapChainThreadScheduling scheduling("D3D11");
     static_cast<SwapChainD3D11*>(context)->Process();
     return 0;
 }

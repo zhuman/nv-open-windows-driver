@@ -24,9 +24,13 @@ struct Parameters
     ULONG api = 0;
     ULONG mode = 0;
     ULONG dirty = 0;
+    ULONG priority = 0;
+    ULONG mmcss = 0;
     NTSTATUS apiStatus = STATUS_OBJECT_NAME_NOT_FOUND;
     NTSTATUS modeStatus = STATUS_OBJECT_NAME_NOT_FOUND;
     NTSTATUS dirtyStatus = STATUS_OBJECT_NAME_NOT_FOUND;
+    NTSTATUS priorityStatus = STATUS_OBJECT_NAME_NOT_FOUND;
+    NTSTATUS mmcssStatus = STATUS_OBJECT_NAME_NOT_FOUND;
 
     NTSTATUS operator()(PCWSTR name, ULONG* value) const noexcept
     {
@@ -39,6 +43,16 @@ struct Parameters
         {
             *value = mode;
             return modeStatus;
+        }
+        if (std::wcscmp(name, L"RealtimeGpuPriority") == 0)
+        {
+            *value = priority;
+            return priorityStatus;
+        }
+        if (std::wcscmp(name, L"MmcssDisplayPostProcessing") == 0)
+        {
+            *value = mmcss;
+            return mmcssStatus;
         }
         Require(std::wcscmp(name, L"DirtyRects") == 0);
         *value = dirty;
@@ -60,6 +74,20 @@ void ExpectDirty(const Parameters& parameters, ULONG expected)
     Require(enabled == expected);
 }
 
+void ExpectPriority(const Parameters& parameters, ULONG expected)
+{
+    ULONG enabled = 99;
+    Require(nv::iddcx::QueryRealtimeGpuPriorityEnabled(&enabled, parameters) == STATUS_SUCCESS);
+    Require(enabled == expected);
+}
+
+void ExpectMmcss(const Parameters& parameters, ULONG expected)
+{
+    ULONG enabled = 99;
+    Require(nv::iddcx::QueryDisplayPostProcessingEnabled(&enabled, parameters) == STATUS_SUCCESS);
+    Require(enabled == expected);
+}
+
 }
 
 int main()
@@ -67,6 +95,39 @@ int main()
     Parameters parameters;
     ExpectMode(parameters, 1);
     ExpectDirty(parameters, 1);
+    ExpectPriority(parameters, 1);
+    ExpectMmcss(parameters, 1);
+    for (const NTSTATUS absent : {STATUS_OBJECT_NAME_NOT_FOUND,
+        STATUS_OBJECT_PATH_NOT_FOUND, STATUS_NO_SUCH_FILE})
+    {
+        parameters.priorityStatus = absent;
+        parameters.priority = 99;
+        ExpectPriority(parameters, 1);
+        parameters.mmcssStatus = absent;
+        parameters.mmcss = 99;
+        ExpectMmcss(parameters, 1);
+    }
+    parameters.priorityStatus = STATUS_SUCCESS;
+    parameters.mmcssStatus = STATUS_SUCCESS;
+    for (ULONG priority = 0; priority <= 1; ++priority)
+    {
+        parameters.priority = priority;
+        ExpectPriority(parameters, priority);
+        parameters.mmcss = priority;
+        ExpectMmcss(parameters, priority);
+    }
+    ULONG priority = 99;
+    parameters.priority = 2;
+    Require(nv::iddcx::QueryRealtimeGpuPriorityEnabled(&priority, parameters) == STATUS_INVALID_PARAMETER);
+    parameters.mmcss = 2;
+    Require(nv::iddcx::QueryDisplayPostProcessingEnabled(&priority, parameters) == STATUS_INVALID_PARAMETER);
+    for (const NTSTATUS error : {STATUS_ACCESS_DENIED, STATUS_OBJECT_TYPE_MISMATCH})
+    {
+        parameters.priorityStatus = error;
+        Require(nv::iddcx::QueryRealtimeGpuPriorityEnabled(&priority, parameters) == error);
+        parameters.mmcssStatus = error;
+        Require(nv::iddcx::QueryDisplayPostProcessingEnabled(&priority, parameters) == error);
+    }
     parameters.apiStatus = parameters.modeStatus = parameters.dirtyStatus =
         STATUS_OBJECT_PATH_NOT_FOUND;
     parameters.api = parameters.mode = parameters.dirty = 99;
@@ -111,5 +172,5 @@ int main()
     Require(nv::iddcx::QuerySwapChainMode(&value, parameters) == STATUS_OBJECT_TYPE_MISMATCH);
     parameters.dirtyStatus = STATUS_ACCESS_DENIED;
     Require(nv::iddcx::QueryDirtyRectsEnabled(&value, parameters) == STATUS_ACCESS_DENIED);
-    std::puts("PASS: native-direct/dirty defaults, explicit API/mode overrides, and registry errors");
+    std::puts("PASS: native-direct/dirty/realtime/MMCSS defaults, explicit overrides, and registry errors");
 }

@@ -55,6 +55,32 @@ inline NTSTATUS QueryDirtyRectsEnabled(ULONG* enabled) noexcept
 }
 
 template <typename Query>
+inline NTSTATUS QueryRealtimeGpuPriorityEnabled(ULONG* enabled, Query&& query) noexcept
+{
+    const NTSTATUS status = QueryDriverParameterDwordOrDefault(
+        L"RealtimeGpuPriority", 1, enabled, query);
+    return NT_SUCCESS(status) && *enabled > 1 ? STATUS_INVALID_PARAMETER : status;
+}
+
+inline NTSTATUS QueryRealtimeGpuPriorityEnabled(ULONG* enabled) noexcept
+{
+    return QueryRealtimeGpuPriorityEnabled(enabled, QueryDriverParameterDword);
+}
+
+template <typename Query>
+inline NTSTATUS QueryDisplayPostProcessingEnabled(ULONG* enabled, Query&& query) noexcept
+{
+    const NTSTATUS status = QueryDriverParameterDwordOrDefault(
+        L"MmcssDisplayPostProcessing", 1, enabled, query);
+    return NT_SUCCESS(status) && *enabled > 1 ? STATUS_INVALID_PARAMETER : status;
+}
+
+inline NTSTATUS QueryDisplayPostProcessingEnabled(ULONG* enabled) noexcept
+{
+    return QueryDisplayPostProcessingEnabled(enabled, QueryDriverParameterDword);
+}
+
+template <typename Query>
 inline NTSTATUS QuerySwapChainMode(ULONG* mode, Query&& query) noexcept
 {
     ULONG api = 0;
