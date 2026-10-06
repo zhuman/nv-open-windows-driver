@@ -49,6 +49,20 @@ just the IddCx frame-delivery interface:
 This keeps hardware access tied to the device's Windows resource ownership.
 It is not a claim of complete sleep/resume or production power certification.
 
+### 🛡️ Fault isolation by design
+
+The driver and its RM/NVKMS code run in a **user-mode `WUDFHost.exe` process,
+outside the kernel's address space**. Ordinary driver memory faults and crashes
+are contained to the host/device rather than directly bugchecking Windows;
+a failed host can be restarted. This makes experimentation substantially safer
+than running the same code in a kernel-mode miniport. See Microsoft's
+[UMDF host-process overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/wdf/umdf-driver-host-process).
+
+**Isolation is not an absolute no-hang/no-bugcheck guarantee.** The GPU still
+has real MMIO/DMA access, and hardware, firmware, or kernel-stack faults can
+affect the system. A host failure may also interrupt its displays or other
+drivers sharing that host process.
+
 ## ✅ Confirmed working
 
 Hardware validation has used an **RTX 4070 connected over USB4** on Windows 11.
@@ -126,6 +140,19 @@ ownership/damage schedules**.
 Development currently uses WDK **10.0.28000.0**, UMDF **2.35**, and IddCx
 **1.11** with a **1.10** minimum; native D3D12 requires the newer runtime.
 Use a dedicated test system and a test-signing/deployment environment.
+
+## 🤖 Developed with AI and physical feedback
+
+The Windows harness was developed with **almost entirely AI-written code**,
+under human direction, through iterative builds, deployments, trace analysis,
+and hardware tests. A **USB HDMI capture device (ShadowCast 2 Pro)** was connected
+to the GPU's physical output so the AI could inspect captured images and
+recorded motion while working on changes, not just infer success from logs.
+
+That feedback helped check desktop composition, color transitions, cursor
+behavior, and animation correctness. Capture evidence complements ETW,
+full-image comparisons, and model tests; it does not certify every hardware
+configuration or display timing.
 
 ---
 
