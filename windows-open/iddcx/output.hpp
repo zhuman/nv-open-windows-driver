@@ -8,6 +8,7 @@
 #include <atomic>
 
 #include "nvkms_windows.h"
+#include "driver_parameters.hpp"
 
 namespace nv::iddcx {
 
@@ -36,22 +37,41 @@ public:
     // Mutable frame-state accessors require a shared guard during normal operation.
     NV_KMS_WINDOWS_SURFACE* ScanoutSurface() const noexcept
     {
-        return frontBufferIndex_.load() == 0 ? scanoutSurface_.get() : backSurface_.get();
+        return Surface(frontBufferIndex_.load());
     }
     void* ScanoutPixels() const noexcept
     {
-        return frontBufferIndex_.load() == 0 ? scanoutPixels_ : backPixels_;
+        return Pixels(frontBufferIndex_.load());
     }
     NV_KMS_WINDOWS_SURFACE* BackSurface() const noexcept
     {
-        return frontBufferIndex_.load() == 0 ? backSurface_.get() : scanoutSurface_.get();
+        return Surface(copyBufferIndex_.load());
     }
     void* BackPixels() const noexcept
     {
-        return frontBufferIndex_.load() == 0 ? backPixels_ : scanoutPixels_;
+        return Pixels(copyBufferIndex_.load());
     }
-    NvU32 BackBufferIndex() const noexcept { return frontBufferIndex_.load() ^ 1U; }
-    void CommitPresent() noexcept { frontBufferIndex_.fetch_xor(1U); }
+    NvU32 BackBufferIndex() const noexcept { return copyBufferIndex_.load(); }
+    NV_KMS_WINDOWS_SURFACE* Surface(NvU32 index) const noexcept
+    {
+        return index == 0 ? scanoutSurface_.get() : index == 1 ?
+            backSurface_.get() : extraSurfaces_[index - 2].get();
+    }
+    void* Pixels(NvU32 index) const noexcept
+    {
+        return index == 0 ? scanoutPixels_ : index == 1 ? backPixels_ : extraPixels_[index - 2];
+    }
+    NvU32 FrontBufferIndex() const noexcept { return frontBufferIndex_.load(); }
+    void SelectCopyBuffer(NvU32 index) noexcept { copyBufferIndex_.store(index); }
+    void SetFrontBuffer(NvU32 index) noexcept { frontBufferIndex_.store(index); }
+    NvU32 SubmittedBufferIndex() const noexcept { return submittedBufferIndex_.load(); }
+    void SetSubmittedBuffer(NvU32 index) noexcept { submittedBufferIndex_.store(index); }
+    bool RequiresScanoutReset() const noexcept { return scanoutRequiresReset_.load(); }
+    void RequireScanoutReset() noexcept { scanoutRequiresReset_.store(true); }
+    const PresentationPolicy& PresentPolicy() const noexcept { return presentationPolicy_; }
+    bool VrrEnabled() const noexcept { return vrrEnabled_; }
+    void SetVrrEnabled(bool enabled) noexcept { vrrEnabled_ = enabled; }
+    NTSTATUS ConfigurePresentationPolicy() noexcept;
     NTSTATUS PrepareBackBuffer() noexcept;
     NvU32 ScanoutPitch() const noexcept { return scanoutPitch_; }
     NvU32 ActiveModeIndex() const noexcept { return activeModeIndex_; }
@@ -124,6 +144,13 @@ private:
     unique_nvkms_surface backSurface_;
     void* backPixels_ = nullptr;
     std::atomic<NvU32> frontBufferIndex_{0};
+    std::atomic<NvU32> copyBufferIndex_{1};
+    std::atomic<NvU32> submittedBufferIndex_{0};
+    std::atomic<bool> scanoutRequiresReset_{false};
+    unique_nvkms_surface extraSurfaces_[2];
+    void* extraPixels_[2] = {};
+    PresentationPolicy presentationPolicy_;
+    bool vrrEnabled_ = false;
     void* scanoutPixels_;
     NvU32 scanoutPitch_;
     NvU32 activeModeIndex_;

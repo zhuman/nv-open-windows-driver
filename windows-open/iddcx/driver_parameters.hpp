@@ -80,6 +80,39 @@ inline NTSTATUS QueryDisplayPostProcessingEnabled(ULONG* enabled) noexcept
     return QueryDisplayPostProcessingEnabled(enabled, QueryDriverParameterDword);
 }
 
+struct PresentationPolicy
+{
+    ULONG vrr = 1;
+    ULONG flip = 1;
+    ULONG pipeline = 1;
+    ULONG buffers = 3;
+};
+
+template <typename Query>
+inline NTSTATUS QueryPresentationPolicy(PresentationPolicy* policy, Query&& query) noexcept
+{
+    PresentationPolicy result;
+    NTSTATUS status = QueryDriverParameterDwordOrDefault(L"VrrPreference", 1, &result.vrr, query);
+    if (!NT_SUCCESS(status) || result.vrr > 1)
+        return NT_SUCCESS(status) ? STATUS_INVALID_PARAMETER : status;
+    status = QueryDriverParameterDwordOrDefault(L"FlipMode", 1, &result.flip, query);
+    if (!NT_SUCCESS(status) || result.flip > 1)
+        return NT_SUCCESS(status) ? STATUS_INVALID_PARAMETER : status;
+    status = QueryDriverParameterDwordOrDefault(L"FramePipeline", 1, &result.pipeline, query);
+    if (!NT_SUCCESS(status) || result.pipeline > 1)
+        return NT_SUCCESS(status) ? STATUS_INVALID_PARAMETER : status;
+    status = QueryDriverParameterDwordOrDefault(L"ScanoutBufferCount", 3, &result.buffers, query);
+    if (!NT_SUCCESS(status) || result.buffers < 2 || result.buffers > 4)
+        return NT_SUCCESS(status) ? STATUS_INVALID_PARAMETER : status;
+    *policy = result;
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS QueryPresentationPolicy(PresentationPolicy* policy) noexcept
+{
+    return QueryPresentationPolicy(policy, QueryDriverParameterDword);
+}
+
 template <typename Query>
 inline NTSTATUS QuerySwapChainMode(ULONG* mode, Query&& query) noexcept
 {

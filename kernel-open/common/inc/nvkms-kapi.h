@@ -1728,6 +1728,10 @@ struct NvKmsKapiFunctionsTable {
         struct NvKmsKapiDevice *device,
         const NvU32 head,
         struct NvKmsKapiVblankIntrCallback *pCallback);
+
+    /* Latest flip's hardware timestamp; zero until the notifier begins. */
+    NvBool (*getFlipTimestamp)(const struct NvKmsKapiDevice *device,
+                              NvU32 head, NvU32 layer, NvU64 *timestamp);
 };
 
 /** @} */

@@ -9,6 +9,7 @@
 
 #include "nvkms_windows.h"
 #include "swapchain_damage.hpp"
+#include "swapchain_pipeline.hpp"
 
 namespace nv::iddcx {
 
@@ -51,9 +52,7 @@ private:
     void Stop() noexcept;
     void UpdateHdrMetadata(const IDDCX_METADATA2& metadata) noexcept;
     NvU64 Microseconds(NvU64 ticks) const noexcept;
-    void RecordTiming(
-        NvU64 frameNumber, const NV_KMS_WINDOWS_PRESENT_TIMING& present,
-        bool dropped, NvU64 totalTicks) noexcept;
+    void RecordTiming(NvU64 frameNumber, NvU64 totalTicks) noexcept;
     void* operator new(size_t) = delete;
     void operator delete(void*) = delete;
 
@@ -62,6 +61,7 @@ private:
     HANDLE nextSurfaceEvent_;
     NvU32 mode_;
     SwapChainDamage damage_;
+    SwapChainUploadPipeline pipeline_;
     bool deletionStarted_ = false;
     bool failed_ = false;
     bool directRejected_ = false;
@@ -90,7 +90,7 @@ private:
         bool verified = false;
         bool partialVerified = false;
         NvU32 framesSinceVerification = 0;
-    } buffers_[2];
+    } buffers_[4];
     ID3D12Resource* mappedResource_ = nullptr;
     LARGE_INTEGER counterFrequency_ = {};
     NV_KMS_WINDOWS_HDR_METADATA currentHdrMetadata_ = {};
@@ -103,22 +103,20 @@ private:
         NvU64 copyTicks;
         NvU64 unmapTicks;
         NvU64 transferTicks;
+        NvU64 gpuSubmit;
+        NvU64 gpuComplete;
         NvU32 path;
         bool verification;
     } timing_ = {};
     struct Statistics
     {
         NvU64 count = 0;
-        NvU64 accepted = 0;
         NvU64 staging = 0;
         NvU64 readback = 0;
         NvU64 map = 0;
         NvU64 copy = 0;
         NvU64 transfer = 0;
-        NvU64 upload = 0;
         NvU64 total = 0;
-        NvU64 acceptedUpload = 0;
-        NvU64 acceptedTotal = 0;
     } statistics_[2];
 };
 

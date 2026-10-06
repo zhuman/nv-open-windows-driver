@@ -109,6 +109,7 @@ typedef struct NV_KMS_WINDOWS_DISPLAY_STATE
 	NvU32 maxLayersPerHead;
 	NvU32 maxCursorSize;
 	NvBool supportsMultiLayerFlip;
+	NvBool vrrSupported;
 } NV_KMS_WINDOWS_DISPLAY_STATE;
 
 typedef struct NV_KMS_WINDOWS_LAYER
@@ -133,6 +134,11 @@ typedef struct NV_KMS_WINDOWS_LAYER
 		NvU32 top;
 		NvU32 bottom;
 	} dirtyBands[2];
+	NvBool presentationPolicySpecified;
+	NvBool immediateNonTearing;
+	NvBool vrrEnabled;
+	NvBool skipUpload;
+	NV_KMS_WINDOWS_SURFACE* uploadSource;
 } NV_KMS_WINDOWS_LAYER;
 
 typedef struct NV_KMS_WINDOWS_MODESET_OUTPUT
@@ -145,6 +151,9 @@ typedef struct NV_KMS_WINDOWS_MODESET_OUTPUT
 	NV_KMS_WINDOWS_HDR_METADATA hdrMetadata;
 	NvBool hdrMetadataEnabled;
 	NvU32 assignedHead;
+	NvBool vrrPreference;
+	NvBool vrrEnabled;
+	NvBool immediateNonTearing;
 } NV_KMS_WINDOWS_MODESET_OUTPUT;
 
 typedef struct NV_KMS_WINDOWS_PRESENT_TIMING
@@ -156,6 +165,9 @@ typedef struct NV_KMS_WINDOWS_PRESENT_TIMING
 	NvU64 pendingTicks;
 	NvU64 uploadBytes;
 	NvU32 uploadRegions;
+	NvBool vrrFlip;
+	NvU64 uploadStart;
+	NvU64 uploadEnd;
 } NV_KMS_WINDOWS_PRESENT_TIMING;
 
 NV_STATUS NvKmsWindowsRegisterGpu(
@@ -202,6 +214,11 @@ NV_STATUS NvKmsWindowsPresentLayersTimed(
 	NvU32 layerCount,
 	NvBool preserveFrontBuffer,
 	NV_KMS_WINDOWS_PRESENT_TIMING* timing);
+NV_STATUS NvKmsWindowsUploadLayer(
+	const NV_KMS_WINDOWS_LAYER* layer,
+	NV_KMS_WINDOWS_PRESENT_TIMING* timing);
+NV_STATUS NvKmsWindowsGetFlipPending(NvU32 head, NvBool* pending);
+NV_STATUS NvKmsWindowsGetFlipTimestamp(NvU32 head, NvU64* timestamp);
 NV_STATUS NvKmsWindowsUpdateCursor(
 	NvU32 head,
 	NvU32 displayHandle,

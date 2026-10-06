@@ -92,6 +92,50 @@ void ExpectMmcss(const Parameters& parameters, ULONG expected)
 
 int main()
 {
+    for (const NTSTATUS absent : {STATUS_OBJECT_NAME_NOT_FOUND,
+        STATUS_OBJECT_PATH_NOT_FOUND, STATUS_NO_SUCH_FILE})
+    {
+        nv::iddcx::PresentationPolicy policy;
+        const auto query = [absent](PCWSTR, ULONG* value) noexcept {
+            *value = 99;
+            return absent;
+        };
+        Require(nv::iddcx::QueryPresentationPolicy(&policy, query) == STATUS_SUCCESS);
+        Require(policy.vrr == 1 && policy.flip == 1 && policy.pipeline == 1 && policy.buffers == 3);
+    }
+    for (const PCWSTR name : {L"VrrPreference", L"FlipMode", L"FramePipeline", L"ScanoutBufferCount"})
+    {
+        for (ULONG value = 0; value <= 5; ++value)
+        {
+            nv::iddcx::PresentationPolicy policy;
+            const auto query = [name, value](PCWSTR key, ULONG* output) noexcept {
+                *output = value;
+                return std::wcscmp(key, name) == 0 ? STATUS_SUCCESS : STATUS_NO_SUCH_FILE;
+            };
+            const bool valid = std::wcscmp(name, L"ScanoutBufferCount") == 0 ?
+                value >= 2 && value <= 4 : value <= 1;
+            Require(nv::iddcx::QueryPresentationPolicy(&policy, query) ==
+                (valid ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER));
+            if (valid)
+            {
+                Require(policy.vrr == (std::wcscmp(name, L"VrrPreference") == 0 ? value : 1));
+                Require(policy.flip == (std::wcscmp(name, L"FlipMode") == 0 ? value : 1));
+                Require(policy.pipeline == (std::wcscmp(name, L"FramePipeline") == 0 ? value : 1));
+                Require(policy.buffers == (std::wcscmp(name, L"ScanoutBufferCount") == 0 ? value : 3));
+            }
+        }
+        for (const NTSTATUS error : {STATUS_ACCESS_DENIED, STATUS_OBJECT_TYPE_MISMATCH})
+        {
+            nv::iddcx::PresentationPolicy policy;
+            const auto query = [name, error](PCWSTR key, ULONG* value) noexcept {
+                *value = 99;
+                return std::wcscmp(key, name) == 0 ? error : STATUS_NO_SUCH_FILE;
+            };
+            Require(nv::iddcx::QueryPresentationPolicy(&policy, query) == error);
+            Require(policy.vrr == 1 && policy.flip == 1 && policy.pipeline == 1 && policy.buffers == 3);
+        }
+    }
+    std::puts("PASS: VRR/flip/pipeline/buffer policies, transactional errors, and missing-key defaults");
     Parameters parameters;
     ExpectMode(parameters, 1);
     ExpectDirty(parameters, 1);

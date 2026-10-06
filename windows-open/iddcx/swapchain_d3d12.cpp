@@ -157,7 +157,7 @@ NTSTATUS SwapChainD3D12::Create(
 HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
 {
     QueryPerformanceFrequency(&counterFrequency_);
-    const HRESULT damageResult = damage_.Initialize(handle_, 2);
+    const HRESULT damageResult = damage_.Initialize(handle_, output_->PresentPolicy().buffers);
     if (FAILED(damageResult))
     {
         return damageResult;
@@ -272,7 +272,7 @@ HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
     if (mode_ != 2)
     {
         auto guard = output_->LockFrameStateShared();
-        for (NvU32 index = 0; index < 2; ++index)
+        for (NvU32 index = 0; index < output_->PresentPolicy().buffers; ++index)
         {
             result = ImportBuffer(index);
             if (FAILED(result))
@@ -307,8 +307,7 @@ HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
 HRESULT SwapChainD3D12::ImportBuffer(NvU32 index) noexcept
 {
     auto& buffer = buffers_[index];
-    NV_KMS_WINDOWS_SURFACE* surface = index == output_->BackBufferIndex()
-        ? output_->BackSurface() : output_->ScanoutSurface();
+    NV_KMS_WINDOWS_SURFACE* surface = output_->Surface(index);
     void* pixels = nullptr;
     NvU64 size = 0;
     const NV_STATUS status = NvKmsWindowsGetScanoutBuffer(surface, &pixels, &size);
@@ -367,6 +366,9 @@ HRESULT SwapChainD3D12::ImportBuffer(NvU32 index) noexcept
 HRESULT SwapChainD3D12::StartProcessing() noexcept
 {
     auto lock = stateLock_.lock_exclusive();
+    const HRESULT pipelineResult = pipeline_.Start(*output_, stopEvent_.get(), 12);
+    if (FAILED(pipelineResult))
+        return pipelineResult;
     wil::unique_handle thread(CreateThread(nullptr, 0, ThreadEntry, this, 0, nullptr));
     if (!thread)
     {
@@ -434,6 +436,7 @@ void SwapChainD3D12::Stop() noexcept
     {
         WaitForSingleObject(thread, INFINITE);
     }
+    pipeline_.Stop();
     auto lock = stateLock_.lock_exclusive();
     UnmapFrame();
     for (auto& buffer : buffers_)
@@ -663,6 +666,8 @@ HRESULT SwapChainD3D12::CopyFrame(ID3D12Resource* source, NvU64 frameNumber) noe
         return result;
     }
     ID3D12CommandList* lists[] = {commands_.get()};
+    timing_.gpuSubmit = !damage_.Enabled() || !damage_.Rectangles().empty() || timing_.verification ?
+        PerformanceCounter() : 0;
     queue_->ExecuteCommandLists(ARRAYSIZE(lists), lists);
     const HRESULT signalResult = queue_->Signal(fence_.get(), ++fenceValue_);
     result = signalResult;
@@ -686,6 +691,7 @@ HRESULT SwapChainD3D12::CopyFrame(ID3D12Resource* source, NvU64 frameNumber) noe
     const NvU64 waitStart = PerformanceCounter();
     // Even a stop request cannot release the source/backing allocation early.
     const HRESULT waitResult = WaitForGpu();
+    timing_.gpuComplete = timing_.gpuSubmit != 0 ? PerformanceCounter() : 0;
     timing_.readbackTicks = PerformanceCounter() - waitStart;
     if (FAILED(signalResult) || FAILED(waitResult))
     {
@@ -825,18 +831,16 @@ NvU64 SwapChainD3D12::Microseconds(NvU64 ticks) const noexcept
 }
 
 void SwapChainD3D12::RecordTiming(
-    NvU64 frameNumber, const NV_KMS_WINDOWS_PRESENT_TIMING& present,
-    bool dropped, NvU64 totalTicks) noexcept
+    NvU64 frameNumber, NvU64 totalTicks) noexcept
 {
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
-        "D3D12 timing us: frame=%llu path=%u staging=%llu gpuWait=%llu map=%llu cpuCopy=%llu unmap=%llu upload=%llu total=%llu dropped=%u verification=%u head=%u width=%llu height=%u format=%u transfer=%llu bytes=%llu regions=%u",
+        "D3D12 producer timing us: frame=%llu path=%u staging=%llu gpuWait=%llu map=%llu cpuCopy=%llu unmap=%llu total=%llu verification=%u head=%u width=%llu height=%u format=%u transfer=%llu",
         frameNumber, timing_.path, Microseconds(timing_.stagingTicks),
         Microseconds(timing_.readbackTicks), Microseconds(timing_.mapTicks),
         Microseconds(timing_.copyTicks), Microseconds(timing_.unmapTicks),
-        Microseconds(present.uploadTicks), Microseconds(totalTicks), dropped, timing_.verification,
+        Microseconds(totalTicks), timing_.verification,
         output_->AssignedHead(), readbackSourceDesc_.Width, readbackSourceDesc_.Height,
-        readbackSourceDesc_.Format, Microseconds(timing_.transferTicks),
-        present.uploadBytes, present.uploadRegions);
+        readbackSourceDesc_.Format, Microseconds(timing_.transferTicks));
     if (timing_.verification || frameNumber < 8 ||
         (mode_ == 3 && frameNumber % 120 < 8))
     {
@@ -849,24 +853,15 @@ void SwapChainD3D12::RecordTiming(
     stats.map += timing_.mapTicks;
     stats.copy += timing_.copyTicks;
     stats.transfer += timing_.transferTicks;
-    stats.upload += present.uploadTicks;
     stats.total += totalTicks;
-    if (!dropped)
-    {
-        ++stats.accepted;
-        stats.acceptedUpload += present.uploadTicks;
-        stats.acceptedTotal += totalTicks;
-    }
     if (stats.count % 60 == 0)
     {
         TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
-            "D3D12 averages us: path=%u frames=%llu accepted=%llu staging=%llu gpuWait=%llu map=%llu cpuCopy=%llu upload=%llu total=%llu acceptedUpload=%llu acceptedTotal=%llu head=%u transfer=%llu",
-            timing_.path, stats.count, stats.accepted,
+            "D3D12 producer averages us: path=%u frames=%llu staging=%llu gpuWait=%llu map=%llu cpuCopy=%llu total=%llu head=%u transfer=%llu",
+            timing_.path, stats.count,
             Microseconds(stats.staging / stats.count), Microseconds(stats.readback / stats.count),
             Microseconds(stats.map / stats.count), Microseconds(stats.copy / stats.count),
-            Microseconds(stats.upload / stats.count), Microseconds(stats.total / stats.count),
-            stats.accepted == 0 ? 0 : Microseconds(stats.acceptedUpload / stats.accepted),
-            stats.accepted == 0 ? 0 : Microseconds(stats.acceptedTotal / stats.accepted),
+            Microseconds(stats.total / stats.count),
             output_->AssignedHead(), Microseconds(stats.transfer / stats.count));
     }
 }
@@ -921,10 +916,13 @@ void SwapChainD3D12::Process() noexcept
             result = DXGI_ERROR_UNSUPPORTED;
             break;
         }
+        UINT bufferIndex = 0;
+        result = pipeline_.Acquire(&bufferIndex);
+        if (FAILED(result))
+            break;
         auto guard = output_->LockFrameStateShared();
         auto unmap = wil::scope_exit([&]() noexcept { UnmapFrame(); });
         UpdateHdrMetadata(buffer.MetaData);
-        const UINT bufferIndex = output_->BackBufferIndex();
         const auto* frameMode = display_modes::FindDisplayMode(
             output_->DisplayState(), output_->ActiveModeIndex());
         if (frameMode == nullptr)
@@ -938,7 +936,9 @@ void SwapChainD3D12::Process() noexcept
         {
             break;
         }
+        const NvU64 sourceStart = PerformanceCounter();
         result = CopyFrame(source.get(), frameNumber);
+        const NvU64 sourceEnd = PerformanceCounter();
         if (FAILED(result))
         {
             break;
@@ -966,39 +966,52 @@ void SwapChainD3D12::Process() noexcept
         layer.hdrMetadata = currentHdrMetadata_;
         layer.hdrMetadataEnabled = hasCurrentHdrMetadata_ ? NV_TRUE : NV_FALSE;
         layer.colorTransform = &output_->ColorTransform();
+        layer.presentationPolicySpecified = NV_TRUE;
+        layer.immediateNonTearing = output_->PresentPolicy().flip != 0;
+        layer.vrrEnabled = output_->VrrEnabled();
         damage_.ApplyToLayer(layer);
-        NV_KMS_WINDOWS_PRESENT_TIMING present = {};
-        const NV_STATUS status = NvKmsWindowsPresentLayersTimed(
-            output_->AssignedHead(), output_->DisplayState().displayHandle,
-            &layer, 1, NV_TRUE, &present);
-        if (status == NV_OK)
-        {
-            result = damage_.Commit(bufferIndex);
-            if (FAILED(result))
-            {
-                TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-                    "D3D12 dirty-buffer commit failed: result=0x%08X buffer=%u", result, bufferIndex);
-                break;
-            }
-            output_->CommitPresent();
-        }
-        else if (status != NV_ERR_IN_USE)
+        result = damage_.Commit(bufferIndex);
+        if (FAILED(result))
         {
             TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-                "D3D12 CE/present failed: status=0x%08X", status);
-            result = E_FAIL;
+                "D3D12 dirty-buffer commit failed: result=0x%08X buffer=%u", result, bufferIndex);
             break;
         }
-        UnmapFrame();
-        RecordTiming(frameNumber++, present, status == NV_ERR_IN_USE,
-            PerformanceCounter() - start);
+        ID3D12Resource* mapped = nullptr;
+        if (mappedResource_ == buffers_[bufferIndex].resource.get())
+        {
+            mapped = mappedResource_;
+            mappedResource_ = nullptr;
+        }
+        else
+            UnmapFrame();
+        result = pipeline_.Submit(bufferIndex, frameNumber, layer, mapped, sourceStart, sourceEnd,
+            timing_.gpuSubmit, timing_.gpuComplete);
+        if (FAILED(result))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "D3D12 pipeline submit failed: result=0x%08X", result);
+            break;
+        }
+        RecordTiming(frameNumber++, PerformanceCounter() - start);
     }
-    failed_ = FAILED(result);
+    const bool wasStopped = WaitForSingleObject(stopEvent_.get(), 0) == WAIT_OBJECT_0;
+    if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED) || (wasStopped && result == E_PENDING))
+        result = S_OK;
+    const HRESULT pipelineResult = pipeline_.Stop();
+    if (FAILED(pipelineResult))
+        result = pipelineResult;
+    const bool invalidated = result == DXGI_ERROR_ACCESS_LOST &&
+        SUCCEEDED(device_->GetDeviceRemovedReason());
+    failed_ = FAILED(result) && !invalidated;
+    if (invalidated)
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+            "D3D12 swapchain invalidated; retiring this handle without disabling native mode");
     TraceEvents(failed_ ? TRACE_LEVEL_ERROR : TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
         "D3D12 processor stopped: result=0x%08X frames=%llu mode=%u",
         result, frameNumber, mode_);
-    if (failed_ && failureWorkItem_ != nullptr &&
-        WaitForSingleObject(stopEvent_.get(), 0) != WAIT_OBJECT_0)
+    if ((failed_ || invalidated) && failureWorkItem_ != nullptr &&
+        (!wasStopped || FAILED(pipelineResult)))
     {
         WdfObjectReference(handle_);
         WdfWorkItemEnqueue(failureWorkItem_);

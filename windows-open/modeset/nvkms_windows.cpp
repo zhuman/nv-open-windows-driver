@@ -1396,6 +1396,7 @@ extern "C" NV_STATUS NvKmsWindowsGetDisplay(
         }
 
         displayState->displayHandle = displays[displayIndex];
+        displayState->vrrSupported = dynamicInfo.vrrSupported;
 
         for (NvU32 connectorIndex = 0;
              connectorIndex < resources.numConnectors;
@@ -1878,6 +1879,22 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             const NvU32 head = assignedHeads[index];
             requested.headsMask |= 1U << head;
             auto* const headConfig = &requested.headRequestedConfig[head];
+            NvKmsKapiDynamicDisplayParams dynamic = {};
+            dynamic.handle = outputs[index].displayHandle;
+            if (outputs[index].vrrPreference &&
+                !kmsFunctions.getDynamicDisplayInfo(kmsDevice, &dynamic))
+            {
+                return NV_ERR_GENERIC;
+            }
+            outputs[index].vrrEnabled =
+                outputs[index].vrrPreference && dynamic.vrrSupported;
+            char vrrMessage[128] = {};
+            nvkms_snprintf(vrrMessage, sizeof(vrrMessage),
+                "NVKMS VRR policy: requested=%u capabilityQueried=%u supported=%u permitted=%u",
+                outputs[index].vrrPreference, outputs[index].vrrPreference,
+                dynamic.vrrSupported, outputs[index].vrrEnabled);
+            NvKmsWindowsTraceMessage(vrrMessage);
+            headConfig->modeSetConfig.vrrEnabled = outputs[index].vrrEnabled;
             headConfig->modeSetConfig.bActive = NV_TRUE;
             headConfig->modeSetConfig.numDisplays = 1;
             headConfig->modeSetConfig.displays[0] = outputs[index].displayHandle;
@@ -2006,7 +2023,7 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
             layer->config.compParams.compMode =
                 NVKMS_COMPOSITION_BLENDING_MODE_OPAQUE;
             layer->config.compParams.surfaceAlpha = 255;
-            layer->config.minPresentInterval = 1;
+            layer->config.minPresentInterval = outputs[index].immediateNonTearing ? 0 : 1;
             layer->flags.srcXYChanged = NV_TRUE;
             layer->flags.srcWHChanged = NV_TRUE;
             layer->flags.dstXYChanged = NV_TRUE;
@@ -2025,7 +2042,17 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
         if (!kmsFunctions.applyModeSetConfig(
                 kmsDevice, &requested, &reply, NV_FALSE))
         {
-            continue;
+            NvBool hadVrr = NV_FALSE;
+            for (NvU32 index = 0; index < outputCount; ++index)
+            {
+                hadVrr |= outputs[index].vrrEnabled;
+                outputs[index].vrrEnabled = NV_FALSE;
+                requested.headRequestedConfig[assignedHeads[index]].modeSetConfig.vrrEnabled = NV_FALSE;
+            }
+            if (!hadVrr || !kmsFunctions.applyModeSetConfig(
+                    kmsDevice, &requested, &reply, NV_FALSE))
+                continue;
+            NvKmsWindowsTraceMessage("NVKMS VRR fallback: mode validation rejected VRR; using fixed refresh");
         }
 
         FlushProcessWriteBuffers();
@@ -2151,6 +2178,96 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
         head, displayHandle, layers, layerCount, NV_FALSE, nullptr);
 }
 
+static NV_STATUS UploadLayerPixels(
+    const NV_KMS_WINDOWS_LAYER* layer, NV_KMS_WINDOWS_PRESENT_TIMING* timing)
+{
+    if (layer == nullptr || layer->surface == nullptr)
+        return NV_ERR_INVALID_ARGUMENT;
+    const auto* source = layer->uploadSource != nullptr ? layer->uploadSource : layer->surface;
+    if (source->width != layer->surface->width || source->height != layer->surface->height ||
+        source->pitch != layer->surface->pitch || source->size != layer->surface->size ||
+        source->format != layer->surface->format)
+        return NV_ERR_INVALID_ARGUMENT;
+    if (layer->useDirtyBands)
+    {
+        if (layer->dirtyBandCount > 2)
+            return NV_ERR_INVALID_ARGUMENT;
+        for (NvU32 index = 0; index < layer->dirtyBandCount; ++index)
+        {
+            const auto& band = layer->dirtyBands[index];
+            if (band.top >= band.bottom || band.bottom > layer->surface->height ||
+                (index != 0 && band.top < layer->dirtyBands[index - 1].bottom))
+                return NV_ERR_INVALID_ARGUMENT;
+        }
+    }
+    FlushProcessWriteBuffers();
+    const NvU64 start = PerformanceCounter();
+    timing->uploadStart = start;
+    if (layer->useDirtyBands)
+    {
+        for (NvU32 index = 0; index < layer->dirtyBandCount; ++index)
+        {
+            const auto& band = layer->dirtyBands[index];
+            const NvU64 offset = static_cast<NvU64>(band.top) * layer->surface->pitch;
+            const NvU64 bytes = static_cast<NvU64>(band.bottom - band.top) * layer->surface->pitch;
+            if (!kmsFunctions.copyMemoryRange(kmsDevice, layer->surface->memory,
+                    source->stagingMemory, offset, bytes))
+                return NV_ERR_GENERIC;
+            timing->uploadBytes += bytes;
+            ++timing->uploadRegions;
+        }
+    }
+    else
+    {
+        if (!kmsFunctions.copyMemory(kmsDevice, layer->surface->memory,
+                source->stagingMemory, layer->surface->size))
+            return NV_ERR_GENERIC;
+        timing->uploadBytes += layer->surface->size;
+        ++timing->uploadRegions;
+    }
+    timing->uploadEnd = PerformanceCounter();
+    timing->uploadTicks += timing->uploadEnd - start;
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvKmsWindowsUploadLayer(
+    const NV_KMS_WINDOWS_LAYER* layer, NV_KMS_WINDOWS_PRESENT_TIMING* timing)
+{
+    if (timing == nullptr)
+        return NV_ERR_INVALID_ARGUMENT;
+    *timing = {};
+    const NvU64 start = PerformanceCounter();
+    KmsDeviceLockGuard lock;
+    timing->lockTicks = PerformanceCounter() - start;
+    if (kmsDevice == nullptr)
+        return NV_ERR_INVALID_STATE;
+    return UploadLayerPixels(layer, timing);
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetFlipPending(NvU32 head, NvBool* pending)
+{
+    if (pending == nullptr)
+        return NV_ERR_INVALID_ARGUMENT;
+    KmsDeviceLockGuard lock;
+    if (kmsDevice == nullptr)
+        return NV_ERR_INVALID_STATE;
+    return kmsFunctions.getFlipPendingStatus(
+        kmsDevice, head, NVKMS_KAPI_LAYER_PRIMARY_IDX, pending) ?
+        NV_OK : NV_ERR_INVALID_STATE;
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetFlipTimestamp(NvU32 head, NvU64* timestamp)
+{
+    if (timestamp == nullptr)
+        return NV_ERR_INVALID_ARGUMENT;
+    KmsDeviceLockGuard lock;
+    if (kmsDevice == nullptr)
+        return NV_ERR_INVALID_STATE;
+    return kmsFunctions.getFlipTimestamp(
+        kmsDevice, head, NVKMS_KAPI_LAYER_PRIMARY_IDX, timestamp) ?
+        NV_OK : NV_ERR_INVALID_STATE;
+}
+
 extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
     NvU32 head,
     NvU32 displayHandle,
@@ -2220,6 +2337,8 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
     headConfig->modeSetConfig.bActive = NV_TRUE;
     headConfig->modeSetConfig.numDisplays = 1;
     headConfig->modeSetConfig.displays[0] = displayHandle;
+    headConfig->modeSetConfig.vrrEnabled =
+        layerCount != 0 && layers[0].presentationPolicySpecified && layers[0].vrrEnabled;
     std::unique_ptr<NV_KMS_WINDOWS_SURFACE, decltype(&DestroySurface)>
         pendingGamma(nullptr, &DestroySurface);
     const NV_KMS_WINDOWS_COLOR_TRANSFORM* appliedGamma = nullptr;
@@ -2272,51 +2391,12 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
             return NV_ERR_INVALID_ARGUMENT;
         }
 
-        FlushProcessWriteBuffers();
-        const NvU64 uploadStart = PerformanceCounter();
-        if (layer->useDirtyBands)
+        if (!layer->skipUpload)
         {
-            if (layer->dirtyBandCount > 2)
-            {
-                return NV_ERR_INVALID_ARGUMENT;
-            }
-            for (NvU32 index = 0; index < layer->dirtyBandCount; ++index)
-            {
-                const auto& band = layer->dirtyBands[index];
-                if (band.top >= band.bottom || band.bottom > layer->surface->height ||
-                    (index != 0 && band.top < layer->dirtyBands[index - 1].bottom))
-                {
-                    return NV_ERR_INVALID_ARGUMENT;
-                }
-            }
-            for (NvU32 index = 0; index < layer->dirtyBandCount; ++index)
-            {
-                const auto& band = layer->dirtyBands[index];
-                const NvU64 offset = static_cast<NvU64>(band.top) * layer->surface->pitch;
-                const NvU64 bytes = static_cast<NvU64>(band.bottom - band.top) * layer->surface->pitch;
-                if (!kmsFunctions.copyMemoryRange(kmsDevice, layer->surface->memory,
-                        layer->surface->stagingMemory, offset, bytes))
-                {
-                    return NV_ERR_GENERIC;
-                }
-                timing->uploadBytes += bytes;
-                ++timing->uploadRegions;
-            }
+            const NV_STATUS upload = UploadLayerPixels(layer, timing);
+            if (upload != NV_OK)
+                return upload;
         }
-        else if (!kmsFunctions.copyMemory(
-                kmsDevice,
-                layer->surface->memory,
-                layer->surface->stagingMemory,
-                layer->surface->size))
-        {
-            return NV_ERR_GENERIC;
-        }
-        else
-        {
-            timing->uploadBytes += layer->surface->size;
-            ++timing->uploadRegions;
-        }
-        timing->uploadTicks += PerformanceCounter() - uploadStart;
 
         auto* const config = &requestedLayer->config;
         config->surface = layer->surface->surface;
@@ -2332,7 +2412,10 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
             NVKMS_COMPOSITION_BLENDING_MODE_OPAQUE :
             NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_SURFACE_ALPHA;
         config->compParams.surfaceAlpha = layer->opacity;
-        config->minPresentInterval = 1;
+        config->minPresentInterval =
+            layer->presentationPolicySpecified && layer->immediateNonTearing ? 0 : 1;
+        if (layer->presentationPolicySpecified)
+            config->tearing = NV_FALSE;
 
         switch (layer->colorSpace)
         {
@@ -2449,6 +2532,7 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
     const NvBool committed = kmsFunctions.applyModeSetConfig(
         kmsDevice, &requested, &reply, NV_TRUE);
     timing->submitTicks = PerformanceCounter() - submitStart;
+    timing->vrrFlip = reply.vrrFlip;
     if (!committed)
     {
         char failureMessage[128] = {};

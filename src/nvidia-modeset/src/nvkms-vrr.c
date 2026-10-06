@@ -40,7 +40,8 @@
  *
  * VRR in NVKMS is handled in several phases:
  *
- *  1. During modeset, if NvKmsSetModeRequest::allowVrr is true and VRR-capable
+ *  1. During modeset, if the head's allowGsync/allowAdaptiveSync policy permits
+ *     VRR and VRR-capable
  *     dpys are present, VRR is "enabled". This means that
  *
  *     a. VRR is disabled, if it was enabled before.

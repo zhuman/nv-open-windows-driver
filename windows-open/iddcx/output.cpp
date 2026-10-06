@@ -267,42 +267,64 @@ NTSTATUS Output::PrepareScanout(
 NTSTATUS Output::PrepareBackBuffer() noexcept
 {
     auto lock = stateLock_.lock_exclusive();
-    if (backSurface_)
-    {
-        return STATUS_SUCCESS;
-    }
     const auto* mode = display_modes::FindDisplayMode(displayState_, activeModeIndex_);
     if (!active_ || !scanoutSurface_ || mode == nullptr)
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
-    NV_KMS_WINDOWS_SURFACE* surface = nullptr;
-    void* pixels = nullptr;
-    NvU32 pitch = 0;
     NvBool honorPixelCachePolicy = NV_FALSE;
     const NTSTATUS cacheStatus = QueryPixelCachePolicy(&honorPixelCachePolicy);
     if (!NT_SUCCESS(cacheStatus))
     {
         return cacheStatus;
     }
-    const NV_STATUS status = NvKmsWindowsCreateScanoutSurface(
-        mode->hVisible, mode->vVisible, scanoutFormat_, &surface, &pixels, &pitch,
-        honorPixelCachePolicy);
-    if (status != NV_OK)
+    for (NvU32 index = 1; index < presentationPolicy_.buffers; ++index)
     {
-        return status == NV_ERR_NO_MEMORY ?
-            STATUS_INSUFFICIENT_RESOURCES : STATUS_DEVICE_NOT_READY;
+        if (Surface(index) != nullptr)
+            continue;
+        NV_KMS_WINDOWS_SURFACE* surface = nullptr;
+        void* pixels = nullptr;
+        NvU32 pitch = 0;
+        const NV_STATUS status = NvKmsWindowsCreateScanoutSurface(
+            mode->hVisible, mode->vVisible, scanoutFormat_, &surface, &pixels, &pitch,
+            honorPixelCachePolicy);
+        if (status != NV_OK)
+            return status == NV_ERR_NO_MEMORY ?
+                STATUS_INSUFFICIENT_RESOURCES : STATUS_DEVICE_NOT_READY;
+        unique_nvkms_surface allocation(surface);
+        if (pitch != scanoutPitch_)
+            return STATUS_INVALID_DEVICE_STATE;
+        if (index == 1)
+        {
+            backSurface_ = std::move(allocation);
+            backPixels_ = pixels;
+        }
+        else
+        {
+            extraSurfaces_[index - 2] = std::move(allocation);
+            extraPixels_[index - 2] = pixels;
+        }
     }
-    unique_nvkms_surface allocation(surface);
-    if (pitch != scanoutPitch_)
-    {
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-    backSurface_ = std::move(allocation);
-    backPixels_ = pixels;
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
-        "Scanout double buffering: %ux%u pitch=%u format=%u",
-        mode->hVisible, mode->vVisible, pitch, scanoutFormat_);
+        "Scanout buffering: count=%u %ux%u pitch=%u format=%u",
+        presentationPolicy_.buffers, mode->hVisible, mode->vVisible, scanoutPitch_, scanoutFormat_);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS Output::ConfigurePresentationPolicy() noexcept
+{
+    PresentationPolicy policy;
+    const NTSTATUS status = QueryPresentationPolicy(&policy);
+    if (!NT_SUCCESS(status))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "Invalid presentation policy: status=%!STATUS!", status);
+        return status;
+    }
+    presentationPolicy_ = policy;
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+        "Presentation policy: vrr=%u flip=%u pipeline=%u buffers=%u",
+        policy.vrr, policy.flip, policy.pipeline, policy.buffers);
     return STATUS_SUCCESS;
 }
 
@@ -608,9 +630,16 @@ void Output::ResumeCursor() noexcept
 
 void Output::DestroyScanout() noexcept
 {
+    for (auto& surface : extraSurfaces_)
+        surface.reset();
+    for (auto& pixels : extraPixels_)
+        pixels = nullptr;
     backSurface_.reset();
     backPixels_ = nullptr;
     frontBufferIndex_.store(0);
+    copyBufferIndex_.store(1);
+    submittedBufferIndex_.store(0);
+    scanoutRequiresReset_.store(false);
     scanoutSurface_.reset();
     scanoutPixels_ = nullptr;
     scanoutPitch_ = 0;

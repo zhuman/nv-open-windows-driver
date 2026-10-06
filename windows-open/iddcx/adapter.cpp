@@ -567,6 +567,11 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
         }
         requests[requestCount].displayHandle =
             outputs_[index]->DisplayState().displayHandle;
+        status = outputs_[index]->ConfigurePresentationPolicy();
+        if (!NT_SUCCESS(status))
+            goto cleanup;
+        requests[requestCount].vrrPreference = outputs_[index]->PresentPolicy().vrr != 0;
+        requests[requestCount].immediateNonTearing = outputs_[index]->PresentPolicy().flip != 0;
         const auto* const mode = display_modes::FindDisplayMode(
             outputs_[index]->DisplayState(), modeIndexes[index]);
         if (mode == nullptr)
@@ -619,6 +624,7 @@ NTSTATUS Adapter::CommitDisplayModes(const ModePath* paths, UINT pathCount) noex
     for (NvU32 index = 0; index < requestCount; ++index)
     {
         outputs_[requestOutputs[index]]->SetAssignedHead(requests[index].assignedHead);
+        outputs_[requestOutputs[index]]->SetVrrEnabled(requests[index].vrrEnabled != 0);
     }
 
 cleanup:

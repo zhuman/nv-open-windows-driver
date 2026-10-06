@@ -3516,6 +3516,7 @@ static NvBool NvKmsKapiRequestedModeSetConfigToKms(
         }
 
         paramsHead = &params->request.disp[dispIdx].head[head];
+        paramsHead->flip.allowVrr = headModeSetConfig->vrrEnabled;
 
         InitNvKmsModeValidationParams(device,
                                       &paramsHead->modeValidationParams);
@@ -4196,6 +4197,23 @@ static NvBool GetFlipPendingStatus(
     return NV_TRUE;
 }
 
+static NvBool GetFlipTimestamp(const struct NvKmsKapiDevice *device,
+                              NvU32 head, NvU32 layer, NvU64 *timestamp)
+{
+    struct nvKmsParsedNotifier notifier = { };
+    if (timestamp == NULL || head >= device->numHeads ||
+        layer >= device->numLayers[head] || !device->notifier.mapped) {
+        return NV_FALSE;
+    }
+    nvKmsParseNotifier(NVKMS_KAPI_NOTIFIER_INDEX(head, layer,
+                          device->layerState[head][layer].currFlipNotifierIndex),
+                      device->notifier.pLinearAddress, &notifier);
+    *timestamp = notifier.timeStampValid &&
+        notifier.status != NVKMS_NOTIFIER_STATUS_NOT_BEGUN ?
+        notifier.timeStamp : 0;
+    return NV_TRUE;
+}
+
 static NvBool CheckLutNotifier
 (
     struct NvKmsKapiDevice *device,
@@ -4393,6 +4411,7 @@ NvBool nvKmsKapiGetFunctionsTableInternal
 
     funcsTable->applyModeSetConfig   = ApplyModeSetConfig;
     funcsTable->getFlipPendingStatus = GetFlipPendingStatus;
+    funcsTable->getFlipTimestamp = GetFlipTimestamp;
 
     funcsTable->allocateChannelEvent = nvKmsKapiAllocateChannelEvent;
     funcsTable->freeChannelEvent = nvKmsKapiFreeChannelEvent;

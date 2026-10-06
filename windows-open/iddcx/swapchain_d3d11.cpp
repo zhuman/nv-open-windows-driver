@@ -120,7 +120,7 @@ NTSTATUS SwapChainD3D11::Create(
 HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
 {
     QueryPerformanceFrequency(&counterFrequency_);
-    const HRESULT damageResult = damage_.Initialize(handle_, 2);
+    const HRESULT damageResult = damage_.Initialize(handle_, output_->PresentPolicy().buffers);
     if (FAILED(damageResult))
     {
         return damageResult;
@@ -217,6 +217,9 @@ HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
 
 HRESULT SwapChainD3D11::StartProcessing() noexcept
 {
+    const HRESULT pipelineResult = pipeline_.Start(*output_, stopEvent_.get(), 11);
+    if (FAILED(pipelineResult))
+        return pipelineResult;
     wil::unique_handle thread(CreateThread(
         nullptr,
         0,
@@ -357,6 +360,7 @@ void SwapChainD3D11::Stop() noexcept
     {
         WaitForSingleObject(thread, INFINITE);
     }
+    pipeline_.Stop();
     auto lock = stateLock_.lock_exclusive();
     thread_.reset();
     stopEvent_.reset();
@@ -407,11 +411,11 @@ void SwapChainD3D11::Process() noexcept
     NvU64 idleTicks = 0;
     for (;;)
     {
+        if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
+            break;
         copyTiming_ = {};
-        NV_KMS_WINDOWS_PRESENT_TIMING presentTiming = {};
         NvU64 stateWaitTicks = 0;
-        bool dropped = false;
-        NvU32 bufferIndex = 0;
+        UINT bufferIndex = 0;
         NvU32 head = 0;
         const NvU64 frameStart = PerformanceCounter();
         IDARG_OUT_RELEASEANDACQUIREBUFFER buffer = {};
@@ -469,9 +473,14 @@ void SwapChainD3D11::Process() noexcept
 #if !NV_IDDCX_DROP_SWAPCHAIN_FRAMES
             // Keep mode and scanout ownership stable through both transfer stages.
             const NvU64 stateWaitStart = PerformanceCounter();
+            result = pipeline_.Acquire(&bufferIndex);
+            if (FAILED(result))
+            {
+                failed = result != HRESULT_FROM_WIN32(ERROR_CANCELLED);
+                break;
+            }
             auto outputLock = output_->LockFrameStateShared();
             stateWaitTicks = PerformanceCounter() - stateWaitStart;
-            bufferIndex = output_->BackBufferIndex();
             head = output_->AssignedHead();
             const auto* frameMode = display_modes::FindDisplayMode(
                 output_->DisplayState(), output_->ActiveModeIndex());
@@ -542,36 +551,25 @@ void SwapChainD3D11::Process() noexcept
             layer.hdrMetadata = currentHdrMetadata_;
             layer.hdrMetadataEnabled = hasCurrentHdrMetadata_ ? NV_TRUE : NV_FALSE;
             layer.colorTransform = &output_->ColorTransform();
+            layer.presentationPolicySpecified = NV_TRUE;
+            layer.immediateNonTearing = output_->PresentPolicy().flip != 0;
+            layer.vrrEnabled = output_->VrrEnabled();
             damage_.ApplyToLayer(layer);
-            const NV_STATUS presentStatus = NvKmsWindowsPresentLayersTimed(
-                output_->AssignedHead(),
-                output_->DisplayState().displayHandle,
-                &layer,
-                1,
-                NV_TRUE,
-                &presentTiming);
-            dropped = presentStatus == NV_ERR_IN_USE;
-            if (presentStatus == NV_OK)
+            result = damage_.Commit(bufferIndex);
+            if (FAILED(result))
             {
-                result = damage_.Commit(bufferIndex);
-                if (FAILED(result))
-                {
-                    TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-                        "Dirty-buffer commit failed: result=0x%08X buffer=%u", result, bufferIndex);
-                    failed = true;
-                    break;
-                }
-                output_->CommitPresent();
+                TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                    "Dirty-buffer commit failed: result=0x%08X buffer=%u", result, bufferIndex);
+                failed = true;
+                break;
             }
-            if (presentStatus != NV_OK && presentStatus != NV_ERR_IN_USE)
+            result = pipeline_.Submit(bufferIndex, frameCount, layer, nullptr,
+                transferStart, transferStart + copyTiming_.transferTicks,
+                copyTiming_.gpuSubmit, copyTiming_.gpuComplete);
+            if (FAILED(result))
             {
-                TraceEvents(
-                    TRACE_LEVEL_ERROR,
-                    TRACE_DRIVER,
-                    "NvKmsWindowsPresentLayers: 0x%08X head=%u",
-                    presentStatus,
-                    output_->AssignedHead());
-                result = E_FAIL;
+                TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                    "D3D11 pipeline submit failed: result=0x%08X", result);
                 failed = true;
                 break;
             }
@@ -591,25 +589,28 @@ void SwapChainD3D11::Process() noexcept
         }
         const UCHAR timingLevel = readbackMode_ == 2 || frameCount < 8 || frameCount % 60 == 0 ?
             TRACE_LEVEL_INFORMATION : TRACE_LEVEL_VERBOSE;
-        TraceEvents(timingLevel, TRACE_DRIVER,
-            "Frame upload: frame=%u bytes=%llu regions=%u",
-            frameCount, presentTiming.uploadBytes, presentTiming.uploadRegions);
         TraceEvents(timingLevel,
             TRACE_DRIVER,
-            "Frame timing us: frame=%u acquire=%llu stateWait=%llu staging=%llu readback=%llu map=%llu cpuCopy=%llu unmap=%llu kmsWait=%llu upload=%llu prepare=%llu submit=%llu finish=%llu total=%llu idle=%llu dropped=%u pending=%llu buffer=%u path=%u requested=%u verification=%u transfer=%llu head=%u width=%u height=%u format=%u",
+            "D3D11 producer timing us: frame=%u acquire=%llu stateWait=%llu staging=%llu readback=%llu map=%llu cpuCopy=%llu unmap=%llu finish=%llu total=%llu idle=%llu buffer=%u path=%u requested=%u verification=%u transfer=%llu head=%u width=%u height=%u format=%u",
             frameCount, Microseconds(acquireTicks), Microseconds(stateWaitTicks),
             Microseconds(copyTiming_.stagingTicks), Microseconds(copyTiming_.readbackTicks),
             Microseconds(copyTiming_.mapTicks), Microseconds(copyTiming_.copyTicks),
-            Microseconds(copyTiming_.unmapTicks), Microseconds(presentTiming.lockTicks),
-            Microseconds(presentTiming.uploadTicks), Microseconds(presentTiming.prepareTicks),
-            Microseconds(presentTiming.submitTicks), Microseconds(copyTiming_.finishTicks),
-            Microseconds(PerformanceCounter() - frameStart), Microseconds(idleTicks), dropped,
-            Microseconds(presentTiming.pendingTicks), bufferIndex,
+            Microseconds(copyTiming_.unmapTicks), Microseconds(copyTiming_.finishTicks),
+            Microseconds(PerformanceCounter() - frameStart), Microseconds(idleTicks), bufferIndex,
             copyTiming_.path, copyTiming_.readFromSubresourceRequested,
             copyTiming_.verification, Microseconds(copyTiming_.transferTicks),
             head, copyTiming_.width, copyTiming_.height, copyTiming_.format);
         idleTicks = 0;
         ++frameCount;
+    }
+    if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED) ||
+        (!failed && result == E_PENDING && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0))
+        result = S_OK;
+    const HRESULT pipelineResult = pipeline_.Stop();
+    if (FAILED(pipelineResult))
+    {
+        result = pipelineResult;
+        failed = true;
     }
     TraceEvents(
         failed ? TRACE_LEVEL_ERROR : TRACE_LEVEL_INFORMATION,
@@ -892,6 +893,8 @@ HRESULT SwapChainD3D11::CopyFrame(
                 if (defaultReadbackTexture_ && !defaultReadbackRejected_)
                 {
                     const NvU64 readbackStart = PerformanceCounter();
+                    copyTiming_.gpuSubmit = !damage_.Enabled() ||
+                        !damage_.Rectangles().empty() || verifyReadback ? readbackStart : 0;
                     if (damage_.Enabled() && !verifyReadback)
                     {
                         for (const RECT& rectangle : damage_.Rectangles())
@@ -910,17 +913,13 @@ HRESULT SwapChainD3D11::CopyFrame(
                     context->Flush();
                     copyTiming_.readbackTicks += PerformanceCounter() - readbackStart;
                     source.reset();
-                    surface.reset();
-                    result = FinishFrame();
-                    if (FAILED(result))
-                    {
-                        return result;
-                    }
                     source = defaultReadbackTexture_;
                     readSource = source.get();
                     readPath = 4;
                     const NvU64 mapStart = PerformanceCounter();
                     result = context->Map(readSource, 0, D3D11_MAP_READ, 0, nullptr);
+                    copyTiming_.gpuComplete = copyTiming_.gpuSubmit != 0 ?
+                        PerformanceCounter() : 0;
                     copyTiming_.mapTicks += PerformanceCounter() - mapStart;
                     if (FAILED(result))
                     {
@@ -1028,6 +1027,8 @@ HRESULT SwapChainD3D11::CopyFrame(
         mappedTexture = readbackTexture_.get();
         copyTiming_.path = 2;
         const NvU64 readbackStart = PerformanceCounter();
+        copyTiming_.gpuSubmit = !damage_.Enabled() || !damage_.Rectangles().empty() ?
+            readbackStart : 0;
         if (damage_.Enabled())
         {
             for (const RECT& rectangle : damage_.Rectangles())
@@ -1046,14 +1047,9 @@ HRESULT SwapChainD3D11::CopyFrame(
         context->Flush();
         copyTiming_.readbackTicks += PerformanceCounter() - readbackStart;
         source.reset();
-        surface.reset();
-        result = FinishFrame();
-        if (FAILED(result))
-        {
-            return result;
-        }
         mapStart = PerformanceCounter();
         result = context->Map(mappedTexture, 0, D3D11_MAP_READ, 0, &mapped);
+        copyTiming_.gpuComplete = copyTiming_.gpuSubmit != 0 ? PerformanceCounter() : 0;
         copyTiming_.mapTicks += PerformanceCounter() - mapStart;
         if (FAILED(result))
         {

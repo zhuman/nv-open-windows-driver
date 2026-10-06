@@ -1332,6 +1332,308 @@ remains available for rollback. Focused policy/model tests and the signed
 Debug build/catalog passed. The scheduling implementation and measurement
 record are committed; no push was performed.
 
+#### Pipelined scanout, VRR preference, and non-tearing immediate flips
+
+This IddCx optimization targets sustained 60+ FPS where the source and
+physical display can supply that rate. Before this work, the path serialized
+source readback and synchronous CE upload, used two paired buffers, requested
+`minPresentInterval=1`, and discarded new frames while a flip was pending.
+It did not activate per-flip VRR. The implementation and measured outcome
+below supersede the initial two-buffer/no-VRR bring-up restrictions for
+IddCx only; KMDOD behavior is preserved.
+
+**Policy and desired defaults**
+
+Use the framework-managed UMDF Parameters key and the existing strict DWORD
+reader, including missing-key defaults and explicit malformed-value errors.
+Keep independently selectable controls for matched tests and rollback:
+
+| Parameter | Values | Desired default |
+| --- | --- | --- |
+| `VrrPreference` | 0: disabled; 1: prefer VRR when supported by the GPU, sink, link, and selected mode | 1 |
+| `FlipMode` | 0: existing synchronized/non-tearing mode; 1: non-tearing immediate/latest-ready presentation | 1 |
+| `FramePipeline` | 0: existing serialized processing; 1: overlapped source-copy and CE-upload workers | 1 |
+| `ScanoutBufferCount` | 2: baseline; 3: triple buffering; 4: bounded experiment if three slots still cause ownership stalls | 3 |
+
+Report requested and effective policies separately. Unsupported VRR or
+immediate-flip capabilities must have an explicit, reason-coded synchronized
+fallback; neither fallback may enable tearing. Desired defaults become
+shipping defaults only after their safety and hardware validation gates pass.
+Keep D3D12 direct common-buffer copying and dirty regions as the preferred
+copy path, and retain D3D11/reference-mode controls.
+
+**1. Establish flip semantics and completion evidence first**
+
+- Follow NVKMS interval/tearing fields through the target display-class
+  programming. Determine whether interval zero with tearing disabled permits
+  pending non-tearing updates to be superseded, and how notifiers identify
+  latched versus skipped updates. Do not equate interval zero, API acceptance,
+  or `CommitPresent()` with actual scanout or safe buffer retirement.
+- Add frame/submission identifiers, slot identifiers, copy-fence values,
+  requested/effective VRR and flip policies, and notifier/latch timestamps.
+  Separate source acquisition, GPU copy, CPU extraction, CE, flip submission,
+  pending wait, and physical retirement. Distinguish every drop/replacement
+  reason and measure queue depth and frame age, not just accepted uploads.
+- If the available interface cannot prove pending replacement and retirement,
+  retain synchronized ownership until that mechanism is established. Never
+  use a synchronization-bypass operation as an unverified replacement shortcut.
+
+**2. Replace the front/back toggle with explicit buffer ownership**
+
+- Start with three VRAM scanout slots. Track uploading, ready, queued,
+  scanning, and reusable states using actual completion evidence. A successful
+  submission alone must not recycle either the previous front or a queued
+  candidate. Correlate stale/late notifications with submission generations.
+- Track common-buffer RAM leases separately from VRAM display leases, even
+  if allocations remain paired initially. GPU writes and CE reads of the same
+  RAM slot cannot overlap; CE writes cannot touch scanning or still-queued
+  VRAM. RAM can be released after CE completion independently of scanout.
+- Triple buffering is a starting configuration, not proof of zero bubbles:
+  scanning, pending, uploading, and source-copying may need four independent
+  roles. Measure stalls; decouple RAM/VRAM pools or use the bounded fourth
+  slot rather than recycling an in-use allocation.
+- Make all Output accessors, native imported heaps, source readbacks,
+  verification resources, damage tracking, mode transactions, and teardown
+  honor the configured count. Preserve pixel-only cached allocation provenance.
+
+**3. Pipeline source readback and CE without extra CPU copies**
+
+- Use a single source-device/IddCx producer and a bounded upload/presentation
+  consumer. Source GPU copy of frame N+1 must be able to execute while the
+  existing synchronous RM CE call reads frame N's different common buffer.
+  This does not require an asynchronous CE ABI or a kernel companion.
+- Keep D3D12 command allocators/lists and fence values valid until GPU
+  completion; do not reset in-flight command storage. Keep each imported
+  resource mapped and its RAM lease pinned through its CE completion.
+  Attach timing, damage, HDR/color metadata, mode generation, and resource
+  ownership to immutable frame jobs rather than mutable per-worker fields.
+- Respect the IddCx acquired-surface ownership contract: finish the source
+  copy before releasing/notifying completion for that surface. D3D11 immediate
+  context use remains confined to the source worker. The consumer must not
+  concurrently Map/Unmap that context's resources.
+- Split VRAM upload from flip submission: a free third VRAM slot can be
+  uploaded while another flip is pending. Replace the blanket pending-flip
+  rejection with destination-specific ownership checks, not unconditional
+  permission to overwrite the current front.
+- Audit the global NVKMS device lock and Output locks. Do not hold an output
+  state lock while waiting for a worker that needs it, and do not assume
+  independent threads overlap if their allocation/query calls serialize
+  behind the CE lock. Use events/condition variables rather than busy spinning.
+- Bound queue depth and backpressure. Supersede only unconsumed ready work;
+  never discard or recycle a GPU/CE-active job. Preserve accumulated damage
+  when coalescing frames and preserve source metadata with the chosen image.
+
+**4. Preserve complete-image correctness under concurrency**
+
+- Every producer snapshot must represent its complete incoming image. Start
+  with full source-GPU copies if necessary, without adding a CPU memcpy to
+  native direct mode. Optimize source dirty bands only after per-RAM-slot
+  history guarantees that any later-selected VRAM destination can be repaired
+  entirely from that snapshot.
+- Track RAM and VRAM content generations independently. Damage ingestion for
+  N+1 can run before upload N completes, so the current unconditional
+  `Commit(slot)` cannot clear future damage. Use generation-aware plans and
+  commits, or equivalent separate in-flight/future accumulators.
+- Successful CE updates establish VRAM content even if that image is not
+  displayed; a canceled flip is not a canceled completed copy. Partial-copy
+  failures invalidate the destination. Discontinuities, history limits, moves,
+  and ambiguous metadata retain conservative full-refresh behavior.
+- Test two, three, and four slots, producer-ahead schedules, delayed fences,
+  failed copies, skipped/replaced frames, and late flip notifications using
+  complete-image RAM/VRAM model comparisons. Never clear damage for a frame
+  that was not copied, or read future pixels from a reused source slot.
+
+**5. Enable VRR preference and non-tearing immediate presentation**
+
+- Obtain physical VRR capability from NVKMS dynamic display information,
+  validate the selected mode/range/link, and refresh it on mode change or
+  hotplug. Pass the effective preference through modeset and per-flip
+  `vrrEnabled`/`allowVrr`; do not infer capability from a registry preference.
+- Implement `FlipMode=1` using the proven non-tearing interval/present-mode
+  mechanism. Without VRR, latest-ready replacement still obeys vblank; with
+  VRR, refresh may begin earlier only within the sink's valid timing range.
+  Neither case allows a mid-scanout tearing flip.
+- Recycle superseded pending slots only after hardware proves they cannot
+  latch or read those allocations. Preserve atomic color/HDR/layer state and
+  ordered completion semantics. A fourth buffer cannot substitute for this
+  proof, and VRR does not inherently remove all pending-flip restrictions.
+
+**6. Validate and enable defaults incrementally**
+
+- Land testable policy/ownership changes, then triple buffering, then source/CE
+  overlap under synchronized flips, then VRR and immediate presentation.
+  Keep serial/two-buffer/fixed-refresh/synchronized controls throughout.
+  Validate D3D11 and all native sub-modes, SDR/HDR/FP16, hotplug, mode changes,
+  stop/restart, fence/CE failures, and drain-before-free teardown.
+- Run repeated matched controls separating pipelining, buffer count, VRR,
+  and flip policy. Use a source actually producing at least 60 distinct FPS
+  and a display mode supporting the required rate. After warm-up, measure
+  at least 120 seconds per population; target sustained 60 displayed FPS,
+  with no full one-second interval below 60 when source/sink are above 60 Hz,
+  bounded queue/frame age, and no unexplained losses or pixel mismatches.
+  For a 60 Hz mode, use its exact nominal rate as the ceiling rather than
+  claiming more than 60 physically displayed frames.
+- Prove overlap with timestamps/fences and verify actual latch/retirement,
+  not merely CPU-thread concurrency or submission FPS. Report CE bytes,
+  regions, stage distributions, frame age, effective policy, and all losses.
+  Full-image checks must cover every slot after partial and skipped updates.
+- Use ShadowCast for image/tear checks, but its current 30 FPS capture is not
+  proof of 60+ displayed FPS or VRR. Use hardware flip timestamps and, for VRR,
+  a compatible physical sink plus link/refresh evidence. If capture hardware
+  does not support VRR, explicitly validate the fixed-refresh fallback.
+- Preserve the currently deployed D127 package for rollback before deployment.
+  Verify loaded DLL hash, device problem 0, actual paths/policies, image
+  comparisons, and physical output. Enable the desired defaults only after
+  those gates pass; document any unsupported hardware policy honestly.
+
+Pipelining changes the throughput bound from approximately the sum of source
+and CE times toward their maximum; it does not make the CE transfer itself
+faster. The measured sparse-frame CE floor of about 12.3 ms can permit roughly
+81 uploads/s in isolation. Full 4K FP16 frames are 66,355,200 bytes and measured
+best-case full-frame CE near 18 ms already limits that workload below 60 FPS.
+If that bound persists, payload/bandwidth or CE submission optimizations are a
+separate requirement; VRR and additional buffers cannot overcome it.
+
+**Implemented design and defaults (October 6)**
+
+All four policy controls above are implemented, with the desired defaults
+enabled. They are read from
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\WUDF\Services\nv-iddcx\Parameters`.
+Missing values use defaults; malformed DWORDs and query failures other than
+missing-key/value statuses fail explicitly. Existing API, native-mode,
+D3D11 readback, cache, damage, and scheduling controls remain available.
+
+- [swapchain_pipeline.cpp](windows-open/iddcx/swapchain_pipeline.cpp) provides
+  one IddCx/source-GPU producer and one synchronous CE/presentation consumer
+  for both APIs. Native mode 1 retains the direct imported-common-buffer path
+  with no additional transport pixel memcpy. D3D12 command storage is reused
+  only after the source fence completes. D3D11 context operations remain on
+  the producer, and source-surface ownership lasts through completed GPU
+  reads and CPU extraction.
+- [frame_slots.hpp](windows-open/iddcx/frame_slots.hpp) tracks RAM and VRAM
+  independently, even though their allocations remain paired. CE can read
+  RAM slot A into free VRAM slot B. RAM becomes reusable after CE and Unmap;
+  queued/scanning VRAM stays protected until ordered notifier retirement.
+  All imports, damage histories, allocations, and verification resources
+  honor two, three, or four slots.
+- The producer makes a complete-current-image RAM snapshot using its own
+  accumulated damage. The consumer separately accumulates VRAM damage and
+  commits a destination only after a successful upload. Immediate mode may
+  coalesce completed, unconsumed RAM jobs; their damage is retained before
+  releasing their mappings/leases. GPU/CE-active jobs and submitted VRAM are
+  never coalesced. Consumer jobs are local copies, including their color
+  transform, because RAM job storage may be overwritten after CE releases
+  its lease.
+- `FlipMode=1` requests `minPresentInterval=0` with `tearing=FALSE`; it does
+  not use the backend hardware tearing `_IMMEDIATE` mode. At most two
+  protected submissions are outstanding, matching the KAPI notifier ring.
+  The latest ordered notifier must have begun with a valid timestamp before
+  older fronts/candidates are retired; stale acknowledgements cannot retire
+  a newer submission. `queuedPrior>0` proves an outstanding protected update,
+  not that a previous image was never physically displayed.
+- Startup and pending-flip drain/retirement have two-second bounds. Fatal CE
+  or flip failures mark scanout as requiring a new modeset, preventing API
+  fallback from reusing uncertain storage. Adapter teardown joins workers
+  before replacing mode/head/geometry.
+- VRR activation is gated by dynamic physical capability and the preference;
+  rejected VRR-permitted mode validation retries fixed refresh explicitly.
+  Existing G-SYNC/Adaptive-Sync modeset negotiation was already enabled:
+  this work adds initial/per-flip activation permission. Preference zero
+  prevents activation, not necessarily every link-level negotiation.
+  Actual per-flip `vrrFlip` is reported separately.
+- Healthy-device `DXGI_ERROR_ACCESS_LOST` retires an invalid native swapchain
+  without setting sticky D3D11 fallback. Repeated mode-change trials observed
+  these invalidations followed by new native workers, with API 12 throughout
+  the measured native populations. Genuine device/pipeline failures retain
+  failure handling; stop-time `E_PENDING` is not treated as native failure.
+
+**Final-candidate hardware evidence**
+
+The signed Debug/catalog candidate is installed as `oem185.inf`, loaded DLL
+SHA-256 `D9B02FFF9C6B139A874CFE6156117254D9C9F9C08CA511CE38CDF20513B8039F`.
+Each trace was decoded with its matching preserved PDB/TMFs, with zero event
+loss, format errors, or unknowns. The collector enforces the actual source API
+and uses the reported QPC frequency. Its overlap count requires a source GPU
+enqueue-to-successful-fence/Map-completion bracket wholly inside an earlier,
+different frame's nonzero CE call. These are host-side completion brackets,
+not independently calibrated GPU-engine timestamps.
+
+The moving-band source painted approximately 105 times/s. The temporary
+accepted mode was 1920x1080 at approximately 59.94 Hz; Windows reports integer
+frequency 59. These HDR trials used FP16 source pixels and 10-bpc output.
+Measured windows exclude five seconds at each end of the clip:
+
+| Configuration | Measured s | Uploads | Uploads/s | Observed latch records/s | Mean CE ms | Contained GPU overlaps |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Native direct, pipeline/immediate, three slots (defaults) | 120 | 7,080 | 59.00 | 57.60 | 4.29 | 108 |
+| Same native defaults, repeated | 60 | 3,547 | 59.12 | 57.02 | 4.29 | 57 |
+| Native direct, serial/synchronized, two slots, VRR off | 120 | 5,959 | 49.66 | 49.65 | 5.77 | 0 |
+| D3D11 normal staging, pipeline/immediate, three slots | 60 | 3,538 | 58.97 | 57.37 | 4.02 | 62 |
+| Native direct, pipeline/immediate, four slots | 30 | 1,784 | 59.47 | 57.00 | 4.14 | 5 |
+| Native mode 2 reference readback, three slots | 30 | 1,763 | 58.77 | 57.17 | 4.39 | 36 |
+| Native mode 3 reference path, three slots | 30 | 1,764 | 58.80 | 56.27 | 3.93 | 53 |
+| D3D11 ReadFromSubresource mode 1, three slots | 30 | 241 | 8.03 | 8.03 | 5.88 | 109 |
+| D3D11 ReadFromSubresource mode 2, three slots | 30 | 431 | 14.37 | 14.23 | 5.15 | 94 |
+| Native defaults, original 3840x2160 ~29.97-Hz mode | 30 | 887 | 29.57 | 29.57 | 12.23 | 0 |
+
+The combined native defaults improve upload throughput about 19% versus the
+serial/synchronized/two-slot control. This comparison does not isolate the
+pipeline from the changed buffering and flip policy. Different accumulated
+damage/payload populations also mean the CE averages are not a matched
+bandwidth comparison. Four slots did not establish a meaningful latch-rate
+advantage in the short trial, so three remains the default.
+
+The first native-default run averaged 3.25 MB per CE upload, with median CE
+4.38 ms and p95 4.64 ms. Its source-completion-to-flip-submission interval
+averaged 4.63 ms (maximum 39.52 ms), compared with 14.09 ms (maximum 49.37 ms)
+for the serial control. This interval is not input-to-photon latency.
+There were 6,911 unique hardware latch timestamps among 6,912 observed latch
+records. The observer can miss intermediate flips, so neither uploads nor
+observed records certify the exact number of physically displayed images.
+The two native-default clips passed 77 and 47 complete RAM-image comparisons,
+including partial updates and all three slots. The four-slot native clip
+passed 33, and the final 4K default clip passed 15. Ownership/damage model
+tests additionally compare complete modeled RAM/VRAM images. ShadowCast
+showed the intact grid and moving regions on the final native candidate and
+correct desktop output after restoration; its 30-FPS capture is image
+evidence, not a 60-FPS/VRR certification.
+
+The experimental D3D11 ReadFromSubresource modes remain selectable and pass
+their readback comparisons, but source extraction averaged 121.84 and
+59.51 ms in these clips. They are not the preferred path. Their performance
+must not be confused with D3D11 normal staging or native direct copying.
+
+**Limits and final target state**
+
+- The sink reports VRR unsupported; all observed `vrrFlip` values were zero.
+  Fixed-refresh operation and preference zero were tested. Positive VRR,
+  range behavior, and link evidence still require a compatible physical sink.
+- The original mode is approximately 29.97 Hz. The accepted temporary mode
+  is approximately 59.94 Hz; Windows rejected 1080p120 with
+  `DISP_CHANGE_BADMODE` before applying it. Neither mode can certify 60+
+  distinct displayed frames/s.
+- The first native population's minimum complete wall-clock second had 41
+  uploads, and the repeat's had 46. The target of no one-second dips below
+  nominal refresh is therefore not achieved. The implementation proves
+  overlap and improves this workload, not guaranteed sustained 60+ FPS.
+- Reference/four-slot trials were short correctness/performance checks, not
+  120-second certification populations. SDR/BGRA8 transitions, physical
+  hot-unplug during pending work, and injected hardware failure/drain cases
+  were not newly certified in this matrix. The conservative models cover
+  delayed/coalesced/stale-notifier schedules, but do not substitute for those
+  hardware tests.
+
+Focused strict-policy/damage/ownership tests passed: 100,000 original damage
+frames plus 900,000 ownership/deferred/independent/coalescing schedules.
+The signed IddCx Debug build/catalog and KMDOD compatibility build/catalog
+passed. The implementation remains pure UMDF without a transport companion.
+The D127 rollback and the replaced independent candidate were separately
+exported and hash-verified. Final fresh verification showed problem 0, the
+loaded D9 DLL, all twelve experiment DWORDs absent exactly as in the original
+journal, and the original 3840x2160 mode retained. The owned scene task was
+removed and its ETW logger stopped. The presentation implementation and
+validation record are committed together; no push was performed.
+
 If pure UMDF cannot bridge WDF's DMA mapping to an RM/GPU-visible address, keep
 the CPU path fully functional and choose explicitly between shipping without
 DMA or using an uncertified experimental KMDF transport companion. Microsoft

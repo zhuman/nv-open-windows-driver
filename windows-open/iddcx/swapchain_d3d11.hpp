@@ -10,6 +10,7 @@
 
 #include "nvkms_windows.h"
 #include "swapchain_damage.hpp"
+#include "swapchain_pipeline.hpp"
 
 namespace nv::iddcx {
 
@@ -82,6 +83,7 @@ private:
     NvU32 readbackMode_ = 0;
     NvU64 textureFrameCount_ = 0;
     SwapChainDamage damage_;
+    SwapChainUploadPipeline pipeline_;
     LARGE_INTEGER counterFrequency_ = {};
     struct
     {
@@ -92,6 +94,8 @@ private:
         NvU64 unmapTicks;
         NvU64 finishTicks;
         NvU64 transferTicks;
+        NvU64 gpuSubmit;
+        NvU64 gpuComplete;
         UINT width;
         UINT height;
         DXGI_FORMAT format;
