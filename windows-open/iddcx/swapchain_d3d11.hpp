@@ -47,6 +47,11 @@ private:
     HRESULT CreateDevice(LUID adapterLuid) noexcept;
     HRESULT CopyFrame(wil::com_ptr_nothrow<IDXGIResource>& surface) noexcept;
     HRESULT CopyFrame(const IDDCX_SYSTEM_BUFFER_INFO& buffer) noexcept;
+    HRESULT VerifyReadback(
+        ID3D11Device* device,
+        ID3D11DeviceContext* context,
+        ID3D11Texture2D* source,
+        const D3D11_TEXTURE2D_DESC& sourceDesc) noexcept;
     HRESULT FinishFrame() noexcept;
     void UpdateHdrMetadata(const IDDCX_METADATA2& metadata) noexcept;
     void Process() noexcept;
@@ -60,6 +65,7 @@ private:
     HANDLE nextSurfaceEvent_;
     wil::com_ptr_nothrow<IDXGIDevice> device_;
     wil::com_ptr_nothrow<ID3D11Texture2D> readbackTexture_;
+    wil::com_ptr_nothrow<ID3D11Texture2D> defaultReadbackTexture_;
     wil::unique_handle stopEvent_;
     wil::unique_handle thread_;
     wil::srwlock stateLock_;
@@ -69,6 +75,11 @@ private:
     bool useBuffer2_;
     bool useSystemMemory_;
     bool deletionStarted_;
+    bool readFromSubresourceSupported_ = false;
+    bool defaultReadbackRejected_ = false;
+    bool readbackVerified_ = false;
+    NvU32 readbackMode_ = 0;
+    NvU64 textureFrameCount_ = 0;
     LARGE_INTEGER counterFrequency_ = {};
     struct
     {
@@ -78,6 +89,13 @@ private:
         NvU64 copyTicks;
         NvU64 unmapTicks;
         NvU64 finishTicks;
+        NvU64 transferTicks;
+        UINT width;
+        UINT height;
+        DXGI_FORMAT format;
+        NvU32 path;
+        bool readFromSubresourceRequested;
+        bool verification;
         bool frameQueued;
     } copyTiming_ = {};
 };

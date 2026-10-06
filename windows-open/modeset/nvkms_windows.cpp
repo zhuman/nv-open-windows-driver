@@ -58,6 +58,7 @@ struct NV_KMS_WINDOWS_SURFACE
     NvKmsKapiSurface* surface;
     void* pixels;
     NvU64 size;
+    NvU64 stagingSize;
     NvU32 width;
     NvU32 height;
     NvU32 pitch;
@@ -1567,16 +1568,27 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    const NvU32 alignment = resources.caps.pitchAlignment == 0 ?
+    const NvU32 requiredAlignment = resources.caps.pitchAlignment == 0 ?
         1 : resources.caps.pitchAlignment;
+    NvU32 divisor = requiredAlignment;
+    NvU32 remainder = 128;
+    while (remainder != 0)
+    {
+        const NvU32 nextRemainder = divisor % remainder;
+        divisor = remainder;
+        remainder = nextRemainder;
+    }
+    const NvU64 alignment = static_cast<NvU64>(requiredAlignment / divisor) * 128;
     const NvU64 bytesPerPixel =
         format == NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16 ? 8 : 4;
     const NvU64 rowBytes = static_cast<NvU64>(width) * bytesPerPixel;
     const NvU64 alignedPitch =
         ((rowBytes + alignment - 1) / alignment) * alignment;
     const NvU64 allocationSize = alignedPitch * height;
+    const NvU64 stagingSize = format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8
+        ? allocationSize : (allocationSize + 65535U) & ~NvU64{65535U};
     if (alignedPitch > ~static_cast<NvU32>(0) ||
-        allocationSize / height != alignedPitch)
+        allocationSize / height != alignedPitch || stagingSize < allocationSize)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
@@ -1605,6 +1617,7 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     }
 
     memoryParams.useVideoMemory = NV_FALSE;
+    memoryParams.size = stagingSize;
     scanout->stagingMemory =
         kmsFunctions.allocateMemory(kmsDevice, &memoryParams);
     if (scanout->stagingMemory == nullptr)
@@ -1635,6 +1648,7 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     }
 
     scanout->size = allocationSize;
+    scanout->stagingSize = stagingSize;
     scanout->width = width;
     scanout->height = height;
     scanout->pitch = static_cast<NvU32>(alignedPitch);
@@ -1663,6 +1677,24 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     *surface = scanout;
     *pixels = scanout->pixels;
     *pitch = scanout->pitch;
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetScanoutBuffer(
+    NV_KMS_WINDOWS_SURFACE* surface, void** pixels, NvU64* allocationSize)
+{
+    if (surface == nullptr || pixels == nullptr || allocationSize == nullptr)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    KmsDeviceLockGuard lock;
+    if (kmsDevice == nullptr || surface->stagingMemory == nullptr ||
+        surface->pixels == nullptr)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+    *pixels = surface->pixels;
+    *allocationSize = surface->stagingSize;
     return NV_OK;
 }
 

@@ -74,7 +74,7 @@ extern "C" NV_STATUS NvPlatformRmAllocatePages(
     NvBool contiguous,
     NvBool,
     NvBool belowFourGigabytes,
-    NV_PLATFORM_RM_MEMORY_CACHE_TYPE,
+    NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType,
     void** allocation,
     NvU64* physicalAddresses,
     NvU32 physicalAddressCapacity,
@@ -126,6 +126,7 @@ extern "C" NV_STATUS NvPlatformRmAllocatePages(
         pageAllocation->provider.context,
         size,
         alignment,
+        cacheType,
         &pageAllocation->providerAllocation,
         &pageAllocation->address,
         &pageAllocation->logicalAddress);

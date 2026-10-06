@@ -2,6 +2,9 @@
 #include "adapter.hpp"
 #include "display_modes.hpp"
 #include "swapchain_d3d11.hpp"
+#include "swapchain_d3d12.hpp"
+#include "device.hpp"
+#include "driver_parameters.hpp"
 #include "hwcursor.h"
 #include "trace.h"
 
@@ -277,6 +280,11 @@ void Output::CommitMode(
     NvU8 colorBpc,
     NV_KMS_WINDOWS_COLOR_SPACE colorSpace) noexcept
 {
+    if (!active)
+    {
+        // Imported D3D12 heaps must go away before their WDF backing allocations.
+        QuiesceSwapChain();
+    }
     // Frame processing holds the shared side through copy and present.
     auto lock = stateLock_.lock_exclusive();
     if (newSurface != nullptr)
@@ -429,8 +437,31 @@ NTSTATUS Output::AssignSwapChain(
         return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
     }
     QuiesceSwapChain();
+    ULONG d3d12Mode = 0;
+    const NTSTATUS settingStatus = QueryDriverParameterDword(L"D3D12Mode", &d3d12Mode);
+    if ((!NT_SUCCESS(settingStatus) && !DriverParameterAbsent(settingStatus)) ||
+        d3d12Mode > 3)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "Invalid D3D12Mode setting: status=%!STATUS! mode=%u; using D3D11 baseline",
+            settingStatus, d3d12Mode);
+        d3d12Mode = 0;
+    }
+    if (d3d12Mode == 0)
+    {
+        d3d12Failed_ = false;
+    }
     SwapChainD3D11* swapChain = nullptr;
-    const NTSTATUS status = SwapChainD3D11::Create(*this, *arguments, &swapChain);
+    SwapChainD3D12* swapChain12 = nullptr;
+    NTSTATUS status = STATUS_NOT_SUPPORTED;
+    if (d3d12Mode != 0 && !d3d12Failed_)
+    {
+        status = SwapChainD3D12::Create(*this, *arguments, d3d12Mode, &swapChain12);
+    }
+    if (status == STATUS_NOT_SUPPORTED)
+    {
+        status = SwapChainD3D11::Create(*this, *arguments, &swapChain);
+    }
     if (!NT_SUCCESS(status))
     {
         return status;
@@ -440,8 +471,10 @@ NTSTATUS Output::AssignSwapChain(
     {
         auto lock = stateLock_.lock_exclusive();
         swapChain_ = swapChain;
+        swapChain12_ = swapChain12;
     }
-    const HRESULT startResult = swapChain->StartProcessing();
+    const HRESULT startResult = swapChain12 != nullptr
+        ? swapChain12->StartProcessing() : swapChain->StartProcessing();
     if (FAILED(startResult))
     {
         TraceEvents(
@@ -486,17 +519,39 @@ void Output::OnSwapChainDestroyed(SwapChainD3D11* swapChain) noexcept
     }
 }
 
+void Output::OnSwapChainDestroyed(SwapChainD3D12* swapChain) noexcept
+{
+    auto lock = stateLock_.lock_exclusive();
+    if (swapChain12_ == swapChain)
+    {
+        swapChain12_ = nullptr;
+    }
+    if (swapChain->Failed())
+    {
+        d3d12Failed_ = true;
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "D3D12 runtime failure: next swapchain uses D3D11 until baseline is reselected or monitor is recreated");
+    }
+}
+
 void Output::QuiesceSwapChain() noexcept
 {
     SwapChainD3D11* swapChain = nullptr;
+    SwapChainD3D12* swapChain12 = nullptr;
     {
         auto lock = stateLock_.lock_exclusive();
         swapChain = swapChain_;
         swapChain_ = nullptr;
+        swapChain12 = swapChain12_;
+        swapChain12_ = nullptr;
     }
     if (swapChain != nullptr)
     {
         swapChain->StopAndDelete();
+    }
+    if (swapChain12 != nullptr)
+    {
+        swapChain12->StopAndDelete();
     }
 }
 

@@ -22,7 +22,7 @@
     <UMDF_VERSION_MAJOR>2</UMDF_VERSION_MAJOR>
     <UMDF_VERSION_MINOR>35</UMDF_VERSION_MINOR>
     <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
-    <IDDCX_VERSION_MINOR>10</IDDCX_VERSION_MINOR>
+    <IDDCX_VERSION_MINOR>11</IDDCX_VERSION_MINOR>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
   </PropertyGroup>
@@ -33,7 +33,7 @@
       <AdditionalIncludeDirectories>$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)nvport\kernel;$(WindowsOpenRoot)rm\include;$(WindowsOpenRoot)modeset;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>false</ExceptionHandling>
       <LanguageStandard>stdcpp23</LanguageStandard>
-      <PreprocessorDefinitions>UMDF_DRIVER;NV_USER_MODE;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=10;IDDCX_MINIMUM_VERSION_REQUIRED=10;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>UMDF_DRIVER;NV_USER_MODE;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=11;IDDCX_MINIMUM_VERSION_REQUIRED=10;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(NvRmUserLinkProbe)' == 'true'">NV_RM_USER_LINK_PROBE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WppEnabled>true</WppEnabled>
       <WppPreprocessorDefinitions>WPP_MACRO_USE_KM_VERSION_FOR_UM=1;%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -41,7 +41,7 @@
       <WppScanConfigurationData>trace.h</WppScanConfigurationData>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;OneCoreUAP.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;d3d12.lib;dxgi.lib;OneCoreUAP.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <DriverSign>
       <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
@@ -57,6 +57,7 @@
     <ClCompile Include="hwcursor.cpp" />
     <ClCompile Include="output.cpp" />
     <ClCompile Include="swapchain_d3d11.cpp" />
+    <ClCompile Include="swapchain_d3d12.cpp" />
     <Inf Include="nv-iddcx.inf" />
   </ItemGroup>
   <ItemGroup>
@@ -64,10 +65,13 @@
     <ClInclude Include="common_services.hpp" />
     <ClInclude Include="device.hpp" />
     <ClInclude Include="display_modes.hpp" />
+    <ClInclude Include="driver_parameters.hpp" />
     <ClInclude Include="hardware_services.hpp" />
     <ClInclude Include="hwcursor.h" />
     <ClInclude Include="output.hpp" />
     <ClInclude Include="swapchain_d3d11.hpp" />
+    <ClInclude Include="swapchain_d3d12.hpp" />
+    <ClInclude Include="swapchain_pixels.hpp" />
     <ClInclude Include="trace.h" />
   </ItemGroup>
   <ItemGroup>

@@ -2,12 +2,14 @@
 #include "adapter.hpp"
 #include "display_modes.hpp"
 #include "output.hpp"
+#include "swapchain_pixels.hpp"
 #include "trace.h"
 
 #include <cstring>
 #include <new>
 #include <utility>
 #include <dxgi1_4.h>
+#include <d3d11_3.h>
 
 #include "swapchain_d3d11.tmh"
 
@@ -23,45 +25,6 @@ NvU64 PerformanceCounter() noexcept
     LARGE_INTEGER counter = {};
     QueryPerformanceCounter(&counter);
     return static_cast<NvU64>(counter.QuadPart);
-}
-
-NvU16 Unorm8ToFp16(NvU8 value) noexcept
-{
-    if (value == 0)
-    {
-        return 0;
-    }
-    const float normalized = static_cast<float>(value) / 255.0F;
-    NvU32 bits = 0;
-    std::memcpy(&bits, &normalized, sizeof(bits));
-    NvU32 exponent = (bits >> 23) & 0xffU;
-    NvU32 mantissa = bits & 0x7fffffU;
-    mantissa += 0xfffU + ((mantissa >> 13) & 1U);
-    if ((mantissa & 0x800000U) != 0)
-    {
-        mantissa = 0;
-        ++exponent;
-    }
-    return static_cast<NvU16>(((exponent - 112U) << 10) | (mantissa >> 13));
-}
-
-void CopyHdrMetadata(
-    const IDDCX_HDR10_METADATA& source,
-    NV_KMS_WINDOWS_HDR_METADATA* destination) noexcept
-{
-    const USHORT* primaries[] = {
-        source.RedPrimary, source.GreenPrimary, source.BluePrimary };
-    for (NvU32 primary = 0; primary < 3; ++primary)
-    {
-        destination->displayPrimaries[primary][0] = primaries[primary][0];
-        destination->displayPrimaries[primary][1] = primaries[primary][1];
-    }
-    destination->whitePoint[0] = source.WhitePoint[0];
-    destination->whitePoint[1] = source.WhitePoint[1];
-    destination->maxMasteringLuminance = source.MaxMasteringLuminance;
-    destination->minMasteringLuminance = source.MinMasteringLuminance;
-    destination->maxContentLightLevel = source.MaxContentLightLevel;
-    destination->maxFrameAverageLightLevel = source.MaxFrameAverageLightLevel;
 }
 
 } // namespace
@@ -282,6 +245,29 @@ HRESULT SwapChainD3D11::CreateDevice(LUID luid) noexcept
     {
         return result;
     }
+    D3D11_FEATURE_DATA_D3D11_OPTIONS2 options = {};
+    readFromSubresourceSupported_ = SUCCEEDED(device->CheckFeatureSupport(
+        D3D11_FEATURE_D3D11_OPTIONS2, &options, sizeof(options))) &&
+        options.MapOnDefaultTextures;
+    DWORD mode = 0;
+    DWORD modeSize = sizeof(mode);
+    if (RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            L"SOFTWARE\\NVIDIA Corporation\\nv-iddcx",
+            L"ReadbackMode",
+            RRF_RT_REG_DWORD,
+            nullptr,
+            &mode,
+            &modeSize) == ERROR_SUCCESS && mode <= 2)
+    {
+        readbackMode_ = mode;
+    }
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "Readback configuration: mode=%u mapOnDefaultTextures=%u",
+        readbackMode_,
+        readFromSubresourceSupported_);
     return device.query_to(device_.put());
 }
 
@@ -348,6 +334,7 @@ void SwapChainD3D11::Stop() noexcept
     stopEvent_.reset();
     nextSurfaceEvent_ = nullptr;
     readbackTexture_.reset();
+    defaultReadbackTexture_.reset();
     device_.reset();
 }
 
@@ -396,15 +383,16 @@ void SwapChainD3D11::Process() noexcept
         NvU64 stateWaitTicks = 0;
         bool dropped = false;
         NvU32 bufferIndex = 0;
+        NvU32 head = 0;
         const NvU64 frameStart = PerformanceCounter();
         IDARG_OUT_RELEASEANDACQUIREBUFFER buffer = {};
         IDARG_IN_RELEASEANDACQUIREBUFFER2 input2 = {};
         IDARG_OUT_RELEASEANDACQUIREBUFFER2 buffer2 = {};
         if (useBuffer2_)
         {
-            input2.Size = sizeof(input2);
+            input2.Size = IDD_STRUCTURE_SIZE(IDARG_IN_RELEASEANDACQUIREBUFFER2);
             input2.AcquireSystemMemoryBuffer = useSystemMemory_;
-            buffer2.MetaData.Size = sizeof(buffer2.MetaData);
+            buffer2.MetaData.Size = IDD_STRUCTURE_SIZE(IDDCX_METADATA2);
             result = IddCxSwapChainReleaseAndAcquireBuffer2(
                 handle_, &input2, &buffer2);
         }
@@ -455,6 +443,7 @@ void SwapChainD3D11::Process() noexcept
             auto outputLock = output_->LockFrameStateShared();
             stateWaitTicks = PerformanceCounter() - stateWaitStart;
             bufferIndex = output_->BackBufferIndex();
+            head = output_->AssignedHead();
             if (useBuffer2_)
             {
                 UpdateHdrMetadata(buffer2.MetaData);
@@ -469,9 +458,11 @@ void SwapChainD3D11::Process() noexcept
                         buffer2.MetaData.ValidFlags);
                 }
             }
+            const NvU64 transferStart = PerformanceCounter();
             result = hasSystemBuffer
                 ? CopyFrame(buffer2.MetaData.SystemBufferInfo)
                 : CopyFrame(acquiredSurface);
+            copyTiming_.transferTicks = PerformanceCounter() - transferStart;
             if (SUCCEEDED(result))
             {
                 acquiredSurface.reset();
@@ -543,10 +534,10 @@ void SwapChainD3D11::Process() noexcept
             failed = true;
             break;
         }
-        TraceEvents(frameCount < 8 || frameCount % 60 == 0 ?
+        TraceEvents(readbackMode_ == 2 || frameCount < 8 || frameCount % 60 == 0 ?
             TRACE_LEVEL_INFORMATION : TRACE_LEVEL_VERBOSE,
             TRACE_DRIVER,
-            "Frame timing us: frame=%u acquire=%llu stateWait=%llu staging=%llu readback=%llu map=%llu cpuCopy=%llu unmap=%llu kmsWait=%llu upload=%llu prepare=%llu submit=%llu finish=%llu total=%llu idle=%llu dropped=%u pending=%llu buffer=%u",
+            "Frame timing us: frame=%u acquire=%llu stateWait=%llu staging=%llu readback=%llu map=%llu cpuCopy=%llu unmap=%llu kmsWait=%llu upload=%llu prepare=%llu submit=%llu finish=%llu total=%llu idle=%llu dropped=%u pending=%llu buffer=%u path=%u requested=%u verification=%u transfer=%llu head=%u width=%u height=%u format=%u",
             frameCount, Microseconds(acquireTicks), Microseconds(stateWaitTicks),
             Microseconds(copyTiming_.stagingTicks), Microseconds(copyTiming_.readbackTicks),
             Microseconds(copyTiming_.mapTicks), Microseconds(copyTiming_.copyTicks),
@@ -554,7 +545,10 @@ void SwapChainD3D11::Process() noexcept
             Microseconds(presentTiming.uploadTicks), Microseconds(presentTiming.prepareTicks),
             Microseconds(presentTiming.submitTicks), Microseconds(copyTiming_.finishTicks),
             Microseconds(PerformanceCounter() - frameStart), Microseconds(idleTicks), dropped,
-            Microseconds(presentTiming.pendingTicks), bufferIndex);
+            Microseconds(presentTiming.pendingTicks), bufferIndex,
+            copyTiming_.path, copyTiming_.readFromSubresourceRequested,
+            copyTiming_.verification, Microseconds(copyTiming_.transferTicks),
+            head, copyTiming_.width, copyTiming_.height, copyTiming_.format);
         idleTicks = 0;
         ++frameCount;
     }
@@ -596,7 +590,7 @@ void SwapChainD3D11::UpdateHdrMetadata(const IDDCX_METADATA2& metadata) noexcept
             hasCurrentHdrMetadata_);
         break;
     case IDDCX_HDR10_FRAME_METADATA_TYPE_NEW:
-        CopyHdrMetadata(
+        frame::CopyHdrMetadata(
             metadata.Hdr10FrameMetaData.NewMetaData,
             &currentHdrMetadata_);
         hasCurrentHdrMetadata_ = true;
@@ -618,102 +612,88 @@ void SwapChainD3D11::UpdateHdrMetadata(const IDDCX_METADATA2& metadata) noexcept
 HRESULT SwapChainD3D11::CopyFrame(
     const IDDCX_SYSTEM_BUFFER_INFO& buffer) noexcept
 {
+    copyTiming_.width = buffer.Width;
+    copyTiming_.height = buffer.Height;
+    copyTiming_.format = buffer.Format;
     const NvU64 copyStart = PerformanceCounter();
     auto recordCopy = wil::scope_exit([&]() noexcept {
         copyTiming_.copyTicks += PerformanceCounter() - copyStart;
     });
-    if (output_->BackPixels() == nullptr || output_->ScanoutPitch() == 0 ||
-        buffer.pBuffer == nullptr)
-    {
-        return E_UNEXPECTED;
-    }
-    const auto* mode = display_modes::FindDisplayMode(
-        output_->DisplayState(), output_->ActiveModeIndex());
-    if (mode == nullptr || buffer.Width != mode->hVisible ||
-        buffer.Height != mode->vVisible)
-    {
-        return E_UNEXPECTED;
-    }
+    return frame::CopyPixels(*output_, buffer);
+}
 
-    auto* destination = static_cast<NvU8*>(output_->BackPixels());
-    const auto* source = static_cast<const NvU8*>(buffer.pBuffer);
-    if (output_->ScanoutFormat() == NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16)
+HRESULT SwapChainD3D11::VerifyReadback(
+    ID3D11Device* device,
+    ID3D11DeviceContext* context,
+    ID3D11Texture2D* source,
+    const D3D11_TEXTURE2D_DESC& sourceDesc) noexcept
+{
+    bool replace = !readbackTexture_;
+    if (!replace)
     {
-        const size_t rowBytes = static_cast<size_t>(mode->hVisible) * 8U;
-        if (output_->ScanoutPitch() < rowBytes)
-        {
-            return E_UNEXPECTED;
-        }
-        if (buffer.Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
-        {
-            for (NvU32 y = 0; y < mode->vVisible; ++y)
-            {
-                std::memcpy(
-                    destination + output_->ScanoutPitch() * y,
-                    source + buffer.Pitch * y,
-                    rowBytes);
-            }
-            return S_OK;
-        }
-        if (buffer.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
-            buffer.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB &&
-            buffer.Format != DXGI_FORMAT_R8G8B8A8_UNORM &&
-            buffer.Format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
-        {
-            return DXGI_ERROR_UNSUPPORTED;
-        }
-        const bool rgba = buffer.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
-            buffer.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-        for (NvU32 y = 0; y < mode->vVisible; ++y)
-        {
-            auto* destinationRow = reinterpret_cast<NvU16*>(
-                destination + output_->ScanoutPitch() * y);
-            const NvU8* sourceRow = source + buffer.Pitch * y;
-            for (NvU32 x = 0; x < mode->hVisible; ++x)
-            {
-                destinationRow[x * 4] = Unorm8ToFp16(
-                    sourceRow[x * 4 + (rgba ? 0 : 2)]);
-                destinationRow[x * 4 + 1] = Unorm8ToFp16(sourceRow[x * 4 + 1]);
-                destinationRow[x * 4 + 2] = Unorm8ToFp16(
-                    sourceRow[x * 4 + (rgba ? 2 : 0)]);
-                destinationRow[x * 4 + 3] = Unorm8ToFp16(sourceRow[x * 4 + 3]);
-            }
-        }
-        return S_OK;
+        D3D11_TEXTURE2D_DESC desc = {};
+        readbackTexture_->GetDesc(&desc);
+        replace = desc.Width != sourceDesc.Width || desc.Height != sourceDesc.Height ||
+            desc.Format != sourceDesc.Format;
     }
-
-    if (buffer.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
-        buffer.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB &&
-        buffer.Format != DXGI_FORMAT_B8G8R8X8_UNORM &&
-        buffer.Format != DXGI_FORMAT_R8G8B8A8_UNORM &&
-        buffer.Format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+    if (replace)
     {
-        return DXGI_ERROR_UNSUPPORTED;
+        D3D11_TEXTURE2D_DESC desc = sourceDesc;
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = desc.MiscFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        const HRESULT result = device->CreateTexture2D(&desc, nullptr, readbackTexture_.put());
+        if (FAILED(result))
+        {
+            return result;
+        }
     }
-    const size_t rowBytes = static_cast<size_t>(mode->hVisible) * 4U;
-    if (output_->ScanoutPitch() < rowBytes)
+    context->CopyResource(readbackTexture_.get(), source);
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    const HRESULT result = context->Map(
+        readbackTexture_.get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(result))
+    {
+        return result;
+    }
+    auto unmap = wil::scope_exit([&]() noexcept {
+        context->Unmap(readbackTexture_.get(), 0);
+    });
+    const size_t rowBytes = static_cast<size_t>(sourceDesc.Width) *
+        (sourceDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8U : 4U);
+    if (mapped.RowPitch < rowBytes || output_->ScanoutPitch() < rowBytes)
     {
         return E_UNEXPECTED;
     }
-    const bool rgba = buffer.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
-        buffer.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-    for (NvU32 y = 0; y < mode->vVisible; ++y)
+    bool matched = true;
+    for (NvU32 rowIndex = 0; rowIndex < sourceDesc.Height; ++rowIndex)
     {
-        NvU8* destinationRow = destination + output_->ScanoutPitch() * y;
-        const NvU8* sourceRow = source + buffer.Pitch * y;
-        if (!rgba)
+        auto* destination = static_cast<NvU8*>(output_->BackPixels()) +
+            static_cast<size_t>(output_->ScanoutPitch()) * rowIndex;
+        const auto* reference = static_cast<const NvU8*>(mapped.pData) +
+            static_cast<size_t>(mapped.RowPitch) * rowIndex;
+        if (std::memcmp(destination, reference, rowBytes) != 0)
         {
-            std::memcpy(destinationRow, sourceRow, rowBytes);
-            continue;
+            matched = false;
         }
-        for (NvU32 x = 0; x < mode->hVisible; ++x)
+        if (!matched)
         {
-            destinationRow[x * 4] = sourceRow[x * 4 + 2];
-            destinationRow[x * 4 + 1] = sourceRow[x * 4 + 1];
-            destinationRow[x * 4 + 2] = sourceRow[x * 4];
-            destinationRow[x * 4 + 3] = 0xff;
+            std::memcpy(destination, reference, rowBytes);
         }
     }
+    TraceEvents(
+        matched ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "ReadFromSubresource verification: matched=%u bytes=%llu pitch=%u pointerMod128=%u",
+        matched, static_cast<NvU64>(rowBytes) * sourceDesc.Height,
+        output_->ScanoutPitch(),
+        static_cast<NvU32>(reinterpret_cast<ULONG_PTR>(output_->BackPixels()) & 127U));
+    if (!matched)
+    {
+        readFromSubresourceSupported_ = false;
+        copyTiming_.path = 2;
+    }
+    readbackVerified_ = matched;
     return S_OK;
 }
 
@@ -763,11 +743,142 @@ HRESULT SwapChainD3D11::CopyFrame(
     source->GetDevice(device.put());
     wil::com_ptr_nothrow<ID3D11DeviceContext> context;
     device->GetImmediateContext(context.put());
+    const bool tryReadFromSubresource = readbackMode_ == 1 ||
+        (readbackMode_ == 2 && ((textureFrameCount_ / 120) & 1U) != 0);
+    copyTiming_.readFromSubresourceRequested = tryReadFromSubresource;
+    ++textureFrameCount_;
+    const bool matchingFormat =
+        (output_->ScanoutFormat() == NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16 &&
+         sourceDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) ||
+        (output_->ScanoutFormat() == NV_KMS_WINDOWS_SCANOUT_FORMAT_XRGB8 &&
+         (sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+          sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
+          sourceDesc.Format == DXGI_FORMAT_B8G8R8X8_UNORM));
+    if (textureFrameCount_ == 1)
+    {
+        TraceEvents(
+            TRACE_LEVEL_INFORMATION,
+            TRACE_DRIVER,
+            "Readback surface: width=%u height=%u format=%u usage=%u cpu=0x%08X bind=0x%08X misc=0x%08X pitch=%u pointerMod128=%u",
+            sourceDesc.Width, sourceDesc.Height, sourceDesc.Format,
+            sourceDesc.Usage, sourceDesc.CPUAccessFlags, sourceDesc.BindFlags,
+            sourceDesc.MiscFlags, output_->ScanoutPitch(),
+            static_cast<NvU32>(reinterpret_cast<ULONG_PTR>(output_->BackPixels()) & 127U));
+    }
+    if (tryReadFromSubresource && readFromSubresourceSupported_ && matchingFormat &&
+        sourceDesc.Usage == D3D11_USAGE_DEFAULT && sourceDesc.SampleDesc.Count == 1 &&
+        sourceDesc.MipLevels == 1 && sourceDesc.ArraySize == 1)
+    {
+        wil::com_ptr_nothrow<ID3D11Device3> device3;
+        result = device.query_to(device3.put());
+        if (SUCCEEDED(result))
+        {
+            ID3D11Texture2D* readSource = source.get();
+            NvU32 readPath = 3;
+            result = DXGI_ERROR_UNSUPPORTED;
+            if ((sourceDesc.CPUAccessFlags & D3D11_CPU_ACCESS_READ) != 0)
+            {
+                const NvU64 mapStart = PerformanceCounter();
+                result = context->Map(readSource, 0, D3D11_MAP_READ, 0, nullptr);
+                copyTiming_.mapTicks += PerformanceCounter() - mapStart;
+            }
+            if (FAILED(result) && !defaultReadbackRejected_)
+            {
+                bool replace = !defaultReadbackTexture_;
+                if (!replace)
+                {
+                    D3D11_TEXTURE2D_DESC desc = {};
+                    defaultReadbackTexture_->GetDesc(&desc);
+                    replace = desc.Width != sourceDesc.Width ||
+                        desc.Height != sourceDesc.Height || desc.Format != sourceDesc.Format;
+                }
+                if (replace)
+                {
+                    D3D11_TEXTURE2D_DESC1 desc = {};
+                    desc.Width = sourceDesc.Width;
+                    desc.Height = sourceDesc.Height;
+                    desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+                    desc.Format = sourceDesc.Format;
+                    desc.Usage = D3D11_USAGE_DEFAULT;
+                    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                    desc.TextureLayout = D3D11_TEXTURE_LAYOUT_UNDEFINED;
+                    wil::com_ptr_nothrow<ID3D11Texture2D1> texture;
+                    const NvU64 stagingStart = PerformanceCounter();
+                    result = device3->CreateTexture2D1(&desc, nullptr, texture.put());
+                    if (SUCCEEDED(result))
+                    {
+                        result = texture.query_to(defaultReadbackTexture_.put());
+                    }
+                    copyTiming_.stagingTicks += PerformanceCounter() - stagingStart;
+                    if (FAILED(result))
+                    {
+                        defaultReadbackRejected_ = true;
+                    }
+                }
+                if (defaultReadbackTexture_ && !defaultReadbackRejected_)
+                {
+                    const NvU64 readbackStart = PerformanceCounter();
+                    context->CopyResource(defaultReadbackTexture_.get(), source.get());
+                    context->Flush();
+                    copyTiming_.readbackTicks += PerformanceCounter() - readbackStart;
+                    source.reset();
+                    surface.reset();
+                    result = FinishFrame();
+                    if (FAILED(result))
+                    {
+                        return result;
+                    }
+                    source = defaultReadbackTexture_;
+                    readSource = source.get();
+                    readPath = 4;
+                    const NvU64 mapStart = PerformanceCounter();
+                    result = context->Map(readSource, 0, D3D11_MAP_READ, 0, nullptr);
+                    copyTiming_.mapTicks += PerformanceCounter() - mapStart;
+                    if (FAILED(result))
+                    {
+                        defaultReadbackRejected_ = true;
+                    }
+                }
+            }
+            if (SUCCEEDED(result))
+            {
+                const NvU64 readStart = PerformanceCounter();
+                device3->ReadFromSubresource(
+                    output_->BackPixels(), output_->ScanoutPitch(), 0,
+                    readSource, 0, nullptr);
+                copyTiming_.copyTicks += PerformanceCounter() - readStart;
+                const NvU64 unmapStart = PerformanceCounter();
+                context->Unmap(readSource, 0);
+                copyTiming_.unmapTicks += PerformanceCounter() - unmapStart;
+                copyTiming_.path = readPath;
+                if (!readbackVerified_ ||
+                    (readbackMode_ == 2 && (textureFrameCount_ % 120) == 1))
+                {
+                    copyTiming_.verification = true;
+                    result = VerifyReadback(device.get(), context.get(), readSource, sourceDesc);
+                    if (FAILED(result))
+                    {
+                        return result;
+                    }
+                }
+                return device->GetDeviceRemovedReason();
+            }
+            if (textureFrameCount_ <= 8 || (textureFrameCount_ % 60) == 0)
+            {
+                TraceEvents(
+                    TRACE_LEVEL_INFORMATION,
+                    TRACE_DRIVER,
+                    "ReadFromSubresource unavailable: result=0x%08X format=%u sourceCpu=0x%08X",
+                    result, sourceDesc.Format, sourceDesc.CPUAccessFlags);
+            }
+        }
+    }
     ID3D11Texture2D* mappedTexture = source.get();
     D3D11_MAPPED_SUBRESOURCE mapped = {};
     NvU64 mapStart = PerformanceCounter();
     result = context->Map(mappedTexture, 0, D3D11_MAP_READ, 0, &mapped);
     copyTiming_.mapTicks += PerformanceCounter() - mapStart;
+    copyTiming_.path = 1;
     if (FAILED(result))
     {
         TraceEvents(
@@ -811,6 +922,7 @@ HRESULT SwapChainD3D11::CopyFrame(
             }
         }
         mappedTexture = readbackTexture_.get();
+        copyTiming_.path = 2;
         const NvU64 readbackStart = PerformanceCounter();
         context->CopyResource(mappedTexture, source.get());
         context->Flush();

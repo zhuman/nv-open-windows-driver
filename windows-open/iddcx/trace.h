@@ -1,5 +1,8 @@
 #pragma once
 
+// Let ETW verbosity be independent of the in-flight recorder's default filter.
+#define ENABLE_WPP_TRACE_FILTERING_WITH_WPP_RECORDER 1
+
 #define WPP_CONTROL_GUIDS \
     WPP_DEFINE_CONTROL_GUID( \
         NvIddCxTraceGuid, \
@@ -12,7 +15,7 @@
 
 #define WPP_LEVEL_FLAGS_ENABLED(level, flags) \
     (WPP_LEVEL_ENABLED(flags) && \
-     WPP_CONTROL(WPP_BIT_ ## flags).Level >= level)
+     WPP_CONTROL(WPP_BIT_ ## flags).Level >= (level))
 
 // begin_wpp config
 // FUNC TraceEvents(LEVEL, FLAGS, MSG, ...);

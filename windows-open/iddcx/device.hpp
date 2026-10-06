@@ -42,12 +42,14 @@ struct DeviceContext final
     volatile LONG nvKmsWorkCanceled;
     volatile LONG nvKmsWorkCompleted;
     volatile LONG d0Active;
+    volatile LONG d3d12DmaCacheEnabled;
     bool rmDeviceOpened;
     bool rmGpuAttached;
     bool rmGpuStateLoaded;
     bool nvKmsInitialized;
     bool rmInitialized;
     bool nvPortInitialized;
+    bool d3d12SwapChainSupported;
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DeviceContext, GetDeviceContext);

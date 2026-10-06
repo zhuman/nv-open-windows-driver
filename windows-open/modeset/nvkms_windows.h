@@ -174,6 +174,10 @@ NV_STATUS NvKmsWindowsCreateScanoutSurface(
 	void** pixels,
 	NvU32* pitch);
 void NvKmsWindowsDestroyScanoutSurface(NV_KMS_WINDOWS_SURFACE* surface);
+NV_STATUS NvKmsWindowsGetScanoutBuffer(
+	NV_KMS_WINDOWS_SURFACE* surface,
+	void** pixels,
+	NvU64* allocationSize);
 NV_STATUS NvKmsWindowsSetDisplayModes(
 	NV_KMS_WINDOWS_MODESET_OUTPUT* outputs,
 	NvU32 outputCount);

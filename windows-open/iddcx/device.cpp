@@ -1,5 +1,6 @@
 #include "device.hpp"
 #include "display_modes.hpp"
+#include "driver_parameters.hpp"
 #include "output.hpp"
 #include "trace.h"
 
@@ -193,6 +194,7 @@ NV_STATUS AllocateDmaBuffer(
     void* context,
     NvU64 size,
     NvU64 alignment,
+    NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType,
     void** providerAllocation,
     void** address,
     NvU64* logicalAddress)
@@ -209,15 +211,38 @@ NV_STATUS AllocateDmaBuffer(
     WDF_COMMON_BUFFER_CONFIG_INIT(
         &configuration,
         static_cast<ULONG>(alignment));
+    auto* deviceContext = static_cast<DeviceContext*>(context);
+    if (InterlockedCompareExchange(&deviceContext->d3d12DmaCacheEnabled, 0, 0) != 0)
+    {
+        switch (cacheType)
+        {
+        case NV_PLATFORM_RM_MEMORY_CACHED:
+            configuration.CacheType = MmCached;
+            break;
+        case NV_PLATFORM_RM_MEMORY_UNCACHED:
+            configuration.CacheType = MmNonCached;
+            break;
+        case NV_PLATFORM_RM_MEMORY_WRITE_COMBINED:
+            configuration.CacheType = MmWriteCombined;
+            break;
+        default:
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "DMA common buffer: invalid RM cache type=%u", cacheType);
+            return NV_ERR_INVALID_ARGUMENT;
+        }
+    }
     WDFCOMMONBUFFER commonBuffer = nullptr;
     const NTSTATUS status = WdfCommonBufferCreateWithConfig(
-        static_cast<DmaEngine*>(context)->Handle(),
+        deviceContext->dmaEngine.Handle(),
         static_cast<SIZE_T>(size),
         &configuration,
         WDF_NO_OBJECT_ATTRIBUTES,
         &commonBuffer);
     if (!NT_SUCCESS(status))
     {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "DMA common buffer allocation: size=%llu cache=%u result=%!STATUS!",
+            size, configuration.CacheType, status);
         return status == STATUS_INSUFFICIENT_RESOURCES
             ? NV_ERR_NO_MEMORY
             : NV_ERR_OPERATING_SYSTEM;
@@ -612,6 +637,31 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
         TRACE_DRIVER,
         "IddCxDeviceInitialize: %!STATUS!",
         status);
+    // This query must precede every IddCxAdapterInitAsync call.
+    if (NT_SUCCESS(status) &&
+        IDD_IS_FUNCTION_AVAILABLE(IddCxCheckOsFeatureSupport))
+    {
+        static INIT_ONCE queryOnce = INIT_ONCE_STATIC_INIT;
+        static bool supported = false;
+        const BOOL queried = InitOnceExecuteOnce(&queryOnce,
+            [](PINIT_ONCE, PVOID, PVOID*) -> BOOL {
+                IDARG_OUT_FEATURES_SUPPORTED features = {};
+                features.Size = sizeof(features);
+                const NTSTATUS featureStatus = IddCxCheckOsFeatureSupport(&features);
+                supported = NT_SUCCESS(featureStatus) &&
+                    (features.Features_1_11 & IDDCX_DEVICE_FEATURES_1_11_D3D12) != 0;
+                TraceEvents(NT_SUCCESS(featureStatus) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+                    TRACE_DRIVER, "IddCx OS features: result=%!STATUS! d3d12=%u flags=0x%08X",
+                    featureStatus, supported, features.Features_1_11);
+                return TRUE;
+            }, nullptr, nullptr);
+        if (!queried)
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "IddCx OS feature initialization failed: error=%u", GetLastError());
+        }
+        context->d3d12SwapChainSupported = queried && supported;
+    }
     return status;
 }
 
@@ -824,10 +874,11 @@ NTSTATUS PrepareHardware(
     }
 
     const NV_PLATFORM_DMA_PROVIDER dmaProvider{
-        &context->dmaEngine,
+        context,
         AllocateDmaBuffer,
         FreeDmaBuffer,
     };
+    InterlockedExchange(&context->d3d12DmaCacheEnabled, 0);
     const NV_STATUS dmaStatus = NvPlatformRegisterDmaProvider(
         &dmaProvider, &context->dmaRegistration);
     TraceEvents(
@@ -850,9 +901,10 @@ NTSTATUS PrepareHardware(
     void* dmaAddress = nullptr;
     NvU64 dmaLogicalAddress = 0;
     const NV_STATUS dmaProbeStatus = AllocateDmaBuffer(
-        &context->dmaEngine,
+        context,
         4096,
         4096,
+        NV_PLATFORM_RM_MEMORY_UNCACHED,
         &dmaAllocation,
         &dmaAddress,
         &dmaLogicalAddress);
@@ -863,7 +915,7 @@ NTSTATUS PrepareHardware(
         dmaProbeStatus,
         dmaAddress,
         dmaLogicalAddress);
-    FreeDmaBuffer(&context->dmaEngine, dmaAllocation);
+    FreeDmaBuffer(context, dmaAllocation);
     if (dmaProbeStatus != NV_OK)
     {
         NvPlatformUnregisterDmaProvider(context->dmaRegistration);
@@ -1015,6 +1067,22 @@ DWORD WINAPI InitializeNvKms(void* parameter)
         return 0;
     }
 
+    // Leave firmware initialization on the existing policy. Experimental
+    // NVKMS allocations must preserve RM's requested CPU cache attributes.
+    ULONG d3d12Mode = 0;
+    const NTSTATUS settingStatus = QueryDriverParameterDword(L"D3D12Mode", &d3d12Mode);
+    if ((!NT_SUCCESS(settingStatus) && !DriverParameterAbsent(settingStatus)) ||
+        d3d12Mode > 3)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "Invalid D3D12 DMA cache setting: status=%!STATUS! mode=%u", settingStatus, d3d12Mode);
+        d3d12Mode = 0;
+    }
+    const bool cacheEnabled = d3d12Mode != 0 && context->d3d12SwapChainSupported;
+    InterlockedExchange(&context->d3d12DmaCacheEnabled, cacheEnabled ? 1 : 0);
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+        "NVKMS D3D12 DMA cache policy: honorRequested=%u mode=%u",
+        cacheEnabled, d3d12Mode);
     const NV_STATUS modesetProbeStatus = NvKmsWindowsInitialize();
     TraceEvents(
         modesetProbeStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,

@@ -138,8 +138,11 @@ BAR0 noncached and BAR2 write-combined by matching PCI BAR addresses to
 translated resources. It retains WDF pseudo addresses for framework access and
 unmapping, while `WdfDeviceGetHardwareRegisterMappedAddress` supplies the real
 process-visible mappings used by RM. BAR2 is a translated 32 MiB aperture at
-`0x2FFE000000`; BAR1 is not assigned to the UMDF function and is not required
-for the current system-memory-backed display path. The INF must retain
+`0x2FFE000000` in that bring-up snapshot. BAR1 was reported unassigned and is
+not mapped by the UMDF path; large-memory descriptor filtering makes that
+assignment report provisional (see the direct-VRAM copy investigation below).
+The current staging/CE upload path does not need a CPU framebuffer mapping.
+The INF must retain
 `UmdfRegisterAccessMode=RegisterAccessUsingUserModeMapping`.
 
 The first D0 transition creates one device-owned IddCx adapter and starts RM
@@ -577,6 +580,93 @@ or reset the channel before a complete CPU copy overwrites the destination; an
 incomplete DMA destination is never flipped. Record bytes, latency, fallback
 reason, timeout, and reset counters for both paths.
 
+#### Direct CPU Writes to VRAM Through a BAR Aperture
+
+Investigated on 2026-10-05; this is a proposed optimization, not an implemented
+or validated transfer path. The current IddCx `CopyFrame()` writes mapped NVKMS
+system-memory staging. `NvKmsWindowsPresentLayersTimed()` then uses RM's copy
+engine to upload that staging allocation into the separate VRAM allocation.
+An acquired GPU texture can additionally require D3D11 readback staging before
+that CPU copy. Mapping the destination VRAM would redirect that CPU copy into
+VRAM, removing the NVKMS staging allocation and CE upload, but would not itself
+remove source GPU readback.
+
+Prefer allocation-aware RM mapping over arithmetic on PCI BAR addresses:
+
+- `NvKmsKapiFunctionsTable::mapMemory()` already calls `nvRmApiMapMemory()` for
+  the allocation's RM handle, offset, and size. Try this on the actual back
+  surface's video-memory allocation with `NVKMS_KAPI_MAPPING_TYPE_USER`, not
+  its system-memory staging allocation. RM must establish and retain whatever
+  framebuffer-aperture translation the allocation requires; its
+  `kbusMapFbApertureSingle()` path explicitly returns an aperture offset and
+  length, not just the VRAM allocation's physical offset.
+- This is not currently a drop-in switch: `osMapPciMemoryUser()` and
+  `osMapPciMemoryAreaUser()` in `windows-open/rm/kernel/nvrm_os_gpu_mapping.c`
+  return `NV_ERR_NOT_SUPPORTED`. Trace the allocation's actual mapping path,
+  implement the applicable hooks with bounds/cache/ownership validation and
+  balanced unmapping, and propagate failure rather than returning a pointer
+  from a different address space or bypassing the user-mapping contract.
+- The UMDF `NvPlatformRmMapPhysical()` implementation only accepts ranges
+  within already registered, cache-compatible physical apertures. Register a
+  framebuffer aperture only when Windows supplies its translated resource,
+  mapping it through the existing WDF hardware-resource ownership path and
+  retaining both the framework pseudo address and process-visible address.
+- `RegisterAperture::InitializeMemoryBar()` and the RM attach-info builder
+  currently recognize only `CmResourceTypeMemory`; add checked decoding of
+  `CmResourceTypeMemoryLarge` and its 40/48/64-bit lengths. The attach builder's
+  next-memory-resource fallback is not proof of BAR identity and can associate
+  BAR2 with a skipped BAR1. Match raw/translated descriptors reliably, retain
+  the translated address for mapping/registration, and explicitly wire BAR1
+  into startup, RM attach state, and teardown; currently only BAR0/BAR2 have
+  mapped addresses registered with the UMDF platform provider.
+- Earlier RTX 4070 evidence decoded BAR1 as `0x2800000000`, but the function's
+  bring-up reported it unassigned while mapping BAR0 (16 MiB) and BAR2
+  (32 MiB). The descriptor-filtering gap above makes that report inconclusive
+  for large BARs. The working checkpoint's 2026-10-05 startup trace maps BAR2
+  at `0x2BFE000000`, different from the earlier `0x2FFE000000`; addresses are
+  not stable identifiers. Recheck complete current raw/translated resources
+  before concluding that firmware/OS assignment blocks access. A PCI config
+  address is not authorization to map unassigned physical memory.
+- Do not assume `BAR1 base + VRAM allocation offset` is a valid CPU address.
+  A bounded aperture can translate GPU pages and need not expose all VRAM
+  linearly. BAR0 register space and the observed BAR2 aperture are not proven
+  substitutes. Do not repoint aperture page tables behind RM's back or access
+  ranges owned by another Windows driver. Investigate firmware/Resizable BAR
+  and OS assignment only after reporting the actual aperture sizes and owner.
+
+Keep direct mapping an optional capability with the current staging/CE path as
+fallback. Use a pitch-linear, uncompressed surface, cover its full allocation,
+and retain its RM mapping for exactly the surface and device-power lifetime.
+Write-combined mappings need the correct store-drain/device-visibility barrier
+before the flip; `FlushProcessWriteBuffers()` alone is not proof of a posted
+PCIe-write drain. Resolve that contract in the platform/RM layer, avoid cached
+aliases, and avoid read-modify-write or CPU reads from a write-combined mapping.
+Never write the front or queued slot. Unmap before freeing or losing D0;
+hotplug, modeset, reset, and removal must quiesce CPU writers. KAPI's mapping
+contract also requires the caller to prevent GC6 while user mappings are used.
+
+Validation gates:
+
+1. Log PCI BAR identity/size, raw and translated resource ownership, cache
+   policy, and RM allocation-map status. A successful pointer must resolve to
+   the intended allocation, not an unrelated registered MMIO range.
+2. Map a small scratch VRAM allocation; CPU-write asymmetric patterns, drain
+   writes using the verified ordering contract, and use CE readback into
+   system memory to verify bytes. Exercise unaligned offsets, page boundaries,
+   aperture limits, and allocation relocation/lifetime without touching scanout.
+3. Map both scanout slots and preserve the notifier-backed ownership
+   state machine. Test BGRA8 and FP16 rows, differing pitches, HDR/SDR, cursor,
+   CSC, continuous flips, modesets, unplug/replug, D0 exit, and reset/removal.
+   A mapped VRAM destination must skip staging-to-VRAM upload; never copy stale
+   staging over the pixels that were written directly.
+4. Benchmark bytes and readback/CPU-copy/upload/total latency against staging
+   plus CE on the same modes. CPU writes over PCIe may be slower than CE;
+   fewer buffers do not establish an improvement. Consider
+   `ID3D11Device3::ReadFromSubresource()` only as a separate source-readback
+   experiment after verifying its DEFAULT-texture/`Map(nullptr)` contract and
+   the destination's write semantics. It is not a peer-to-peer DMA API or a
+   guarantee that a D3D driver can write safely into arbitrary device MMIO.
+
 ### 10. Prototype IddCx Independently
 
 Build a virtual/sample-derived IDD that reports the same EDID and mode model,
@@ -667,23 +757,332 @@ transport used by KMDOD. Honor IddCx buffer-size and callback-lifetime rules,
 retain the device power reference for the complete blocking transaction, and
 cancel safely when monitor removal or device teardown begins.
 
+#### ReadFromSubresource Experiment
+
+Implemented and measured on 2026-10-05, retaining the existing NVKMS
+system-memory staging-to-VRAM CE upload and notifier-backed double buffering.
+`SwapChainD3D11::CopyFrame()` can use `ID3D11Device3::ReadFromSubresource()` to
+write directly into `Output::BackPixels()` instead of mapping a D3D STAGING
+texture and separately copying its rows into that destination. This is not
+direct VRAM/BAR access or peer-to-peer DMA.
+
+The API requires a CPU-readable DEFAULT texture previously mapped for READ
+with a null mapped-subresource pointer. Check `D3D11_FEATURE_D3D11_OPTIONS2`
+and `MapOnDefaultTextures`. The tested AMD-produced IddCx texture had no CPU
+read access, so the working alternative first copies it into a reusable
+CPU-readable DEFAULT texture, then maps, reads into NVKMS staging, and unmaps.
+Direct reading from the acquired texture is supported when its creation flags
+permit it; that path was not exercised on this host. Unsupported resources,
+feature/API failures, and format conversion retain the original staging path.
+
+Microsoft recommends 128-byte-aligned destination pointers and strides. Use
+the least common multiple of 128 and NVKMS's required pitch alignment for both
+staging and VRAM surfaces, retaining identical allocation sizes and CE copy
+layout. The live 3840x2160 FP16 destination had pitch 30720 and pointer modulo
+128 equal to zero. A whole-subresource read also meets the recommended
+64/bytes-per-pixel horizontal and two-row vertical region alignment here.
+No additional row padding was needed for this mode. References:
+
+- https://learn.microsoft.com/en-us/windows/win32/api/d3d11_3/nf-d3d11_3-id3d11device3-readfromsubresource
+- https://learn.microsoft.com/en-us/windows/win32/direct3d11/default-texture-mapping
+
+The development DWORD `HKLM\SOFTWARE\NVIDIA Corporation\nv-iddcx\ReadbackMode`
+is read when creating the swapchain D3D device: absent/0 preserves baseline,
+1 prefers the alternative with fallback, and 2 alternates 120 texture-frame
+blocks. Recreate the swapchain after changing it. Timing records distinguish
+actual paths: 0 system buffer, 1 direct Map, 2 STAGING, 3 acquired DEFAULT
+ReadFromSubresource, and 4 intermediate DEFAULT ReadFromSubresource. Requested
+alternative frames that fall back are not alternative performance samples.
+The first successful alternative and each alternative comparison block are
+checked byte-for-byte against ordinary STAGING readback before CE upload;
+verification frames are separately marked and excluded from timing analysis.
+A mismatch restores the reference bytes and disables the alternative.
+
+On TestFrame (AMD rendering, RTX 4070 scanout, 3840x2160 FP16 input / RGB10 HDR
+output), package `oem180.inf`, DLL SHA-256
+`845F934706B8BD2507BE930004666C47E41AE1C6A0178FEC1AE82980EA7635B6`, the
+66,355,200-byte validation matched. Compare the same animated workload in the
+initial alternative run and a subsequent restored-baseline run; the initial
+baseline block mostly preceded animation and is not the table's baseline.
+Exclude verification and the first five nonverification logged samples in
+each animated interval. Baseline logging samples every 60 frames outside
+startup; there are 17 baseline timing samples (13 accepted) versus 77
+alternative samples (all accepted). These are descriptive measurements, not
+a randomized repeated-block benchmark or a population drop-rate estimate.
+
+| Stage | STAGING median / p95 (ms) | DEFAULT ReadFromSubresource median / p95 (ms) |
+| --- | --- | --- |
+| GPU copy enqueue/flush | 0.129 / 0.186 | 0.247 / 0.290 |
+| Map | 1.991 / 2.409 | 1.603 / 1.808 |
+| CPU destination transfer | 2.897 / 3.170 | 2034.307 / 2062.171 |
+| Complete pre-CE transfer | 5.030 / 5.671 | 2036.225 / 2064.195 |
+| CE upload, accepted frames | 18.144 / 18.199 | 87.795 / 87.842 |
+| Total processing, accepted frames | 23.423 / 24.074 | 2124.279 / 2152.226 |
+
+Pre-CE transfer includes texture creation, GPU copy enqueue/flush, Map, CPU
+transfer, and Unmap; GPU completion wait is included in Map. The alternative
+was approximately 405x slower for transfer and 91x slower for accepted-frame
+processing. Frame-number/time deltas, not sampled-record counts, show about
+29.55 processed texture frames/s for baseline versus 0.47 for the alternative.
+CE code was unchanged, but its measured latency also increased; the cause of
+that increase and the slow API destination writes has not been isolated.
+
+Both measured traces decoded without lost events, unknowns, or format errors.
+An attempted repeated motion run hit the previously observed warm GSP startup
+failure before rendering and was excluded. The physical capture from that
+failed startup showed no input, so it does not validate alternative scanout.
+Recovery restored baseline mode and healthy GPU status; physical HDMI capture
+then showed the animated workload, with all 28 adjacent sampled frames changing.
+The test task and registry value were removed. Keep baseline as the default:
+this host demonstrates no performance benefit from the alternative, despite
+matching pixels and the recommended alignment. Do not infer results for the
+untested direct-acquired-texture path, other memory cache policies, SDR, other
+adapters, or BAR-mapped VRAM.
+
 ### 11. Gate and Implement Pure-UMDF DMA
 
-The target WDK exposes WDF DMA enablers and transactions to UMDF, and the
+The installed UMDF 2.35 function table exposes DMA enablers and common-buffer
+allocation, but not DMA transactions or an API to pin an existing user buffer. The
 current IddCx scaffold already creates a scatter/gather 64-bit
 `WDFDMAENABLER` under `UmdfDirectHardwareAccess=AllowDirectHardwareAccessAndDma`.
-That proves framework availability, not end-to-end GPU copying. The stop/go
-gate is whether a transaction over an acquired IddCx system buffer can produce
-a mapping that RM can bind into the GPU address space used by the CE channel,
-with correct IOMMU, cache-coherency, cancellation, and process-lifetime
-behavior.
+Common-buffer-backed RM staging and synchronous CE uploads already work. That
+does not provide a supported way to DMA-map an arbitrary D3D11 staging pointer.
+The UMDF-only candidate instead imports the existing common-buffer allocation
+into D3D12, so the rendering GPU can write the same RAM that CE already reads.
 
-Once that gate passes, give each IddCx adapter its own RM CE channel and submit
-the same pitch-aware system-memory-to-VRAM copy used by KMDOD. Retain the
-swapchain buffer and WDF DMA transaction until the CE semaphore completes, then
-release the frame and queue the NVKMS flip. Apply the same `Auto`/`Dma`/`Cpu`
-policy, startup verification, bounded timeout, full CPU overwrite after a
-quiesced DMA failure, and telemetry used by KMDOD.
+#### Native D3D12 common-buffer experiment
+
+`windows-open/iddcx/swapchain_d3d12.cpp` implements native IddCx 1.11 D3D12
+acquisition, with no D3D11 shared-resource bridge. The project targets 1.11 but
+keeps its minimum IddCx version at 1.10; older runtimes retain D3D11. The OS
+feature query is cached once, before adapter creation. D3D11 acquisition uses
+runtime-compatible structure sizes.
+
+Development DWORDs in the driver's framework-managed **Parameters** key.
+Driver code opens it with `WdfDriverOpenParametersRegistryKey(WdfGetDriver(),
+KEY_READ, ...)`, queries with `WdfRegistryQueryULong`, and closes with
+`WdfRegistryClose`; it does not assume a driver name or hard-code the key path.
+
+For UMDF on the test target, the framework key is under
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\WUDF\Services\nv-iddcx\Parameters`,
+not the kernel Services tree. Package installation recreated/cleared this key
+during testing: apply experiment values **after installation**, then restart and
+verify the selected path in WPP. Registry values and the loaded DLL hash alone
+do not prove that native swapchain processing ran. The pre-existing D3D11
+`ReadbackMode` development key remains separate and unchanged.
+
+Restart the device after changing these experimental values:
+
+- `D3D12Mode` absent/0: existing D3D11 baseline.
+- `D3D12Mode=1`: GPU texture -> placed linear BUFFER in the WDF common buffer
+  -> existing synchronous CE upload -> VRAM.
+- `D3D12Mode=2`: D3D12 GPU readback BUFFER -> existing CPU row copy/conversion
+  -> WDF common buffer -> CE. This is the same-API memcpy reference.
+- `D3D12Mode=3`: alternate direct/reference blocks of 120 acquired frames.
+- `D3D12Debug=1`: enable the D3D12 debug layer before device creation; report
+  its warnings/errors in WPP. Missing debug support explicitly rejects native
+  initialization rather than pretending validation ran.
+
+Native initialization failures log the HRESULT and use D3D11 on the same
+swapchain. Runtime failures abandon that swapchain and select D3D11 on the next
+assignment until baseline is reselected or the monitor is recreated. Never
+interpret this fallback as a successful no-copy experiment.
+
+Import requires that the common-buffer CPU pointer is the allocation base,
+the entire owned extent is committed, and scanout pitch is D3D12's required
+256-byte multiple. It does not import a larger private arena around an interior
+D3D11 pointer. Scanout **staging** allocation sizes round up to 64 KiB for placed
+BUFFER alignment; existing scanout pitch, VRAM allocation size, CE copy length,
+and cursor allocations are unchanged. Import/placement/Map failures are explicit.
+Incompatible pixel formats take the logged D3D12 CPU conversion path and are
+labelled reference, not direct.
+
+The first actual WDF import failed with `E_INVALIDARG`: D3D12 debug message 1088
+requires writable memory **without PAGE_NOCACHE**. WDF's default common-buffer
+policy on this target returned `PAGE_READWRITE | PAGE_NOCACHE`, even though the
+RM allocator supplied a cache-type request. The DMA-provider interface now
+passes that request through. With an experimental D3D12 mode enabled, allocations
+after firmware initialization use WDF's explicit `CacheType` (cached, uncached,
+or write-combined as requested by RM). Mode 0 retains WDF's original default
+policy, and firmware initialization is unchanged. Do not remove PAGE_NOCACHE
+using VirtualProtect or create conflicting cache aliases. All direct/reference
+comparisons must use the same explicit-cache allocation policy.
+
+The acquisition call declares the actual COPY queue. Transfers use COMMON-state
+implicit promotion/decay rather than assuming an opaque texture layout. A GPU
+fence completes before Map/CPU access or CE. The destination remains mapped
+through synchronous CE completion. Output quiesces the processor and releases
+imported resources/heaps before freeing the WDF backing allocations, including
+when disabling a mode. Cancellation does not invalidate in-flight source or
+destination memory. Fence waits check device removal and log stalls; absent
+completion/removal, teardown deliberately retains backing memory and can wait
+indefinitely rather than cause a GPU use-after-free. This remains an experimental
+path, not a production bounded-cancellation implementation.
+
+The first direct frame for each back-buffer slot also copies to an independent
+D3D12 readback buffer and compares **every active pixel byte**, both through Map
+and through the original WDF pointer. Different virtual aliases are permitted
+only if the original RAM has the correct bytes. Verification frames and the
+first eight frames of each alternating block are excluded from cumulative
+arithmetic averages. WPP records per-frame timings and per-path averages every
+60 measured frames, including processed/accepted counts, GPU-completion wait,
+CPU copy, directly timed pre-CE transfer, CE upload, total, and accepted-only
+CE/total. The alternating reference also maps the imported common-buffer
+resource for its CPU writes and supplies the written range to Unmap before CE
+or subsequent GPU reuse; this matters on the target's non-cache-coherent UMA
+device. Both slots are byte-reverified on each CPU-to-GPU block transition,
+not just at startup. Do not infer FPS from
+sampled event counts.
+
+Ordinary VirtualAlloc/file-mapping imports were independently verified, but are
+not evidence that WDF common-buffer import works. Actual explicit-cache WDF
+imports subsequently succeeded: both 66,387,968-byte allocations imported at
+their allocation base with `PAGE_READWRITE`, heap flags `0x421`, WRITE_BACK/L0.
+Both 3840x2160 FP16 slots passed all 66,355,200 active bytes through Map and the
+original common-buffer pointer. The native COPY queue completed under the
+D3D12 debug layer. ShadowCast physical capture showed the animated test scene
+(151 YDIF samples, mean 18.38, max 32.04) after the user corrected the physical
+capture connection/window placement. Matched many-frame performance measurements
+are recorded below.
+
+##### Non-debug measurements and rollback (2026-10-05)
+
+Final tested native package `oem184.inf`, DLL SHA-256
+`184D288A3C741248B9364E3DBA4254BAAAFF51CB2E70FBEA0CF2B5E09EBEDF32`,
+ran mode 3 with debug disabled, requested cache policy enabled, and a COPY
+queue on the AMD UMA adapter (`CacheCoherentUMA=FALSE`). The manually positioned
+120-second animation used the sole active NVIDIA screen; logical window bounds
+were 2560x1440, while acquired textures and scanout were 3840x2160 FP16
+(DXGI format 10, pitch 30720). Only HDMI through ShadowCast was physically
+connected according to the user.
+
+Analyze seconds 5 through 115 of each scene, excluding byte-verification frames
+and the first eight acquired frames of every alternating block. The native
+comparison contains 2,212 measured frames from one worker/head/format. Transfer
+is directly timed before CE; completion wait is CPU-observed, not a GPU
+timestamp. CE/total averages below include only frames accepted for upload.
+
+| Path | Measured records | Accepted | Mean pre-CE transfer (ms) | Mean CPU copy (ms) | Mean accepted CE (ms) | Mean accepted total (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Native direct | 1,092 | 508 | 2.62 | 0.00 | 48.79 | 52.17 |
+| Native readback + memcpy reference | 1,120 | 569 | 5.41 | 2.87 | 48.37 | 54.67 |
+| Original D3D11 STAGING, sampled | 51 | 33 | 5.31 | 2.85 | 22.71 | 28.55 |
+
+The direct path removed all measured CPU pixel copies and reduced mean
+pre-CE transfer by 2.78 ms (51.5%) against the same-API reference. Accepted
+total processing decreased by 2.50 ms (4.6%). Both common-buffer slots passed
+all 66,355,200 active bytes repeatedly across CPU-to-GPU ownership transitions.
+Physical capture showed the actual animation (201 YDIF samples, mean 18.49,
+max 32.78). The native ETL, including matching old-package shutdown formats,
+decoded with zero lost events, unknowns, or format errors; an old-host shutdown
+failure and transient initial assignment failure preceded the measured interval,
+which used the successful native worker without fallback.
+
+##### D3D11 all-frame tracing
+
+The sparse original-D3D11 records were caused by WPP in-flight recorder
+filtering, not ETW loss. With the recorder enabled and
+`ENABLE_WPP_TRACE_FILTERING_WITH_WPP_RECORDER` left at its default 0, the
+recorder's default nonverbose filter also suppressed verbose ETW messages.
+Requesting ETW level 5 alone therefore retained the periodic information-level
+records. `trace.h` now enables independent ETW filtering while retaining the
+recorder, and parenthesizes the trace-level macro argument so conditional
+levels and disabled flags are handled correctly. Information-level sessions
+retain startup/every-60-frame sampling; verbose sessions collect every frame.
+
+D3D11 now directly times the complete `CopyFrame` call before CE and records
+head, input dimensions, and DXGI format per frame. This timer includes resource
+creation, copy enqueue/flush, blocking Map/GPU completion, CPU row copy,
+and Unmap, rather than estimating the interval by summing stage fields.
+It excludes idle acquisition waits, the frame-state lock, and CE/presentation;
+system-buffer production/completion before acquisition is not a separately
+measured GPU wait. Native D3D12 similarly includes its explicit fence wait.
+Neither measurement is a GPU timestamp or CPU-utilization measurement.
+
+Group every measured frame by actual path, worker, head, dimensions, and format,
+and report accepted and dropped records separately. Paths 0 (system buffer)
+and 1 (direct texture Map) still perform the CPU row copy; path 2 uses a STAGING
+texture before that copy. Do not interpret an absent faster path as disabled
+when the OS supplies only GPU-only DEFAULT textures. Check acquisition's
+`systemMemory` result and source usage/CPU-access flags, not just a requested
+mode. Validate consecutive frame numbers and zero event loss before claiming
+an all-frame population.
+
+The follow-up used the tracing-corrected build (DLL SHA-256
+`A35E2C5C1F07468E27B9D2D235A47F05A6F541E0555A4256A616B9857B37B726`)
+in D3D11 mode 0, with `honorRequested=0`: original WDF cache policy, no D3D12
+processing or ReadFromSubresource experiment. The installed package reused
+the now-free `oem181.inf` name; package identity was verified by hash rather
+than assuming that OEM numbers never repeat.
+
+A five-minute run of the same manually positioned animation was analyzed from
+seconds 5 through 295. It yielded **8,287 consecutive frames**, numbers
+684 through 8970, all from one worker/head at 3840x2160 FP16 (format 10).
+There were 7,286 accepted uploads and 1,001 pending-flip drops; dropped frames
+still performed the source transfer. No verification or alternate-path records
+were mixed into these averages. ETW decoded with zero lost events, unknowns,
+or format errors. ShadowCast showed the actual animation (201 YDIF samples,
+mean 18.78, max 32.92).
+
+| Metric | Population | Mean (ms) | Median (ms) | p95 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Pre-CE transfer, directly timed | 8,287 | 5.393 | 5.340 | 6.359 |
+| Map, including GPU completion wait | 8,287 | 2.434 | 2.420 | 2.925 |
+| CPU row copy | 8,287 | 2.787 | 2.724 | 3.376 |
+| CE upload, accepted | 7,286 | 19.571 | 18.162 | 18.269 |
+| Total processing, accepted | 7,286 | 25.232 | 23.746 | 25.645 |
+
+Every animated frame was STAGING path 2. There were no system-buffer path 0
+or direct-Map path 1 frames, and every CPU row-copy duration was at least
+2.382 ms. Acquisition reported `systemMemory=0`; the source was a DEFAULT
+texture with CPU access flags zero. This demonstrates the actual path used
+by this workload, not that faster acquisition paths are unavailable for all
+other swapchains. The subsequent 60-second post-scene desktop interval produced
+only one acquired frame, also path 2: transfer 5.57 ms, CPU copy 3.05 ms,
+CE 87.89 ms. Mostly no frames were produced, rather than a different low-copy
+processing path. One idle frame is not a performance population.
+
+The larger population supersedes the 51-record descriptive sample for D3D11
+performance conclusions. Rare CE spikes (maximum 94.233 ms) raised the mean
+above the 18.162 ms median; no cause was isolated. These remain wall-clock
+processing timings, not CPU utilization. The original `oem180.inf` package
+and its hash were restored afterward; D3D11 remains the active/default path.
+Per-frame stage histograms are retained as a standalone offline HTML report
+with measured/all-captured/validation-only scopes, accepted/dropped filters,
+full-tail and percentile-range views, and CSV export. The native direct interval
+contains 20 validation frames and 60 additional warm-up frames excluded from
+its 1,092 measured records; reference excludes 80 warm-up frames from its
+1,120 measured records. Thus the default direct histograms do not include the
+extra verification copy, while the validation-only view exposes its timing.
+
+The original `oem180.inf` baseline was restored and independently tested with
+the same scene, geometry, and FP16 format. Its original trace still sampled
+every 60 frames despite requesting ETW level 5; the 51 records are descriptive
+sample averages, not an all-frame population or FPS estimate. Its pre-CE
+figure sums enqueue/flush, Map (including completion wait), CPU copy, creation,
+and Unmap timing fields rather than a direct transfer timer. Its ETL also
+decoded with zero lost events, unknowns, or format errors. Physical baseline
+motion was verified separately (201 YDIF samples, mean 18.62, max 29.65).
+
+The experimental native path is **not yet an overall performance win over the
+original baseline**: CE latency is substantially higher in both native paths.
+The API/import and cache-policy changes differ from baseline; the cause has
+not been isolated. Requested cache policy currently applies to post-firmware
+common-buffer allocations generally, not just scanout staging. Preserve mode 0
+as the default and investigate these effects before production use.
+
+Rollback removed only the hash-verified session packages `oem181.inf` through
+`oem184.inf` and restored both registry value journals. The original loaded
+DLL hash was verified as
+`845F934706B8BD2507BE930004666C47E41AE1C6A0178FEC1AE82980EA7635B6`,
+device status OK/problem 0. One recovery restart resolved the known
+pre-swapchain warm GSP startup failure; no reboot was needed. The exported
+baseline, candidate archives, matching trace formats, and measurements are
+retained for reproducibility. No commits or pushes were made.
+Final verification at 22:34 PDT confirmed the original loaded hash, healthy
+device, both experiment DWORDs absent from both journaled keys, and all four
+session packages removed. The owned scene task was unregistered and its
+temporary workload files removed; the owned ETW logger was stopped.
 
 If pure UMDF cannot bridge WDF's DMA mapping to an RM/GPU-visible address, keep
 the CPU path fully functional and choose explicitly between shipping without

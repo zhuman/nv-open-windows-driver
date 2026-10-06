@@ -13,6 +13,7 @@ namespace nv::iddcx {
 
 class Adapter;
 class SwapChainD3D11;
+class SwapChainD3D12;
 class HwCursor;
 
 using unique_nvkms_surface = wil::unique_any<
@@ -101,6 +102,7 @@ public:
     void PauseCursor() noexcept;
     void ResumeCursor() noexcept;
     void OnSwapChainDestroyed(SwapChainD3D11* swapChain) noexcept;
+    void OnSwapChainDestroyed(SwapChainD3D12* swapChain) noexcept;
     NTSTATUS SetDefaultHdrMetadata(
         const IDARG_IN_MONITOR_SET_DEFAULT_HDR_METADATA* arguments) noexcept;
     NTSTATUS SetGammaRamp(const IDARG_IN_SET_GAMMARAMP* arguments) noexcept;
@@ -135,6 +137,8 @@ private:
     bool active_;
     wil::srwlock stateLock_;
     SwapChainD3D11* swapChain_;
+    SwapChainD3D12* swapChain12_ = nullptr;
+    bool d3d12Failed_ = false;
     std::unique_ptr<HwCursor> cursor_;
 };
 
