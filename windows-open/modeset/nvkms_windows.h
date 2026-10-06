@@ -127,6 +127,12 @@ typedef struct NV_KMS_WINDOWS_LAYER
 	NV_KMS_WINDOWS_HDR_METADATA hdrMetadata;
 	NvBool hdrMetadataEnabled;
 	const NV_KMS_WINDOWS_COLOR_TRANSFORM* colorTransform;
+	NvBool useDirtyBands;
+	NvU32 dirtyBandCount;
+	struct {
+		NvU32 top;
+		NvU32 bottom;
+	} dirtyBands[2];
 } NV_KMS_WINDOWS_LAYER;
 
 typedef struct NV_KMS_WINDOWS_MODESET_OUTPUT
@@ -148,6 +154,8 @@ typedef struct NV_KMS_WINDOWS_PRESENT_TIMING
 	NvU64 prepareTicks;
 	NvU64 submitTicks;
 	NvU64 pendingTicks;
+	NvU64 uploadBytes;
+	NvU32 uploadRegions;
 } NV_KMS_WINDOWS_PRESENT_TIMING;
 
 NV_STATUS NvKmsWindowsRegisterGpu(
@@ -172,7 +180,8 @@ NV_STATUS NvKmsWindowsCreateScanoutSurface(
 	NV_KMS_WINDOWS_SCANOUT_FORMAT format,
 	NV_KMS_WINDOWS_SURFACE** surface,
 	void** pixels,
-	NvU32* pitch);
+	NvU32* pitch,
+	NvBool honorPixelCachePolicy);
 void NvKmsWindowsDestroyScanoutSurface(NV_KMS_WINDOWS_SURFACE* surface);
 NV_STATUS NvKmsWindowsGetScanoutBuffer(
 	NV_KMS_WINDOWS_SURFACE* surface,

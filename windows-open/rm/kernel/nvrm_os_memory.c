@@ -198,13 +198,22 @@ NV_STATUS osAllocPagesInternal(MEMORY_DESCRIPTOR* pMemDesc)
     }
 
     physicalAddressCapacity = (NvU32)pMemDesc->pageArraySize;
+#if defined(NV_USER_MODE)
+    status = NvPlatformRmAllocatePagesWithPurpose(
+#else
     status = NvPlatformRmAllocatePages(
+#endif
         pMemDesc->Size,
         pMemDesc->Alignment,
         (pMemDesc->_flags & MEMDESC_FLAGS_PHYSICALLY_CONTIGUOUS) != 0,
         (pMemDesc->_flags & MEMDESC_FLAGS_PAGED_SYSMEM) != 0,
         (pMemDesc->_flags & MEMDESC_FLAGS_ALLOC_32BIT_ADDRESSABLE) != 0,
         cacheType,
+#if defined(NV_USER_MODE)
+        (pMemDesc->_flags & NV_PLATFORM_RM_MEMDESC_CACHED_PIXEL_STAGING) != 0
+            ? NV_PLATFORM_RM_MEMORY_PURPOSE_CACHED_PIXEL_STAGING
+            : NV_PLATFORM_RM_MEMORY_PURPOSE_DEFAULT,
+#endif
         &pMemDesc->_pMemData,
         pMemDesc->_pteArray,
         physicalAddressCapacity,

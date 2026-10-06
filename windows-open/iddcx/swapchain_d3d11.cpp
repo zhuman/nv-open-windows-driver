@@ -1,6 +1,7 @@
 #include "swapchain_d3d11.hpp"
 #include "adapter.hpp"
 #include "display_modes.hpp"
+#include "driver_parameters.hpp"
 #include "output.hpp"
 #include "swapchain_pixels.hpp"
 #include "trace.h"
@@ -118,6 +119,11 @@ NTSTATUS SwapChainD3D11::Create(
 HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
 {
     QueryPerformanceFrequency(&counterFrequency_);
+    const HRESULT damageResult = damage_.Initialize(handle_, 2);
+    if (FAILED(damageResult))
+    {
+        return damageResult;
+    }
     useBuffer2_ = IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2);
 #if !NV_IDDCX_DROP_SWAPCHAIN_FRAMES
     HRESULT result = CreateDevice(adapterLuid);
@@ -250,8 +256,15 @@ HRESULT SwapChainD3D11::CreateDevice(LUID luid) noexcept
         D3D11_FEATURE_D3D11_OPTIONS2, &options, sizeof(options))) &&
         options.MapOnDefaultTextures;
     DWORD mode = 0;
+    const NTSTATUS modeStatus = QueryDriverParameterDword(L"D3D11ReadbackMode", &mode);
+    if ((!NT_SUCCESS(modeStatus) && !DriverParameterAbsent(modeStatus)) || mode > 2)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "Invalid D3D11ReadbackMode: status=%!STATUS! value=%u", modeStatus, mode);
+        return NT_SUCCESS(modeStatus) ? E_INVALIDARG : HRESULT_FROM_NT(modeStatus);
+    }
     DWORD modeSize = sizeof(mode);
-    if (RegGetValueW(
+    if (DriverParameterAbsent(modeStatus) && RegGetValueW(
             HKEY_LOCAL_MACHINE,
             L"SOFTWARE\\NVIDIA Corporation\\nv-iddcx",
             L"ReadbackMode",
@@ -259,6 +272,10 @@ HRESULT SwapChainD3D11::CreateDevice(LUID luid) noexcept
             nullptr,
             &mode,
             &modeSize) == ERROR_SUCCESS && mode <= 2)
+    {
+        readbackMode_ = mode;
+    }
+    else if (NT_SUCCESS(modeStatus))
     {
         readbackMode_ = mode;
     }
@@ -444,6 +461,23 @@ void SwapChainD3D11::Process() noexcept
             stateWaitTicks = PerformanceCounter() - stateWaitStart;
             bufferIndex = output_->BackBufferIndex();
             head = output_->AssignedHead();
+            const auto* frameMode = display_modes::FindDisplayMode(
+                output_->DisplayState(), output_->ActiveModeIndex());
+            if (frameMode == nullptr)
+            {
+                result = E_UNEXPECTED;
+                failed = true;
+                break;
+            }
+            result = damage_.Prepare(frameMode->hVisible, frameMode->vVisible,
+                useBuffer2_ ? buffer2.MetaData.PresentationFrameNumber : buffer.MetaData.PresentationFrameNumber,
+                useBuffer2_ ? buffer2.MetaData.DirtyRectCount : buffer.MetaData.DirtyRectCount,
+                useBuffer2_ ? 0 : buffer.MetaData.MoveRegionCount, bufferIndex);
+            if (FAILED(result))
+            {
+                failed = true;
+                break;
+            }
             if (useBuffer2_)
             {
                 UpdateHdrMetadata(buffer2.MetaData);
@@ -496,6 +530,7 @@ void SwapChainD3D11::Process() noexcept
             layer.hdrMetadata = currentHdrMetadata_;
             layer.hdrMetadataEnabled = hasCurrentHdrMetadata_ ? NV_TRUE : NV_FALSE;
             layer.colorTransform = &output_->ColorTransform();
+            damage_.ApplyToLayer(layer);
             const NV_STATUS presentStatus = NvKmsWindowsPresentLayersTimed(
                 output_->AssignedHead(),
                 output_->DisplayState().displayHandle,
@@ -506,6 +541,14 @@ void SwapChainD3D11::Process() noexcept
             dropped = presentStatus == NV_ERR_IN_USE;
             if (presentStatus == NV_OK)
             {
+                result = damage_.Commit(bufferIndex);
+                if (FAILED(result))
+                {
+                    TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                        "Dirty-buffer commit failed: result=0x%08X buffer=%u", result, bufferIndex);
+                    failed = true;
+                    break;
+                }
                 output_->CommitPresent();
             }
             if (presentStatus != NV_OK && presentStatus != NV_ERR_IN_USE)
@@ -534,8 +577,12 @@ void SwapChainD3D11::Process() noexcept
             failed = true;
             break;
         }
-        TraceEvents(readbackMode_ == 2 || frameCount < 8 || frameCount % 60 == 0 ?
-            TRACE_LEVEL_INFORMATION : TRACE_LEVEL_VERBOSE,
+        const UCHAR timingLevel = readbackMode_ == 2 || frameCount < 8 || frameCount % 60 == 0 ?
+            TRACE_LEVEL_INFORMATION : TRACE_LEVEL_VERBOSE;
+        TraceEvents(timingLevel, TRACE_DRIVER,
+            "Frame upload: frame=%u bytes=%llu regions=%u",
+            frameCount, presentTiming.uploadBytes, presentTiming.uploadRegions);
+        TraceEvents(timingLevel,
             TRACE_DRIVER,
             "Frame timing us: frame=%u acquire=%llu stateWait=%llu staging=%llu readback=%llu map=%llu cpuCopy=%llu unmap=%llu kmsWait=%llu upload=%llu prepare=%llu submit=%llu finish=%llu total=%llu idle=%llu dropped=%u pending=%llu buffer=%u path=%u requested=%u verification=%u transfer=%llu head=%u width=%u height=%u format=%u",
             frameCount, Microseconds(acquireTicks), Microseconds(stateWaitTicks),
@@ -619,7 +666,7 @@ HRESULT SwapChainD3D11::CopyFrame(
     auto recordCopy = wil::scope_exit([&]() noexcept {
         copyTiming_.copyTicks += PerformanceCounter() - copyStart;
     });
-    return frame::CopyPixels(*output_, buffer);
+    return frame::CopyPixels(*output_, buffer, output_->BackPixels(), damage_.Rectangles());
 }
 
 HRESULT SwapChainD3D11::VerifyReadback(
@@ -692,6 +739,11 @@ HRESULT SwapChainD3D11::VerifyReadback(
     {
         readFromSubresourceSupported_ = false;
         copyTiming_.path = 2;
+        const HRESULT damageResult = damage_.Invalidate(output_->BackBufferIndex());
+        if (FAILED(damageResult))
+        {
+            return damageResult;
+        }
     }
     readbackVerified_ = matched;
     return S_OK;
@@ -739,6 +791,14 @@ HRESULT SwapChainD3D11::CopyFrame(
         return DXGI_ERROR_UNSUPPORTED;
     }
 
+    copyTiming_.width = sourceDesc.Width;
+    copyTiming_.height = sourceDesc.Height;
+    copyTiming_.format = sourceDesc.Format;
+    if (damage_.Rectangles().empty())
+    {
+        return S_OK;
+    }
+
     wil::com_ptr_nothrow<ID3D11Device> device;
     source->GetDevice(device.put());
     wil::com_ptr_nothrow<ID3D11DeviceContext> context;
@@ -773,6 +833,8 @@ HRESULT SwapChainD3D11::CopyFrame(
         result = device.query_to(device3.put());
         if (SUCCEEDED(result))
         {
+            const bool verifyReadback = !readbackVerified_ ||
+                ((readbackMode_ == 2 || damage_.Enabled()) && (textureFrameCount_ % 120) == 1);
             ID3D11Texture2D* readSource = source.get();
             NvU32 readPath = 3;
             result = DXGI_ERROR_UNSUPPORTED;
@@ -818,7 +880,21 @@ HRESULT SwapChainD3D11::CopyFrame(
                 if (defaultReadbackTexture_ && !defaultReadbackRejected_)
                 {
                     const NvU64 readbackStart = PerformanceCounter();
-                    context->CopyResource(defaultReadbackTexture_.get(), source.get());
+                    if (damage_.Enabled() && !verifyReadback)
+                    {
+                        for (const RECT& rectangle : damage_.Rectangles())
+                        {
+                            const D3D11_BOX box = {
+                                static_cast<UINT>(rectangle.left), static_cast<UINT>(rectangle.top), 0,
+                                static_cast<UINT>(rectangle.right), static_cast<UINT>(rectangle.bottom), 1};
+                            context->CopySubresourceRegion(defaultReadbackTexture_.get(), 0,
+                                box.left, box.top, 0, source.get(), 0, &box);
+                        }
+                    }
+                    else
+                    {
+                        context->CopyResource(defaultReadbackTexture_.get(), source.get());
+                    }
                     context->Flush();
                     copyTiming_.readbackTicks += PerformanceCounter() - readbackStart;
                     source.reset();
@@ -843,16 +919,32 @@ HRESULT SwapChainD3D11::CopyFrame(
             if (SUCCEEDED(result))
             {
                 const NvU64 readStart = PerformanceCounter();
-                device3->ReadFromSubresource(
-                    output_->BackPixels(), output_->ScanoutPitch(), 0,
-                    readSource, 0, nullptr);
+                if (damage_.Enabled())
+                {
+                    for (const RECT& rectangle : damage_.Rectangles())
+                    {
+                        const D3D11_BOX box = {
+                            static_cast<UINT>(rectangle.left), static_cast<UINT>(rectangle.top), 0,
+                            static_cast<UINT>(rectangle.right), static_cast<UINT>(rectangle.bottom), 1};
+                        auto* pixels = static_cast<NvU8*>(output_->BackPixels()) +
+                            static_cast<size_t>(rectangle.top) * output_->ScanoutPitch() +
+                            static_cast<size_t>(rectangle.left) *
+                                (sourceDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8U : 4U);
+                        device3->ReadFromSubresource(pixels, output_->ScanoutPitch(), 0,
+                            readSource, 0, &box);
+                    }
+                }
+                else
+                {
+                    device3->ReadFromSubresource(
+                        output_->BackPixels(), output_->ScanoutPitch(), 0, readSource, 0, nullptr);
+                }
                 copyTiming_.copyTicks += PerformanceCounter() - readStart;
                 const NvU64 unmapStart = PerformanceCounter();
                 context->Unmap(readSource, 0);
                 copyTiming_.unmapTicks += PerformanceCounter() - unmapStart;
                 copyTiming_.path = readPath;
-                if (!readbackVerified_ ||
-                    (readbackMode_ == 2 && (textureFrameCount_ % 120) == 1))
+                if (verifyReadback)
                 {
                     copyTiming_.verification = true;
                     result = VerifyReadback(device.get(), context.get(), readSource, sourceDesc);
@@ -924,7 +1016,21 @@ HRESULT SwapChainD3D11::CopyFrame(
         mappedTexture = readbackTexture_.get();
         copyTiming_.path = 2;
         const NvU64 readbackStart = PerformanceCounter();
-        context->CopyResource(mappedTexture, source.get());
+        if (damage_.Enabled())
+        {
+            for (const RECT& rectangle : damage_.Rectangles())
+            {
+                const D3D11_BOX box = {
+                    static_cast<UINT>(rectangle.left), static_cast<UINT>(rectangle.top), 0,
+                    static_cast<UINT>(rectangle.right), static_cast<UINT>(rectangle.bottom), 1};
+                context->CopySubresourceRegion(mappedTexture, 0, box.left, box.top, 0,
+                    source.get(), 0, &box);
+            }
+        }
+        else
+        {
+            context->CopyResource(mappedTexture, source.get());
+        }
         context->Flush();
         copyTiming_.readbackTicks += PerformanceCounter() - readbackStart;
         source.reset();

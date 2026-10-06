@@ -1523,7 +1523,8 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     NV_KMS_WINDOWS_SCANOUT_FORMAT format,
     NV_KMS_WINDOWS_SURFACE** surface,
     void** pixels,
-    NvU32* pitch)
+    NvU32* pitch,
+    NvBool honorPixelCachePolicy)
 {
     if (width == 0 || height == 0 ||
         (format != NV_KMS_WINDOWS_SCANOUT_FORMAT_XRGB8 &&
@@ -1618,6 +1619,10 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
 
     memoryParams.useVideoMemory = NV_FALSE;
     memoryParams.size = stagingSize;
+    if (honorPixelCachePolicy && format != NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8)
+    {
+        memoryParams.type = NVKMS_KAPI_ALLOCATION_TYPE_CACHED_PIXEL_STAGING;
+    }
     scanout->stagingMemory =
         kmsFunctions.allocateMemory(kmsDevice, &memoryParams);
     if (scanout->stagingMemory == nullptr)
@@ -2269,13 +2274,47 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
 
         FlushProcessWriteBuffers();
         const NvU64 uploadStart = PerformanceCounter();
-        if (!kmsFunctions.copyMemory(
+        if (layer->useDirtyBands)
+        {
+            if (layer->dirtyBandCount > 2)
+            {
+                return NV_ERR_INVALID_ARGUMENT;
+            }
+            for (NvU32 index = 0; index < layer->dirtyBandCount; ++index)
+            {
+                const auto& band = layer->dirtyBands[index];
+                if (band.top >= band.bottom || band.bottom > layer->surface->height ||
+                    (index != 0 && band.top < layer->dirtyBands[index - 1].bottom))
+                {
+                    return NV_ERR_INVALID_ARGUMENT;
+                }
+            }
+            for (NvU32 index = 0; index < layer->dirtyBandCount; ++index)
+            {
+                const auto& band = layer->dirtyBands[index];
+                const NvU64 offset = static_cast<NvU64>(band.top) * layer->surface->pitch;
+                const NvU64 bytes = static_cast<NvU64>(band.bottom - band.top) * layer->surface->pitch;
+                if (!kmsFunctions.copyMemoryRange(kmsDevice, layer->surface->memory,
+                        layer->surface->stagingMemory, offset, bytes))
+                {
+                    return NV_ERR_GENERIC;
+                }
+                timing->uploadBytes += bytes;
+                ++timing->uploadRegions;
+            }
+        }
+        else if (!kmsFunctions.copyMemory(
                 kmsDevice,
                 layer->surface->memory,
                 layer->surface->stagingMemory,
                 layer->surface->size))
         {
             return NV_ERR_GENERIC;
+        }
+        else
+        {
+            timing->uploadBytes += layer->surface->size;
+            ++timing->uploadRegions;
         }
         timing->uploadTicks += PerformanceCounter() - uploadStart;
 

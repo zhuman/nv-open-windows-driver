@@ -30,6 +30,29 @@ constexpr NV_KMS_WINDOWS_COLOR_TRANSFORM IdentityColorTransform = {
     {}, {}, {}, NV_FALSE, NV_FALSE,
 };
 
+NTSTATUS QueryPixelCachePolicy(NvBool* honorRequested) noexcept
+{
+    ULONG policy = 0;
+    NTSTATUS status = QueryDriverParameterDword(L"SurfaceCachePolicy", &policy);
+    if ((!NT_SUCCESS(status) && !DriverParameterAbsent(status)) || policy > 2)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "Invalid SurfaceCachePolicy: status=%!STATUS! value=%u", status, policy);
+        return NT_SUCCESS(status) ? STATUS_INVALID_PARAMETER : status;
+    }
+    ULONG d3d12Mode = 0;
+    status = QuerySwapChainMode(&d3d12Mode);
+    if (!NT_SUCCESS(status))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "Invalid swapchain settings for surface allocation: status=%!STATUS! mode=%u",
+            status, d3d12Mode);
+        return NT_SUCCESS(status) ? STATUS_INVALID_PARAMETER : status;
+    }
+    *honorRequested = policy == 2 || (policy == 0 && d3d12Mode != 0);
+    return STATUS_SUCCESS;
+}
+
 NvS32 FloatToCsc(float value) noexcept
 {
     if (!std::isfinite(value))
@@ -217,8 +240,14 @@ NTSTATUS Output::PrepareScanout(
     void** pixels,
     NvU32* pitch) noexcept
 {
+    NvBool honorPixelCachePolicy = NV_FALSE;
+    const NTSTATUS cacheStatus = QueryPixelCachePolicy(&honorPixelCachePolicy);
+    if (!NT_SUCCESS(cacheStatus))
+    {
+        return cacheStatus;
+    }
     const NV_STATUS status = NvKmsWindowsCreateScanoutSurface(
-        mode.hVisible, mode.vVisible, format, surface, pixels, pitch);
+        mode.hVisible, mode.vVisible, format, surface, pixels, pitch, honorPixelCachePolicy);
     if (status != NV_OK)
     {
         return status == NV_ERR_NO_MEMORY
@@ -250,8 +279,15 @@ NTSTATUS Output::PrepareBackBuffer() noexcept
     NV_KMS_WINDOWS_SURFACE* surface = nullptr;
     void* pixels = nullptr;
     NvU32 pitch = 0;
+    NvBool honorPixelCachePolicy = NV_FALSE;
+    const NTSTATUS cacheStatus = QueryPixelCachePolicy(&honorPixelCachePolicy);
+    if (!NT_SUCCESS(cacheStatus))
+    {
+        return cacheStatus;
+    }
     const NV_STATUS status = NvKmsWindowsCreateScanoutSurface(
-        mode->hVisible, mode->vVisible, scanoutFormat_, &surface, &pixels, &pitch);
+        mode->hVisible, mode->vVisible, scanoutFormat_, &surface, &pixels, &pitch,
+        honorPixelCachePolicy);
     if (status != NV_OK)
     {
         return status == NV_ERR_NO_MEMORY ?
@@ -438,12 +474,11 @@ NTSTATUS Output::AssignSwapChain(
     }
     QuiesceSwapChain();
     ULONG d3d12Mode = 0;
-    const NTSTATUS settingStatus = QueryDriverParameterDword(L"D3D12Mode", &d3d12Mode);
-    if ((!NT_SUCCESS(settingStatus) && !DriverParameterAbsent(settingStatus)) ||
-        d3d12Mode > 3)
+    const NTSTATUS settingStatus = QuerySwapChainMode(&d3d12Mode);
+    if (!NT_SUCCESS(settingStatus))
     {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid D3D12Mode setting: status=%!STATUS! mode=%u; using D3D11 baseline",
+            "Invalid swapchain settings: status=%!STATUS! mode=%u; using D3D11 baseline",
             settingStatus, d3d12Mode);
         d3d12Mode = 0;
     }

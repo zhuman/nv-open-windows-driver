@@ -528,8 +528,10 @@ show that strict double buffering cannot absorb normal present cadence.
 Initially copy the complete frame on every present. Alternating back buffers
 means applying only dirty and move rectangles would leave unchanged regions
 containing the frame from two presents ago. Dirty-rectangle optimization is
-valid only after either copying the old front into the new back first or proving
-that both scanout surfaces are otherwise kept coherent.
+valid only after either copying the old front into the new back first or
+accumulating every uncommitted frame's damage separately for each destination
+slot. The current complete incoming surface supplies all accumulated regions;
+old incoming surfaces do not need to be retained.
 
 KMDOD initially creates one opaque primary plane because that is all its
 display-only present contract supplies. IddCx initially does the same for one
@@ -869,11 +871,12 @@ not the kernel Services tree. Package installation recreated/cleared this key
 during testing: apply experiment values **after installation**, then restart and
 verify the selected path in WPP. Registry values and the loaded DLL hash alone
 do not prove that native swapchain processing ran. The pre-existing D3D11
-`ReadbackMode` development key remains separate and unchanged.
+`ReadbackMode` development key remains as a fallback when the framework-managed
+`D3D11ReadbackMode` DWORD is absent.
 
 Restart the device after changing these experimental values:
 
-- `D3D12Mode` absent/0: existing D3D11 baseline.
+- `D3D12Mode` absent: native direct (mode 1); explicit 0: D3D11 baseline.
 - `D3D12Mode=1`: GPU texture -> placed linear BUFFER in the WDF common buffer
   -> existing synchronous CE upload -> VRAM.
 - `D3D12Mode=2`: D3D12 GPU readback BUFFER -> existing CPU row copy/conversion
@@ -882,6 +885,18 @@ Restart the device after changing these experimental values:
 - `D3D12Debug=1`: enable the D3D12 debug layer before device creation; report
   its warnings/errors in WPP. Missing debug support explicitly rejects native
   initialization rather than pretending validation ran.
+- `SwapChainApi` absent/0: historical `D3D12Mode` selection; 11: force D3D11;
+  12: force D3D12 (`D3D12Mode=0` then means native direct mode 1).
+- `D3D11ReadbackMode` absent: legacy-key fallback; 0: ordinary Map/STAGING;
+  1: ReadFromSubresource; 2: alternate 120-frame ordinary/ReadFromSubresource
+  blocks. Unsupported ReadFromSubresource remains an explicitly logged fallback.
+- `SurfaceCachePolicy` absent/0: honor RM's CPU cache request only for native
+  pixel staging, and retain framework defaults for D3D11 pixels; 1: framework
+  default for either API; 2: honor RM's request for pixels under either API.
+  Native import can reject policy 1; a fallback is not a native-direct sample.
+- `DirtyRects` absent/1: per-slot accumulated damage; explicit 0: original
+  full-frame behavior. Enabling also requests precise IddCx present regions.
+  Other values are rejected rather than silently treated as enabled.
 
 Native initialization failures log the HRESULT and use D3D11 on the same
 swapchain. Runtime failures abandon that swapchain and select D3D11 on the next
@@ -901,10 +916,11 @@ The first actual WDF import failed with `E_INVALIDARG`: D3D12 debug message 1088
 requires writable memory **without PAGE_NOCACHE**. WDF's default common-buffer
 policy on this target returned `PAGE_READWRITE | PAGE_NOCACHE`, even though the
 RM allocator supplied a cache-type request. The DMA-provider interface now
-passes that request through. With an experimental D3D12 mode enabled, allocations
-after firmware initialization use WDF's explicit `CacheType` (cached, uncached,
-or write-combined as requested by RM). Mode 0 retains WDF's original default
-policy, and firmware initialization is unchanged. Do not remove PAGE_NOCACHE
+passes that request through. The initial experiment applied it to allocations
+after firmware initialization generally; the allocation-specific revision below
+supersedes that broad policy. Only explicitly tagged pixel staging now uses
+WDF's explicit `CacheType` when selected. Other allocations retain the original
+framework default. Do not remove PAGE_NOCACHE
 using VirtualProtect or create conflicting cache aliases. All direct/reference
 comparisons must use the same explicit-cache allocation policy.
 
@@ -1046,7 +1062,8 @@ The larger population supersedes the 51-record descriptive sample for D3D11
 performance conclusions. Rare CE spikes (maximum 94.233 ms) raised the mean
 above the 18.162 ms median; no cause was isolated. These remain wall-clock
 processing timings, not CPU utilization. The original `oem180.inf` package
-and its hash were restored afterward; D3D11 remains the active/default path.
+and its hash were restored afterward; D3D11 remained the active/default path
+at that checkpoint.
 Per-frame stage histograms are retained as a standalone offline HTML report
 with measured/all-captured/validation-only scopes, accepted/dropped filters,
 full-tail and percentile-range views, and CSV export. The native direct interval
@@ -1064,12 +1081,15 @@ and Unmap timing fields rather than a direct transfer timer. Its ETL also
 decoded with zero lost events, unknowns, or format errors. Physical baseline
 motion was verified separately (201 YDIF samples, mean 18.62, max 29.65).
 
-The experimental native path is **not yet an overall performance win over the
+At this earlier checkpoint, the experimental native path was **not yet an
+overall performance win over the
 original baseline**: CE latency is substantially higher in both native paths.
 The API/import and cache-policy changes differ from baseline; the cause has
 not been isolated. Requested cache policy currently applies to post-firmware
-common-buffer allocations generally, not just scanout staging. Preserve mode 0
-as the default and investigate these effects before production use.
+common-buffer allocations generally, not just scanout staging. The subsequent
+allocation-specific experiment below resolves that scope. Native direct with
+accumulated damage is now the default; D3D11 remains an explicit override and
+compatibility fallback.
 
 Rollback removed only the hash-verified session packages `oem181.inf` through
 `oem184.inf` and restored both registry value journals. The original loaded
@@ -1083,6 +1103,136 @@ Final verification at 22:34 PDT confirmed the original loaded hash, healthy
 device, both experiment DWORDs absent from both journaled keys, and all four
 session packages removed. The owned scene task was unregistered and its
 temporary workload files removed; the owned ETW logger was stopped.
+
+### Allocation-specific pixel cache and accumulated damage (October 6)
+
+The completed native IddCx checkpoint was committed as `5f12929a`; no push.
+The later cache/damage work is separate. Pixel cache provenance uses a dedicated
+NVKMS allocation type, the existing RM allocation `tag`, a Windows-only memory
+descriptor flag, and a typed purpose passed to the WDF DMA callback. It does not
+use a device-global or thread-local scope, allocation-size guessing, or a new
+wire ABI. Both KAPI interface-header copies stay synchronized. Cursor, firmware,
+channel, semaphore, notifier, and other ordinary allocations keep their original
+WDF policy.
+
+The cache-only build was hash `A1CFBF98AE52D5DE651487E91D953C9BC7501B033713DE06567E6CCEABBB5315`.
+Each cached-pixel run logged exactly two tagged allocations of 66,387,968 bytes,
+requested cache 0 / WDF cache 1 (MmCached). Native imports and full comparisons
+of all 66,355,200 active bytes passed for both slots. The following measurements
+use the same 120-second full-screen animation, its +5 through +115 second steady
+window, accepted frames, and the existing warm-up/verification exclusions:
+
+| Path / pixel policy | Measured | Accepted | Mean CE ms | Median CE ms | p95 CE ms |
+|---|---:|---:|---:|---:|---:|
+| D3D12 direct / pixel-only RM request | 1344 | 692 | 29.136 | 18.237 | 67.275 |
+| D3D12 reference / pixel-only RM request | 1366 | 814 | 23.615 | 18.182 | 44.070 |
+| D3D11 STAGING / RM request | 3085 | 2532 | 21.247 | 18.166 | 44.046 |
+| D3D11 STAGING / framework default | 3143 | 2364 | 22.194 | 18.177 | 44.069 |
+
+All three ETLs decode with zero lost events, unknowns, or format errors. These
+fresh D3D11 controls do **not** show a pixel-cache slowdown. Restoring ordinary
+allocations' baseline policy reduced the native direct median from approximately
+48.75 to 18.24 ms, while cached pixels remained necessary for import. This
+strongly implicates the previous broad cache-policy change, but does not identify
+the particular command/notifier allocation responsible. Means still contain
+long-tail stalls; do not claim that native direct is an overall win.
+
+The shared dirty-region tracker supports arbitrary buffer counts. Each slot
+starts full-dirty; every acquired frame's damage accumulates into every slot,
+and only successful presentation clears the selected slot. Dropped uploads
+do not commit damage. Copies always read the current complete incoming image.
+Resize resets all slots. Metadata discontinuities, unsupported move regions,
+excessive counts, and ambiguous empty metadata trigger logged full refreshes;
+retrieval or malformed-rectangle errors fail explicitly.
+
+The current transport representation is deliberately conservative: at most two
+sorted, non-overlapping **full-width horizontal bands**, merging the smaller gap
+when a third band would be needed. The existing synchronous CE utility exposes
+linear ranges, not pitched 2D copies. Bands bound each upload to two RM control
+calls rather than one per partial-width row; RM can still internally chunk DMA.
+Narrow vertical damage can therefore overcopy substantially. Exact narrow 2D
+regions would require a separate pitched-copy transport design.
+
+D3D11 GPU copies, direct Map/STAGING, ReadFromSubresource, system-buffer CPU
+conversion, and D3D12 direct/reference paths all consume the shared region plan.
+Native direct validates the first partial update of each slot and periodically
+recompares the entire image against an independent full readback when damage is
+enabled. Verification frames are identified and excluded from timing populations.
+Tracing reports actual uploaded bytes and linear-region counts. D3D11 uses a
+separate frame-keyed upload event: adding both fields to its already long timing
+event exceeded TracePDB's decoding-metadata limit. Existing timing fields remain
+unchanged, and the validated runs decode with no unknown events.
+
+Standalone boundary/coalescing/resize tests and 100,000 modeled frames across
+1/2/3/7/17 slots pass, including random damage, arbitrary slot selection, dropped
+uploads, independent RAM/VRAM, and complete-image equality after accepted copies.
+Run `windows-open\iddcx\tests\run-dirty-regions-tests.ps1` with Visual C++, UMDF
+headers, and the project's restored WIL package installed. The runner accepts
+`WdfIncludePath` and `WilIncludePath` overrides for the parameter tests.
+The integrated Debug driver builds, catalogs, and signs successfully.
+
+Hardware sparse-damage tests used two moving rectangles over a static grid,
+with explicit old/new-location invalidation rather than a full-window repaint.
+All rows below are accepted, non-verification uploads inside each scene's steady
+window. The D3D11 control and damage run are matched 60-second runs; native
+direct/reference alternate in a 90-second run:
+
+| Sparse-scene path | Accepted | Mean upload bytes | Mean CE ms | Median CE ms | p95 CE ms | Maximum regions |
+|---|---:|---:|---:|---:|---:|---:|
+| D3D11 full-frame control | 800 | 66,355,200 | 25.651 | 18.187 | 44.066 | 1 |
+| D3D11 accumulated damage | 911 | 9,000,960 | 12.275 | 12.317 | 12.402 | 2 |
+| D3D12 direct accumulated damage | 939 | 9,000,960 | 12.304 | 12.316 | 12.411 | 2 |
+| D3D12 reference accumulated damage | 898 | 9,000,960 | 12.313 | 12.322 | 12.445 | 2 |
+
+Every accepted damage upload in these populations was partial, with no
+steady-scene full-refresh fallback. The matched D3D11 run reduced payload by
+86.4%, mean CE time by 52.1%, and median CE time by 32.3%. Band expansion,
+linear-control-call overhead, and completion observation remain relevant;
+these measurements do not establish proportional bandwidth scaling or identify
+the remaining approximately 12 ms floor. Native full-image comparisons passed
+repeatedly for both slots after partial writes. ShadowCast physical captures
+showed the intact static background and moving rectangles without stale trails.
+
+A separate full-frame native animation regression used `SwapChainApi=12`,
+`D3D12Mode=0`, and `DirtyRects=0`, confirming forced native-direct selection:
+708 accepted uploads of all 66,355,200 bytes, median CE approximately 18.23 ms.
+Sparse mode selection also verified that API 11 overrides a nonzero D3D12 mode.
+
+The ReadFromSubresource sub-mode test caught and fixed a verification-specific
+bug: a partially updated CPU-readable DEFAULT intermediate was incorrectly
+used as a complete reference. Verification frames now snapshot the full
+current incoming surface before releasing it; partial CPU extraction still
+uses the accumulated region plan. A fresh 90-second alternate-mode run passed
+three complete 66,355,200-byte comparisons and physical output validation.
+Its steady populations included 247 actual DEFAULT/ReadFromSubresource path-4
+uploads and 168 ordinary STAGING uploads, all partial and at most two regions.
+ReadFromSubresource remains unsuitable for performance: mean pixel-copy time
+was approximately 276.25 ms versus approximately 0.33 ms for ordinary sparse
+CPU copying. It remains registry-selectable, not the default.
+
+The final repaired build's SHA-256 is
+`E1ED6494D511FE422166C2ED6AB0B4BF5A0E1F1E37DF6BDBE08C7733E8E92433`.
+Cache/damage changes and the subsequent default-policy revision are committed
+together; unrelated worktree changes were preserved. Rollback identity-checked
+and removed only this session's four
+experimental packages, restored original `oem180.inf` / hash
+`845F934706B8BD2507BE930004666C47E41AE1C6A0178FEC1AE82980EA7635B6`,
+and freshly verified loaded-module identity, device OK/problem 0, and the
+physical desktop. All six journaled experiment DWORDs returned to absent.
+Both owned ETW loggers were stopped and the owned scene task was unregistered.
+No reboot or push was needed.
+
+The default-policy revision selects native D3D12 direct common-buffer copying
+and accumulated damage with no registry settings. Automatic pixel-cache policy
+therefore selects the import-compatible cache policy only for pixel staging;
+ordinary allocations remain unchanged. Explicit `D3D12Mode=0` or
+`SwapChainApi=11` retains D3D11, and `DirtyRects=0` retains full-frame copying.
+Reference/alternating modes remain opt-in, and native API/import/runtime
+failure handling still provides the existing logged D3D11 fallback.
+The parameter tests cover missing keys/values even when a failed query changes
+the output, every valid API/mode combination, explicit dirty disable, invalid
+values, and registry access/type errors. This revision was built and tested
+locally; it does not deploy or restart the restored target.
 
 If pure UMDF cannot bridge WDF's DMA mapping to an RM/GPU-visible address, keep
 the CPU path fully functional and choose explicitly between shipping without

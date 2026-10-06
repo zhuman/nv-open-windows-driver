@@ -166,7 +166,7 @@ void HwCursor::Process() noexcept
             NvU32 pitch = 0;
             const NV_STATUS allocation = NvKmsWindowsCreateScanoutSurface(
                 size, size, NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8,
-                &surface, &pixels, &pitch);
+                &surface, &pixels, &pitch, NV_FALSE);
             if (allocation != NV_OK)
             {
                 TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,

@@ -53,11 +53,13 @@
     <ClCompile Include="device.cpp" />
     <ClCompile Include="display_modes.cpp" />
     <ClCompile Include="driver.cpp" />
+    <ClCompile Include="dirty_regions.cpp" />
     <ClCompile Include="hardware_services.cpp" />
     <ClCompile Include="hwcursor.cpp" />
     <ClCompile Include="output.cpp" />
     <ClCompile Include="swapchain_d3d11.cpp" />
     <ClCompile Include="swapchain_d3d12.cpp" />
+    <ClCompile Include="swapchain_damage.cpp" />
     <Inf Include="nv-iddcx.inf" />
   </ItemGroup>
   <ItemGroup>
@@ -66,11 +68,13 @@
     <ClInclude Include="device.hpp" />
     <ClInclude Include="display_modes.hpp" />
     <ClInclude Include="driver_parameters.hpp" />
+    <ClInclude Include="dirty_regions.hpp" />
     <ClInclude Include="hardware_services.hpp" />
     <ClInclude Include="hwcursor.h" />
     <ClInclude Include="output.hpp" />
     <ClInclude Include="swapchain_d3d11.hpp" />
     <ClInclude Include="swapchain_d3d12.hpp" />
+    <ClInclude Include="swapchain_damage.hpp" />
     <ClInclude Include="swapchain_pixels.hpp" />
     <ClInclude Include="trace.h" />
   </ItemGroup>

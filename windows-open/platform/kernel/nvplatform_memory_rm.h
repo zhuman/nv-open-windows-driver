@@ -24,6 +24,17 @@ typedef enum NV_PLATFORM_RM_MEMORY_CACHE_TYPE
     NV_PLATFORM_RM_MEMORY_WRITE_COMBINED
 } NV_PLATFORM_RM_MEMORY_CACHE_TYPE;
 
+typedef enum NV_PLATFORM_RM_MEMORY_PURPOSE
+{
+    NV_PLATFORM_RM_MEMORY_PURPOSE_DEFAULT,
+    NV_PLATFORM_RM_MEMORY_PURPOSE_CACHED_PIXEL_STAGING
+} NV_PLATFORM_RM_MEMORY_PURPOSE;
+
+// Carry pixel-allocation provenance through RM without changing its wire ABI.
+#define NV_PLATFORM_RM_CACHED_PIXEL_STAGING_TAG 0x5049584cU
+// Bit 42 is reserved/unused in RM's memory-descriptor flags.
+#define NV_PLATFORM_RM_MEMDESC_CACHED_PIXEL_STAGING NVBIT64(42)
+
 NV_STATUS NvPlatformRmAllocatePages(
     NvU64 size,
     NvU64 alignment,
@@ -31,6 +42,19 @@ NV_STATUS NvPlatformRmAllocatePages(
     NvBool pageable,
     NvBool belowFourGigabytes,
     NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType,
+    void** allocation,
+    NvU64* physicalAddresses,
+    NvU32 physicalAddressCapacity,
+    NvU32* physicalAddressCount);
+
+NV_STATUS NvPlatformRmAllocatePagesWithPurpose(
+    NvU64 size,
+    NvU64 alignment,
+    NvBool contiguous,
+    NvBool pageable,
+    NvBool belowFourGigabytes,
+    NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType,
+    NV_PLATFORM_RM_MEMORY_PURPOSE purpose,
     void** allocation,
     NvU64* physicalAddresses,
     NvU32 physicalAddressCapacity,

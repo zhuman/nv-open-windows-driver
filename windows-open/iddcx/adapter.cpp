@@ -1,5 +1,6 @@
 #include "adapter.hpp"
 #include "display_modes.hpp"
+#include "driver_parameters.hpp"
 #include "output.hpp"
 #include "trace.h"
 
@@ -83,6 +84,18 @@ NTSTATUS Adapter::EnterD0(WDFDEVICE device) noexcept
     IDDCX_ADAPTER_CAPS caps = {};
     caps.Size = sizeof(caps);
     caps.Flags = IDDCX_ADAPTER_FLAGS_NONE;
+    ULONG dirtyRects = 0;
+    const NTSTATUS dirtyStatus = QueryDirtyRectsEnabled(&dirtyRects);
+    if (!NT_SUCCESS(dirtyStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "Invalid DirtyRects parameter: status=0x%08X value=%u", dirtyStatus, dirtyRects);
+        return NT_SUCCESS(dirtyStatus) ? STATUS_INVALID_PARAMETER : dirtyStatus;
+    }
+    if (dirtyRects != 0)
+    {
+        caps.Flags |= IDDCX_ADAPTER_FLAGS_PREFER_PRECISE_PRESENT_REGIONS;
+    }
     if (IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2))
     {
         caps.Flags |= IDDCX_ADAPTER_FLAGS_CAN_PROCESS_FP16;

@@ -3,6 +3,7 @@
 #include "display_modes.hpp"
 #include "output.hpp"
 #include <cstring>
+#include <span>
 
 namespace nv::iddcx::frame {
 
@@ -47,7 +48,8 @@ inline void CopyHdrMetadata(
 
 // The caller holds Output's frame-state guard through copy and present.
 inline HRESULT CopyPixels(
-    Output& output, const IDDCX_SYSTEM_BUFFER_INFO& buffer, void* destinationPixels) noexcept
+    Output& output, const IDDCX_SYSTEM_BUFFER_INFO& buffer, void* destinationPixels,
+    std::span<const RECT> rectangles) noexcept
 {
     if (destinationPixels == nullptr || output.ScanoutPitch() == 0 ||
         buffer.pBuffer == nullptr)
@@ -82,37 +84,60 @@ inline HRESULT CopyPixels(
     }
     auto* destination = static_cast<NvU8*>(destinationPixels);
     const auto* source = static_cast<const NvU8*>(buffer.pBuffer);
-    for (NvU32 y = 0; y < buffer.Height; ++y)
+    for (const RECT& rectangle : rectangles)
     {
-        NvU8* destinationRow = destination + static_cast<size_t>(output.ScanoutPitch()) * y;
-        const NvU8* sourceRow = source + static_cast<size_t>(buffer.Pitch) * y;
-        if (destinationFp16 && !fp16)
+        if (rectangle.left < 0 || rectangle.top < 0 || rectangle.left >= rectangle.right ||
+            rectangle.top >= rectangle.bottom ||
+            static_cast<NvU32>(rectangle.right) > buffer.Width ||
+            static_cast<NvU32>(rectangle.bottom) > buffer.Height)
         {
-            auto* halfRow = reinterpret_cast<NvU16*>(destinationRow);
-            for (NvU32 x = 0; x < buffer.Width; ++x)
-            {
-                halfRow[x * 4] = Unorm8ToFp16(sourceRow[x * 4 + (rgba ? 0 : 2)]);
-                halfRow[x * 4 + 1] = Unorm8ToFp16(sourceRow[x * 4 + 1]);
-                halfRow[x * 4 + 2] = Unorm8ToFp16(sourceRow[x * 4 + (rgba ? 2 : 0)]);
-                halfRow[x * 4 + 3] = Unorm8ToFp16(sourceRow[x * 4 + 3]);
-            }
+            return E_INVALIDARG;
         }
-        else if (!destinationFp16 && rgba)
+    }
+    for (const RECT& rectangle : rectangles)
+    {
+        for (LONG y = rectangle.top; y < rectangle.bottom; ++y)
         {
-            for (NvU32 x = 0; x < buffer.Width; ++x)
+            NvU8* destinationRow = destination + static_cast<size_t>(output.ScanoutPitch()) * y;
+            const NvU8* sourceRow = source + static_cast<size_t>(buffer.Pitch) * y;
+            if (destinationFp16 && !fp16)
             {
-                destinationRow[x * 4] = sourceRow[x * 4 + 2];
-                destinationRow[x * 4 + 1] = sourceRow[x * 4 + 1];
-                destinationRow[x * 4 + 2] = sourceRow[x * 4];
-                destinationRow[x * 4 + 3] = 0xff;
+                auto* halfRow = reinterpret_cast<NvU16*>(destinationRow);
+                for (LONG x = rectangle.left; x < rectangle.right; ++x)
+                {
+                    halfRow[x * 4] = Unorm8ToFp16(sourceRow[x * 4 + (rgba ? 0 : 2)]);
+                    halfRow[x * 4 + 1] = Unorm8ToFp16(sourceRow[x * 4 + 1]);
+                    halfRow[x * 4 + 2] = Unorm8ToFp16(sourceRow[x * 4 + (rgba ? 2 : 0)]);
+                    halfRow[x * 4 + 3] = Unorm8ToFp16(sourceRow[x * 4 + 3]);
+                }
             }
-        }
-        else
-        {
-            std::memcpy(destinationRow, sourceRow, rowBytes);
+            else if (!destinationFp16 && rgba)
+            {
+                for (LONG x = rectangle.left; x < rectangle.right; ++x)
+                {
+                    destinationRow[x * 4] = sourceRow[x * 4 + 2];
+                    destinationRow[x * 4 + 1] = sourceRow[x * 4 + 1];
+                    destinationRow[x * 4 + 2] = sourceRow[x * 4];
+                    destinationRow[x * 4 + 3] = 0xff;
+                }
+            }
+            else
+            {
+                const size_t pixelBytes = destinationFp16 ? 8U : 4U;
+                std::memcpy(destinationRow + static_cast<size_t>(rectangle.left) * pixelBytes,
+                    sourceRow + static_cast<size_t>(rectangle.left) * pixelBytes,
+                    static_cast<size_t>(rectangle.right - rectangle.left) * pixelBytes);
+            }
         }
     }
     return S_OK;
+}
+
+inline HRESULT CopyPixels(
+    Output& output, const IDDCX_SYSTEM_BUFFER_INFO& buffer, void* destinationPixels) noexcept
+{
+    const RECT rectangle = {0, 0, static_cast<LONG>(buffer.Width), static_cast<LONG>(buffer.Height)};
+    return CopyPixels(output, buffer, destinationPixels, {&rectangle, 1});
 }
 
 inline HRESULT CopyPixels(Output& output, const IDDCX_SYSTEM_BUFFER_INFO& buffer) noexcept

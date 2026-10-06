@@ -80,6 +80,25 @@ extern "C" NV_STATUS NvPlatformRmAllocatePages(
     NvU32 physicalAddressCapacity,
     NvU32* physicalAddressCount)
 {
+    return NvPlatformRmAllocatePagesWithPurpose(
+        size, alignment, contiguous, NV_FALSE, belowFourGigabytes, cacheType,
+        NV_PLATFORM_RM_MEMORY_PURPOSE_DEFAULT, allocation, physicalAddresses,
+        physicalAddressCapacity, physicalAddressCount);
+}
+
+extern "C" NV_STATUS NvPlatformRmAllocatePagesWithPurpose(
+    NvU64 size,
+    NvU64 alignment,
+    NvBool contiguous,
+    NvBool,
+    NvBool belowFourGigabytes,
+    NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType,
+    NV_PLATFORM_RM_MEMORY_PURPOSE purpose,
+    void** allocation,
+    NvU64* physicalAddresses,
+    NvU32 physicalAddressCapacity,
+    NvU32* physicalAddressCount)
+{
     if (size == 0 || size > MAXSIZE_T || allocation == nullptr ||
         physicalAddresses == nullptr || physicalAddressCount == nullptr)
     {
@@ -127,6 +146,7 @@ extern "C" NV_STATUS NvPlatformRmAllocatePages(
         size,
         alignment,
         cacheType,
+        purpose,
         &pageAllocation->providerAllocation,
         &pageAllocation->address,
         &pageAllocation->logicalAddress);

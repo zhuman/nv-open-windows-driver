@@ -8,6 +8,7 @@
 #include <wil/resource.h>
 
 #include "nvkms_windows.h"
+#include "swapchain_damage.hpp"
 
 namespace nv::iddcx {
 
@@ -60,6 +61,7 @@ private:
     IDDCX_SWAPCHAIN handle_;
     HANDLE nextSurfaceEvent_;
     NvU32 mode_;
+    SwapChainDamage damage_;
     bool deletionStarted_ = false;
     bool failed_ = false;
     bool directRejected_ = false;
@@ -86,6 +88,8 @@ private:
         NvU64 offset = 0;
         NvU64 size = 0;
         bool verified = false;
+        bool partialVerified = false;
+        NvU32 framesSinceVerification = 0;
     } buffers_[2];
     ID3D12Resource* mappedResource_ = nullptr;
     LARGE_INTEGER counterFrequency_ = {};

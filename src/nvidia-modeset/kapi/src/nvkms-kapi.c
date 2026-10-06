@@ -38,6 +38,10 @@
 #include "nvkms-kapi-internal.h"
 #include "nvkms-kapi-notifiers.h"
 
+#if defined(NV_WINDOWS_IDDCX)
+#include "nvplatform_memory_rm.h"
+#endif
+
 #include "nv_smg.h"
 
 #include <class/cl0000.h> /* NV01_ROOT/NV01_NULL_OBJECT */
@@ -703,6 +707,11 @@ NvBool nvKmsKapiAllocateSystemMemory(struct NvKmsKapiDevice *device,
     }
 
     switch (type) {
+#if defined(NV_WINDOWS_IDDCX)
+        case NVKMS_KAPI_ALLOCATION_TYPE_CACHED_PIXEL_STAGING:
+            memAllocParams.tag = NV_PLATFORM_RM_CACHED_PIXEL_STAGING_TAG;
+            /* Pixel staging keeps scanout attributes, but carries its own cache policy. */
+#endif
         case NVKMS_KAPI_ALLOCATION_TYPE_SCANOUT:
             /* XXX Note compression and scanout do not work together on
              * any current GPUs.  However, some use cases do involve scanning
@@ -2243,11 +2252,12 @@ static void UnmapMemory
     }
 }
 
-static NvBool CopyMemory
+static NvBool CopyMemoryRange
 (
     struct NvKmsKapiDevice *device,
     struct NvKmsKapiMemory *dstMemory,
     const struct NvKmsKapiMemory *srcMemory,
+    NvU64 offset,
     NvU64 size
 )
 {
@@ -2257,7 +2267,8 @@ static NvBool CopyMemory
     NvU32 status;
 
     if (device == NULL || dstMemory == NULL || srcMemory == NULL ||
-        size == 0 || size > dstMemory->size || size > srcMemory->size) {
+        size == 0 || offset > dstMemory->size || offset > srcMemory->size ||
+        size > dstMemory->size - offset || size > srcMemory->size - offset) {
         return NV_FALSE;
     }
 
@@ -2293,6 +2304,8 @@ static NvBool CopyMemory
 
     copyParams.hDstMemory = dstMemory->hRmHandle;
     copyParams.hSrcMemory = srcMemory->hRmHandle;
+    copyParams.dstOffset = offset;
+    copyParams.srcOffset = offset;
     copyParams.length = size;
     copyParams.flags = NV0050_CTRL_MEMCOPY_FLAGS_DEFAULT;
     status = nvRmApiControl(device->hRmClient,
@@ -2312,6 +2325,15 @@ static NvBool CopyMemory
     }
 
     return NV_TRUE;
+}
+
+static NvBool CopyMemory(
+    struct NvKmsKapiDevice *device,
+    struct NvKmsKapiMemory *dstMemory,
+    const struct NvKmsKapiMemory *srcMemory,
+    NvU64 size)
+{
+    return CopyMemoryRange(device, dstMemory, srcMemory, 0, size);
 }
 
 static NvBool IsVidmem(
@@ -4354,6 +4376,9 @@ NvBool nvKmsKapiGetFunctionsTableInternal
     funcsTable->mapMemory   = MapMemory;
     funcsTable->unmapMemory = UnmapMemory;
     funcsTable->copyMemory  = CopyMemory;
+#if defined(NV_WINDOWS)
+    funcsTable->copyMemoryRange = CopyMemoryRange;
+#endif
     funcsTable->isVidmem    = IsVidmem;
     funcsTable->isContiguous = IsContiguous;
     funcsTable->gc6BlockerRefCntInc = RmGc6BlockerRefCntInc;

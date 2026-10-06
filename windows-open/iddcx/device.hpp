@@ -42,7 +42,6 @@ struct DeviceContext final
     volatile LONG nvKmsWorkCanceled;
     volatile LONG nvKmsWorkCompleted;
     volatile LONG d0Active;
-    volatile LONG d3d12DmaCacheEnabled;
     bool rmDeviceOpened;
     bool rmGpuAttached;
     bool rmGpuStateLoaded;

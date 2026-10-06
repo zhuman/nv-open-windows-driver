@@ -195,6 +195,7 @@ NV_STATUS AllocateDmaBuffer(
     NvU64 size,
     NvU64 alignment,
     NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType,
+    NV_PLATFORM_RM_MEMORY_PURPOSE purpose,
     void** providerAllocation,
     void** address,
     NvU64* logicalAddress)
@@ -212,7 +213,14 @@ NV_STATUS AllocateDmaBuffer(
         &configuration,
         static_cast<ULONG>(alignment));
     auto* deviceContext = static_cast<DeviceContext*>(context);
-    if (InterlockedCompareExchange(&deviceContext->d3d12DmaCacheEnabled, 0, 0) != 0)
+    if (purpose != NV_PLATFORM_RM_MEMORY_PURPOSE_DEFAULT &&
+        purpose != NV_PLATFORM_RM_MEMORY_PURPOSE_CACHED_PIXEL_STAGING)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "DMA common buffer: invalid allocation purpose=%u", purpose);
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    if (purpose == NV_PLATFORM_RM_MEMORY_PURPOSE_CACHED_PIXEL_STAGING)
     {
         switch (cacheType)
         {
@@ -252,6 +260,9 @@ NV_STATUS AllocateDmaBuffer(
     *address = WdfCommonBufferGetAlignedVirtualAddress(commonBuffer);
     *logicalAddress = static_cast<NvU64>(
         WdfCommonBufferGetAlignedLogicalAddress(commonBuffer).QuadPart);
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+        "DMA common buffer allocated: purpose=%u size=%llu requestedCache=%u WDFCache=%u address=%p",
+        purpose, size, cacheType, configuration.CacheType, *address);
     return NV_OK;
 }
 
@@ -878,7 +889,6 @@ NTSTATUS PrepareHardware(
         AllocateDmaBuffer,
         FreeDmaBuffer,
     };
-    InterlockedExchange(&context->d3d12DmaCacheEnabled, 0);
     const NV_STATUS dmaStatus = NvPlatformRegisterDmaProvider(
         &dmaProvider, &context->dmaRegistration);
     TraceEvents(
@@ -905,6 +915,7 @@ NTSTATUS PrepareHardware(
         4096,
         4096,
         NV_PLATFORM_RM_MEMORY_UNCACHED,
+        NV_PLATFORM_RM_MEMORY_PURPOSE_DEFAULT,
         &dmaAllocation,
         &dmaAddress,
         &dmaLogicalAddress);
@@ -1067,22 +1078,6 @@ DWORD WINAPI InitializeNvKms(void* parameter)
         return 0;
     }
 
-    // Leave firmware initialization on the existing policy. Experimental
-    // NVKMS allocations must preserve RM's requested CPU cache attributes.
-    ULONG d3d12Mode = 0;
-    const NTSTATUS settingStatus = QueryDriverParameterDword(L"D3D12Mode", &d3d12Mode);
-    if ((!NT_SUCCESS(settingStatus) && !DriverParameterAbsent(settingStatus)) ||
-        d3d12Mode > 3)
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid D3D12 DMA cache setting: status=%!STATUS! mode=%u", settingStatus, d3d12Mode);
-        d3d12Mode = 0;
-    }
-    const bool cacheEnabled = d3d12Mode != 0 && context->d3d12SwapChainSupported;
-    InterlockedExchange(&context->d3d12DmaCacheEnabled, cacheEnabled ? 1 : 0);
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
-        "NVKMS D3D12 DMA cache policy: honorRequested=%u mode=%u",
-        cacheEnabled, d3d12Mode);
     const NV_STATUS modesetProbeStatus = NvKmsWindowsInitialize();
     TraceEvents(
         modesetProbeStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,

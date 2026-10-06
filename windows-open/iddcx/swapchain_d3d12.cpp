@@ -156,6 +156,11 @@ NTSTATUS SwapChainD3D12::Create(
 HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
 {
     QueryPerformanceFrequency(&counterFrequency_);
+    const HRESULT damageResult = damage_.Initialize(handle_, 2);
+    if (FAILED(damageResult))
+    {
+        return damageResult;
+    }
     if (!GetDeviceContext(output_->Owner().Device())->d3d12SwapChainSupported ||
         !IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainSetDevice2) ||
         !IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2))
@@ -512,6 +517,7 @@ HRESULT SwapChainD3D12::CopyFrame(ID3D12Resource* source, NvU64 frameNumber) noe
         for (auto& buffer : buffers_)
         {
             buffer.verified = false;
+            buffer.partialVerified = false;
         }
     }
     const auto desc = source->GetDesc();
@@ -575,6 +581,20 @@ HRESULT SwapChainD3D12::CopyFrame(ID3D12Resource* source, NvU64 frameNumber) noe
     }
     timing_.path = direct ? 5 : 6;
     timing_.verification = direct && !buffer.verified;
+    if (damage_.Rectangles().empty())
+    {
+        timing_.verification = false;
+        return S_OK;
+    }
+    const bool partial = damage_.Enabled() &&
+        (damage_.Rectangles().size() != 1 || damage_.Rectangles()[0].top != 0 ||
+         static_cast<UINT>(damage_.Rectangles()[0].bottom) != desc.Height);
+    if (direct && damage_.Enabled())
+    {
+        ++buffer.framesSinceVerification;
+        timing_.verification = timing_.verification ||
+            (partial && !buffer.partialVerified) || buffer.framesSinceVerification >= 120;
+    }
     D3D12_TEXTURE_COPY_LOCATION sourceLocation = {};
     sourceLocation.pResource = source;
     sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -606,7 +626,20 @@ HRESULT SwapChainD3D12::CopyFrame(ID3D12Resource* source, NvU64 frameNumber) noe
     }
     // COPY-queue accesses use COMMON-state implicit promotion and decay at
     // ExecuteCommandLists boundaries, including the imported linear buffer.
-    commands_->CopyTextureRegion(&target, 0, 0, 0, &sourceLocation, nullptr);
+    if (damage_.Enabled())
+    {
+        for (const RECT& rectangle : damage_.Rectangles())
+        {
+            const D3D12_BOX box = {
+                static_cast<UINT>(rectangle.left), static_cast<UINT>(rectangle.top), 0,
+                static_cast<UINT>(rectangle.right), static_cast<UINT>(rectangle.bottom), 1};
+            commands_->CopyTextureRegion(&target, box.left, box.top, 0, &sourceLocation, &box);
+        }
+    }
+    else
+    {
+        commands_->CopyTextureRegion(&target, 0, 0, 0, &sourceLocation, nullptr);
+    }
     if (timing_.verification)
     {
         commands_->CopyTextureRegion(&reference, 0, 0, 0, &sourceLocation, nullptr);
@@ -696,10 +729,12 @@ HRESULT SwapChainD3D12::CopyFrame(ID3D12Resource* source, NvU64 frameNumber) noe
             }
         }
         buffer.verified = true;
+        buffer.partialVerified = partial;
+        buffer.framesSinceVerification = 0;
         TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
-            "D3D12 WDF pixel verification passed: slot=%u bytes=%llu original=%p mapped=%p pitch=%u format=%u",
+            "D3D12 WDF pixel verification passed: slot=%u bytes=%llu original=%p mapped=%p pitch=%u format=%u partial=%u",
             output_->BackBufferIndex(), static_cast<NvU64>(rowBytes) * desc.Height,
-            buffer.pixels, mapped, output_->ScanoutPitch(), desc.Format);
+            buffer.pixels, mapped, output_->ScanoutPitch(), desc.Format, partial);
     }
     if (!direct)
     {
@@ -734,7 +769,7 @@ HRESULT SwapChainD3D12::CopyFrame(ID3D12Resource* source, NvU64 frameNumber) noe
             }
         });
         const NvU64 copyStart = PerformanceCounter();
-        result = frame::CopyPixels(*output_, info, destinationPixels);
+        result = frame::CopyPixels(*output_, info, destinationPixels, damage_.Rectangles());
         timing_.copyTicks = PerformanceCounter() - copyStart;
     }
     return result;
@@ -781,13 +816,14 @@ void SwapChainD3D12::RecordTiming(
     bool dropped, NvU64 totalTicks) noexcept
 {
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
-        "D3D12 timing us: frame=%llu path=%u staging=%llu gpuWait=%llu map=%llu cpuCopy=%llu unmap=%llu upload=%llu total=%llu dropped=%u verification=%u head=%u width=%llu height=%u format=%u transfer=%llu",
+        "D3D12 timing us: frame=%llu path=%u staging=%llu gpuWait=%llu map=%llu cpuCopy=%llu unmap=%llu upload=%llu total=%llu dropped=%u verification=%u head=%u width=%llu height=%u format=%u transfer=%llu bytes=%llu regions=%u",
         frameNumber, timing_.path, Microseconds(timing_.stagingTicks),
         Microseconds(timing_.readbackTicks), Microseconds(timing_.mapTicks),
         Microseconds(timing_.copyTicks), Microseconds(timing_.unmapTicks),
         Microseconds(present.uploadTicks), Microseconds(totalTicks), dropped, timing_.verification,
         output_->AssignedHead(), readbackSourceDesc_.Width, readbackSourceDesc_.Height,
-        readbackSourceDesc_.Format, Microseconds(timing_.transferTicks));
+        readbackSourceDesc_.Format, Microseconds(timing_.transferTicks),
+        present.uploadBytes, present.uploadRegions);
     if (timing_.verification || frameNumber < 8 ||
         (mode_ == 3 && frameNumber % 120 < 8))
     {
@@ -875,6 +911,20 @@ void SwapChainD3D12::Process() noexcept
         auto guard = output_->LockFrameStateShared();
         auto unmap = wil::scope_exit([&]() noexcept { UnmapFrame(); });
         UpdateHdrMetadata(buffer.MetaData);
+        const UINT bufferIndex = output_->BackBufferIndex();
+        const auto* frameMode = display_modes::FindDisplayMode(
+            output_->DisplayState(), output_->ActiveModeIndex());
+        if (frameMode == nullptr)
+        {
+            result = E_UNEXPECTED;
+            break;
+        }
+        result = damage_.Prepare(frameMode->hVisible, frameMode->vVisible,
+            buffer.MetaData.PresentationFrameNumber, buffer.MetaData.DirtyRectCount, 0, bufferIndex);
+        if (FAILED(result))
+        {
+            break;
+        }
         result = CopyFrame(source.get(), frameNumber);
         if (FAILED(result))
         {
@@ -903,12 +953,20 @@ void SwapChainD3D12::Process() noexcept
         layer.hdrMetadata = currentHdrMetadata_;
         layer.hdrMetadataEnabled = hasCurrentHdrMetadata_ ? NV_TRUE : NV_FALSE;
         layer.colorTransform = &output_->ColorTransform();
+        damage_.ApplyToLayer(layer);
         NV_KMS_WINDOWS_PRESENT_TIMING present = {};
         const NV_STATUS status = NvKmsWindowsPresentLayersTimed(
             output_->AssignedHead(), output_->DisplayState().displayHandle,
             &layer, 1, NV_TRUE, &present);
         if (status == NV_OK)
         {
+            result = damage_.Commit(bufferIndex);
+            if (FAILED(result))
+            {
+                TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                    "D3D12 dirty-buffer commit failed: result=0x%08X buffer=%u", result, bufferIndex);
+                break;
+            }
             output_->CommitPresent();
         }
         else if (status != NV_ERR_IN_USE)

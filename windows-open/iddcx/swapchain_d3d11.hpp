@@ -9,6 +9,7 @@
 #include <wil/resource.h>
 
 #include "nvkms_windows.h"
+#include "swapchain_damage.hpp"
 
 namespace nv::iddcx {
 
@@ -80,6 +81,7 @@ private:
     bool readbackVerified_ = false;
     NvU32 readbackMode_ = 0;
     NvU64 textureFrameCount_ = 0;
+    SwapChainDamage damage_;
     LARGE_INTEGER counterFrequency_ = {};
     struct
     {

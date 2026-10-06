@@ -598,6 +598,9 @@ enum NvKmsKapiAllocationType {
     NVKMS_KAPI_ALLOCATION_TYPE_SCANOUT = 0,
     NVKMS_KAPI_ALLOCATION_TYPE_NOTIFIER = 1,
     NVKMS_KAPI_ALLOCATION_TYPE_OFFSCREEN = 2,
+#if defined(NV_WINDOWS_IDDCX)
+    NVKMS_KAPI_ALLOCATION_TYPE_CACHED_PIXEL_STAGING = 3,
+#endif
 };
 
 struct NvKmsKapiAllocateMemoryParams {
@@ -1068,6 +1071,17 @@ struct NvKmsKapiFunctionsTable {
         const struct NvKmsKapiMemory *srcMemory,
         NvU64 size
     );
+
+#if defined(NV_WINDOWS)
+    NvBool (*copyMemoryRange)
+    (
+        struct NvKmsKapiDevice *device,
+        struct NvKmsKapiMemory *dstMemory,
+        const struct NvKmsKapiMemory *srcMemory,
+        NvU64 offset,
+        NvU64 size
+    );
+#endif
 
     /*!
      * Check if memory object allocated is video memory.

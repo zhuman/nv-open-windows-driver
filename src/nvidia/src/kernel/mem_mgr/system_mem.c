@@ -41,6 +41,10 @@
 
 #include "class/cl003e.h" // NV01_MEMORY_SYSTEM
 
+#if defined(NV_WINDOWS) && defined(NV_USER_MODE)
+#include "nvplatform_memory_rm.h"
+#endif
+
 static NvU64
 _sysmemGetNextSmallestPageSize
 (
@@ -277,6 +281,11 @@ sysmemConstruct_IMPL
             memdescSetFlag(pMemDesc, MEMDESC_FLAGS_MEMORY_TYPE_DISPLAY_NISO, NV_TRUE);
 
         memdescSetFlag(pMemDesc, MEMDESC_FLAGS_SYSMEM_OWNED_BY_CLIENT, NV_TRUE);
+
+#if defined(NV_WINDOWS) && defined(NV_USER_MODE)
+        memdescSetFlag(pMemDesc, NV_PLATFORM_RM_MEMDESC_CACHED_PIXEL_STAGING,
+            pAllocData->tag == NV_PLATFORM_RM_CACHED_PIXEL_STAGING_TAG);
+#endif
 
         if ((sysGetStaticConfig(SYS_GET_INSTANCE()))->bOsCCEnabled &&
             gpuIsCCorApmFeatureEnabled(pGpu) 

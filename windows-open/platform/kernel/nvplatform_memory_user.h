@@ -11,6 +11,7 @@ typedef NV_STATUS (*NV_PLATFORM_DMA_ALLOCATE)(
     NvU64 size,
     NvU64 alignment,
     NV_PLATFORM_RM_MEMORY_CACHE_TYPE cacheType,
+    NV_PLATFORM_RM_MEMORY_PURPOSE purpose,
     void** providerAllocation,
     void** address,
     NvU64* logicalAddress);
