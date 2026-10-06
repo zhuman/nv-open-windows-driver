@@ -23,7 +23,8 @@ inline NTSTATUS QueryDriverParameterDword(PCWSTR name, ULONG* value) noexcept
 
 inline bool DriverParameterAbsent(NTSTATUS status) noexcept
 {
-    return status == STATUS_OBJECT_NAME_NOT_FOUND ||
+    return status == STATUS_NO_SUCH_FILE ||
+        status == STATUS_OBJECT_NAME_NOT_FOUND ||
         status == STATUS_OBJECT_PATH_NOT_FOUND;
 }
 

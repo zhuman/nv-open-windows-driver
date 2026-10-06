@@ -72,6 +72,10 @@ int main()
     parameters.api = parameters.mode = parameters.dirty = 99;
     ExpectMode(parameters, 1);
     ExpectDirty(parameters, 1);
+    parameters.apiStatus = parameters.modeStatus = parameters.dirtyStatus =
+        STATUS_NO_SUCH_FILE;
+    ExpectMode(parameters, 1);
+    ExpectDirty(parameters, 1);
 
     parameters.apiStatus = parameters.modeStatus = parameters.dirtyStatus = STATUS_SUCCESS;
     for (const ULONG api : {0UL, 11UL, 12UL})

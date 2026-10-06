@@ -1234,6 +1234,28 @@ the output, every valid API/mode combination, explicit dirty disable, invalid
 values, and registry access/type errors. This revision was built and tested
 locally; it does not deploy or restart the restored target.
 
+Default-policy deployment exposed a framework missing-key status not returned
+by the earlier explicit-setting experiments: UMDF can return
+`STATUS_NO_SUCH_FILE` when the Parameters key itself is absent. It is treated
+as absence alongside name/path-not-found, so no registry key or explicit
+experiment values are required. The regression tests cover this status even
+when the failed query changes the output. Other registry errors still propagate.
+
+The corrected default-policy build was deployed and **left installed** on the
+target as `oem181.inf`, DLL SHA-256
+`DF20D23E2FCCBEB8FB9FC2934A28C0E1F32D4C41281087133559A789C3779251`.
+Loaded-module identity and device OK/problem 0 were freshly verified, with all
+six experiment DWORDs absent. Native direct path 5 and accumulated damage were
+confirmed in runtime traces without explicit selection values. A 60-second
+sparse-scene test yielded 884 accepted steady-window uploads, all partial,
+9,000,960 bytes each, at most two regions, mean CE 12.305 ms / median 12.310 ms.
+Both slots passed repeated complete-image verification: 18 passes, including
+16 after partial updates. Only two allocations carried cached-pixel provenance.
+The ETL decoded with zero losses, unknowns, or format errors. ShadowCast
+confirmed the intact animated scene and final desktop. The validation task and
+owned loggers were removed; no rollback, reboot, or registry override remains
+after this successful deployment. The original exported package is retained.
+
 If pure UMDF cannot bridge WDF's DMA mapping to an RM/GPU-visible address, keep
 the CPU path fully functional and choose explicitly between shipping without
 DMA or using an uncertified experimental KMDF transport companion. Microsoft
