@@ -81,7 +81,8 @@ void ReleaseAperture(Aperture& aperture) noexcept
 {
     if (aperture.resource != nullptr)
     {
-        aperture.resource->provider.unmap(aperture.access.context);
+        aperture.resource->provider.unmap(
+            aperture.resource->provider.context, aperture.access.context);
     }
     if (aperture.read32Cache != nullptr)
     {
@@ -377,7 +378,7 @@ extern "C" NV_STATUS NvPlatformRmMapPhysical(
         {
             if (access.context != nullptr)
             {
-                resource.provider.unmap(access.context);
+                resource.provider.unmap(resource.provider.context, access.context);
             }
             result = status == StatusInsufficientResources ?
                 NV_ERR_NO_MEMORY : NV_ERR_OPERATING_SYSTEM;

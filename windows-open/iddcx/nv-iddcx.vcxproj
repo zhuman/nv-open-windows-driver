@@ -57,6 +57,7 @@
     <ClCompile Include="hardware_services.cpp" />
     <ClCompile Include="hwcursor.cpp" />
     <ClCompile Include="output.cpp" />
+    <ClCompile Include="pci_bars.cpp" />
     <ClCompile Include="swapchain_d3d11.cpp" />
     <ClCompile Include="swapchain_d3d12.cpp" />
     <ClCompile Include="swapchain_damage.cpp" />
@@ -76,6 +77,7 @@
     <ClInclude Include="..\platform\kernel\nvplatform_memory_resource.hpp" />
     <ClInclude Include="hwcursor.h" />
     <ClInclude Include="output.hpp" />
+    <ClInclude Include="pci_bars.hpp" />
     <ClInclude Include="swapchain_d3d11.hpp" />
     <ClInclude Include="swapchain_d3d12.hpp" />
     <ClInclude Include="swapchain_damage.hpp" />

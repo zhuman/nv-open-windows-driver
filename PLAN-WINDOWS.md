@@ -636,14 +636,35 @@ Prefer allocation-aware RM mapping over arithmetic on PCI BAR addresses:
   can be selected. Hardware release
   drains any remaining mappings after RM/NVKMS stop. Requests outside the BAR,
   beyond the per-map limit, or with conflicting cache policy fail explicitly.
-- `RegisterAperture::InitializeMemoryBar()` and the RM attach builder now share
-  checked `CmResourceTypeMemory`/`CmResourceTypeMemoryLarge` decoding, including
+- `PciBars` owns an indexed collection of uniform `PciBar` objects with an
+  explicit policy table: BAR0 eager/noncached, BAR1 demand/write-combined,
+  BAR2 eager/write-combined. These are RM memory-aperture indices, not PCI
+  configuration DWORD positions. `ConfigSpace` discovers PCI addresses;
+  `PciBar` resolves assigned resources and owns registrations/mappings, while
+  `RegisterAperture` is a generic RAII WDF mapping/access backend.
+  Nonmovable owners keep callback contexts stable, WIL handles unregister
+  before smart-owned mappings are released, and one preparation scope guard
+  preserves RM/NVKMS-before-BAR cleanup. Recovery suspends/restores demand
+  providers without rebuilding fixed mappings or framework interrupt/DMA
+  objects.
+- BAR resource preparation and the RM attach builder use the same resolved,
+  checked `CmResourceTypeMemory`/`CmResourceTypeMemoryLarge` metadata, including
   40/48/64-bit encoded lengths. PCI config addresses match raw descriptors;
   the corresponding translated descriptor supplies the mapped address and
   full 64-bit size. Missing, inconsistent, or ambiguous matches fail instead
   of selecting the next memory resource. BAR0/BAR2 remain eager mappings and
   register their actual translated bases; BAR1 is a write-combined demand
   provider wired into preparation, RM attach metadata, and teardown.
+- Ownership-refactor validation additionally runs 333 checks against production
+  `PciBar`/`PciBars` with mock config/WDF backends, including failure/destructor
+  cleanup with live leases and demand-only recovery preserving fixed mappings.
+  IddCx sources compile for ARM64; ARM64 linking/hardware remain untested.
+  Reassessment of final signed x64 `oem199.inf` (2026-10-07) recovered GSP
+  timeouts in both original startup hosts, kept the restarted host stable for
+  60 seconds, preserved mode/layout and the AMD primary, and passed read-only
+  DDC brightness/capabilities-string checks. The loaded DLL hash was verified;
+  there were no new UMDF WER reports. The 12-second animation produced 374
+  paints with 547 uploads/547 latches in ETW, not camera-verified frames.
 - Local validation: over 200,000 resource/mapping checks and 8,000 concurrent
   map/unmap cycles pass against the production decoder/registry. Tests cover
   full 16-GiB resource metadata, high offsets, crossing 4-GiB boundaries,

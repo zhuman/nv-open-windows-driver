@@ -7,7 +7,7 @@ extern "C" {
 #include <wudfwdm.h>
 }
 
-#include "nvplatform_memory_resource.hpp"
+#include "nvplatform_mmio_user.h"
 
 namespace nv::iddcx {
 
@@ -25,12 +25,6 @@ struct PciIdentity final
     UCHAR programmingInterface;
     UCHAR subclass;
     UCHAR baseClass;
-};
-
-struct BootIdentity final
-{
-    ULONG boot0;
-    ULONG boot42;
 };
 
 using DeviceResetHandler = NTSTATUS (NTAPI*)(
@@ -129,12 +123,6 @@ public:
     [[nodiscard]] const PciIdentity* Identity() const noexcept;
     [[nodiscard]] ULONG MemoryBarCount() const noexcept;
     [[nodiscard]] PHYSICAL_ADDRESS MemoryBarAddress(_In_ ULONG index) const noexcept;
-    [[nodiscard]] PHYSICAL_ADDRESS RegisterBarAddress() const noexcept;
-    NTSTATUS ResolveMemoryBar(
-        _In_ WDFCMRESLIST resourcesRaw,
-        _In_ WDFCMRESLIST resourcesTranslated,
-        _In_ ULONG index,
-        _Out_ nv::platform::MemoryResource* resource) const noexcept;
 
 private:
     BUS_INTERFACE_STANDARD interface_;
@@ -148,19 +136,12 @@ private:
 class RegisterAperture final
 {
 public:
-    NTSTATUS Initialize(
-        _In_ WDFDEVICE device,
-        _In_ WDFCMRESLIST resourcesRaw,
-        _In_ WDFCMRESLIST resourcesTranslated,
-        _In_ const ConfigSpace& configSpace) noexcept;
-
-    NTSTATUS InitializeMemoryBar(
-        _In_ WDFDEVICE device,
-        _In_ WDFCMRESLIST resourcesRaw,
-        _In_ WDFCMRESLIST resourcesTranslated,
-        _In_ const ConfigSpace& configSpace,
-        _In_ ULONG barIndex,
-        _In_ MEMORY_CACHING_TYPE cacheType) noexcept;
+    RegisterAperture() noexcept = default;
+    ~RegisterAperture() noexcept { Reset(); }
+    RegisterAperture(const RegisterAperture&) = delete;
+    RegisterAperture& operator=(const RegisterAperture&) = delete;
+    RegisterAperture(RegisterAperture&&) = delete;
+    RegisterAperture& operator=(RegisterAperture&&) = delete;
 
     NTSTATUS InitializeRange(
         _In_ WDFDEVICE device,
@@ -186,15 +167,22 @@ public:
     [[nodiscard]] volatile void* Address() const noexcept;
     [[nodiscard]] SIZE_T Length() const noexcept;
     [[nodiscard]] PHYSICAL_ADDRESS PhysicalAddress() const noexcept;
-    [[nodiscard]] const BootIdentity* Identity() const noexcept;
+    [[nodiscard]] NV_PLATFORM_MMIO_ACCESS Access() noexcept;
 
 private:
-    WDFDEVICE device_;
-    void* pseudoAddress_;
-    void* address_;
-    SIZE_T length_;
-    PHYSICAL_ADDRESS physicalAddress_;
-    BootIdentity identity_;
+    static UCHAR ReadMmio8(void* context, SIZE_T offset);
+    static USHORT ReadMmio16(void* context, SIZE_T offset);
+    static ULONG ReadMmio32(void* context, SIZE_T offset);
+    static void ReadMmioBuffer32(void* context, SIZE_T offset, ULONG* buffer, ULONG count);
+    static void WriteMmio8(void* context, SIZE_T offset, UCHAR value);
+    static void WriteMmio16(void* context, SIZE_T offset, USHORT value);
+    static void WriteMmio32(void* context, SIZE_T offset, ULONG value);
+
+    WDFDEVICE device_ = nullptr;
+    void* pseudoAddress_ = nullptr;
+    void* address_ = nullptr;
+    SIZE_T length_ = 0;
+    PHYSICAL_ADDRESS physicalAddress_ = {};
 };
 
 class DmaEngine final

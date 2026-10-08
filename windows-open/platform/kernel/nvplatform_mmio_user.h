@@ -40,8 +40,8 @@ typedef struct NV_PLATFORM_MMIO_MAPPING_PROVIDER
         NV_PLATFORM_MMIO_CACHE_TYPE cacheType,
         volatile void** address,
         NV_PLATFORM_MMIO_ACCESS* access);
-    // A successful map transfers access.context to this callback.
-    void (*unmap)(void* mappingContext);
+    // The provider owns access.context until unmap, including incomplete maps.
+    void (*unmap)(void* context, void* mappingContext);
 } NV_PLATFORM_MMIO_MAPPING_PROVIDER;
 
 NTSTATUS NvPlatformRegisterMmioAperture(

@@ -1,0 +1,6 @@
+#pragma once
+
+#include <evntrace.h>
+
+void RecordBarTrace(UCHAR level) noexcept;
+#define TraceEvents(level, flags, ...) RecordBarTrace(level)

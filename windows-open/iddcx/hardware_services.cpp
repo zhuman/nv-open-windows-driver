@@ -21,9 +21,6 @@ constexpr ULONG PciCapabilitiesPointerOffset = 0x34;
 constexpr UCHAR PciCapabilityMsi = 0x05;
 constexpr UCHAR PciCapabilityMsiX = 0x11;
 constexpr size_t MaximumDmaTransferLength = 0xFFFFFFFFull;
-constexpr ULONG PmcBoot0Offset = 0x00000000;
-constexpr ULONG PmcBoot42Offset = 0x00000A00;
-constexpr SIZE_T RequiredIdentityLength = PmcBoot42Offset + sizeof(ULONG);
 constexpr ULONG PciBarAddressMask = ~0x0Ful;
 constexpr ULONG PciBarMemoryTypeMask = 0x6;
 constexpr ULONG PciBarMemoryType64 = 0x4;
@@ -35,7 +32,6 @@ constexpr ULONG PciDeviceNumberMask = 0x0000001F;
 constexpr ULONG PciFunctionNumberMask = 0x000000E0;
 constexpr ULONG PciFunctionNumberShift = 5;
 constexpr ULONG PciSlotReservedMask = 0xFFFFFF00;
-constexpr ULONG InvalidRegisterValue = static_cast<ULONG>(-1);
 
 struct PciCommonHeader final
 {
@@ -602,118 +598,6 @@ PHYSICAL_ADDRESS ConfigSpace::MemoryBarAddress(_In_ ULONG index) const noexcept
     return index < memoryBarCount_ ? memoryBarAddresses_[index] : address;
 }
 
-PHYSICAL_ADDRESS ConfigSpace::RegisterBarAddress() const noexcept
-{
-    return MemoryBarAddress(0);
-}
-
-NTSTATUS ConfigSpace::ResolveMemoryBar(
-    WDFCMRESLIST resourcesRaw,
-    WDFCMRESLIST resourcesTranslated,
-    ULONG index,
-    nv::platform::MemoryResource* resource) const noexcept
-{
-    if (index >= memoryBarCount_ || resourcesRaw == nullptr ||
-        resourcesTranslated == nullptr || resource == nullptr)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-    return nv::platform::ResolveMemoryBar(
-        static_cast<ULONGLONG>(memoryBarAddresses_[index].QuadPart),
-        WdfCmResourceListGetCount(resourcesRaw),
-        WdfCmResourceListGetCount(resourcesTranslated),
-        [resourcesRaw](ULONG resourceIndex) {
-            return WdfCmResourceListGetDescriptor(resourcesRaw, resourceIndex);
-        },
-        [resourcesTranslated](ULONG resourceIndex) {
-            return WdfCmResourceListGetDescriptor(resourcesTranslated, resourceIndex);
-        },
-        resource);
-}
-
-NTSTATUS RegisterAperture::Initialize(
-    _In_ WDFDEVICE device,
-    _In_ WDFCMRESLIST resourcesRaw,
-    _In_ WDFCMRESLIST resourcesTranslated,
-    _In_ const ConfigSpace& configSpace) noexcept
-{
-    NTSTATUS status = InitializeMemoryBar(
-        device,
-        resourcesRaw,
-        resourcesTranslated,
-        configSpace,
-        0,
-        MmNonCached);
-    if (!NT_SUCCESS(status))
-    {
-        return status;
-    }
-
-    status = Read32(PmcBoot0Offset, &identity_.boot0);
-    if (NT_SUCCESS(status))
-    {
-        status = Read32(PmcBoot42Offset, &identity_.boot42);
-    }
-
-    TraceEvents(
-        NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
-        TRACE_PCI,
-        "BAR0 identity: status=%!STATUS! boot0=0x%08X boot42=0x%08X length=0x%llX",
-        status,
-        identity_.boot0,
-        identity_.boot42,
-        static_cast<ULONGLONG>(length_));
-
-    if (!NT_SUCCESS(status) ||
-        (identity_.boot0 == InvalidRegisterValue &&
-         identity_.boot42 == InvalidRegisterValue))
-    {
-        Reset();
-        return NT_SUCCESS(status) ? STATUS_DEVICE_DOES_NOT_EXIST : status;
-    }
-
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS RegisterAperture::InitializeMemoryBar(
-    _In_ WDFDEVICE device,
-    _In_ WDFCMRESLIST resourcesRaw,
-    _In_ WDFCMRESLIST resourcesTranslated,
-    _In_ const ConfigSpace& configSpace,
-    _In_ ULONG barIndex,
-    _In_ MEMORY_CACHING_TYPE cacheType) noexcept
-{
-    Reset();
-
-    nv::platform::MemoryResource range = {};
-    NTSTATUS status = configSpace.ResolveMemoryBar(
-        resourcesRaw, resourcesTranslated, barIndex, &range);
-    if (!NT_SUCCESS(status))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_PCI,
-            "memory BAR resolution failed: index=%u status=%!STATUS!", barIndex, status);
-        return status;
-    }
-    if (range.length > NV_PLATFORM_MAX_USER_MMIO_MAPPING_LENGTH ||
-        (barIndex == 0 && range.length < RequiredIdentityLength))
-    {
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
-    }
-
-    TraceEvents(
-        TRACE_LEVEL_INFORMATION,
-        TRACE_PCI,
-        "memory BAR resource: index=%u config=0x%llX translated=0x%llX length=0x%llX flags=0x%X",
-        barIndex,
-        configSpace.MemoryBarAddress(barIndex).QuadPart,
-        range.physicalAddress.QuadPart,
-        range.length,
-        range.flags);
-
-    return InitializeRange(device, range.physicalAddress,
-        static_cast<SIZE_T>(range.length), cacheType);
-}
-
 NTSTATUS RegisterAperture::InitializeRange(
     WDFDEVICE device,
     PHYSICAL_ADDRESS physicalAddress,
@@ -793,7 +677,6 @@ void RegisterAperture::Reset() noexcept
     address_ = nullptr;
     length_ = 0;
     physicalAddress_ = {};
-    RtlZeroMemory(&identity_, sizeof(identity_));
 }
 
 UCHAR RegisterAperture::ReadRegister8(_In_ SIZE_T offset) const noexcept
@@ -901,9 +784,46 @@ PHYSICAL_ADDRESS RegisterAperture::PhysicalAddress() const noexcept
     return physicalAddress_;
 }
 
-const BootIdentity* RegisterAperture::Identity() const noexcept
+NV_PLATFORM_MMIO_ACCESS RegisterAperture::Access() noexcept
 {
-    return IsMapped() ? &identity_ : nullptr;
+    return { this, ReadMmio8, ReadMmio16, ReadMmio32, ReadMmioBuffer32,
+        WriteMmio8, WriteMmio16, WriteMmio32 };
+}
+
+UCHAR RegisterAperture::ReadMmio8(void* context, SIZE_T offset)
+{
+    return static_cast<RegisterAperture*>(context)->ReadRegister8(offset);
+}
+
+USHORT RegisterAperture::ReadMmio16(void* context, SIZE_T offset)
+{
+    return static_cast<RegisterAperture*>(context)->ReadRegister16(offset);
+}
+
+ULONG RegisterAperture::ReadMmio32(void* context, SIZE_T offset)
+{
+    return static_cast<RegisterAperture*>(context)->ReadRegister32(offset);
+}
+
+void RegisterAperture::ReadMmioBuffer32(
+    void* context, SIZE_T offset, ULONG* buffer, ULONG count)
+{
+    static_cast<RegisterAperture*>(context)->ReadRegisterBuffer32(offset, buffer, count);
+}
+
+void RegisterAperture::WriteMmio8(void* context, SIZE_T offset, UCHAR value)
+{
+    static_cast<RegisterAperture*>(context)->WriteRegister8(offset, value);
+}
+
+void RegisterAperture::WriteMmio16(void* context, SIZE_T offset, USHORT value)
+{
+    static_cast<RegisterAperture*>(context)->WriteRegister16(offset, value);
+}
+
+void RegisterAperture::WriteMmio32(void* context, SIZE_T offset, ULONG value)
+{
+    static_cast<RegisterAperture*>(context)->WriteRegister32(offset, value);
 }
 
 NTSTATUS DmaEngine::Initialize(_In_ WDFDEVICE device) noexcept

@@ -351,6 +351,22 @@ that Windows had left the framebuffer aperture unassigned.
 
 The source now:
 
+- Owns the RM-visible memory BARs in an indexed `PciBars` collection, using
+  the same `PciBar` owner and a mapping/cache policy table for each entry.
+  These indices identify the first three memory BARs (register/framebuffer/
+  instance-memory), not PCI configuration DWORD positions; 64-bit BAR pairs
+  are consumed by `ConfigSpace` during address discovery.
+- Keeps PCI configuration access/address discovery in `ConfigSpace`, assigned
+  resource resolution and registration in `PciBar`, and generic WDF mapping/
+  access callbacks in `RegisterAperture`. The latter no longer probes BAR0
+  identity or resolves CM resources; `PciBars` performs the GPU identity check.
+- Uses noncopyable/nonmovable owners, `std::unique_ptr` mappings and WIL RAII
+  registration handles. Provider unmap receives its owner context, so mappings
+  remain smart-owned instead of transferring raw allocation ownership through
+  the callback ABI. Registrations are removed before their mappings are freed.
+  Preparation failures use one scope-exit hardware cleanup path, stopping
+  RM/NVKMS before releasing BARs. Startup recovery suspends/restores only
+  demand providers; fixed mappings, DMA, and WDF interrupts stay intact.
 - Decodes ordinary memory and all `MEMORY_LARGE` 40/48/64-bit length encodings
   without truncating the complete BAR size.
 - Matches each PCI BAR address against the raw resource list, then uses the
@@ -401,10 +417,31 @@ map/unmap cycles**, using the production decoder and mapping registry:
 & .\windows-open\iddcx\tests\run-bar-resource-tests.ps1
 ```
 
+The same runner executes **333 production `PciBar`/`PciBars` ownership/lifecycle
+checks** with mock PCI config and WDF mapping backends. These cover partial
+initialization cleanup, destruction with live aliases, demand-provider
+suspension/restoration while fixed mappings stay unchanged, reinitialization,
+and rejection of invalid restoration without draining existing leases.
+
 The x64 IddCx and experimental KMDOD compatibility builds pass, as do DDC and
 presentation regressions. ARM64 kernel/user platform libraries also build;
-the full ARM64 driver and ARM64 hardware remain untested. Unit tests use a mock
+the IddCx sources compile for ARM64, but full ARM64 driver linking and ARM64
+hardware remain untested. Unit tests use a mock
 backend, now enforcing one active mapping, not the real WDF mapping APIs.
+
+**Ownership-refactor reassessment (2026-10-07):** signed x64 package
+`oem199.inf`, DLL SHA-256
+`AF01BA5A96C82177E850D19D7D336E43F79477F95D66AF4BBFF4AC8AB06C83EC`,
+initialized and passed a deliberate warm restart. Each startup hit a real GSP
+`NV_ERR_TIMEOUT` and recovered within its own original host after one in-place
+reset/retry, without external recovery commands. The restarted host remained
+stable for 60 seconds with problem code 0; the loaded DLL hash was verified.
+Mode/layout matched the baseline, including the unchanged AMD primary.
+Read-only DDC returned brightness 80 and the capabilities string. A 12-second
+animation produced 374 application paints; ETW recorded 547 uploads and 547
+latches. No new UMDF host/verifier WER reports or owned test tasks/loggers
+remained. These are pipeline/runtime observations, not camera verification
+or proof of uninterrupted physical output.
 
 **RTX 4070 deployment assessment (2026-10-07):**
 

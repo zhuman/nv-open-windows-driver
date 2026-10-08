@@ -7,6 +7,7 @@
 #include "adapter.hpp"
 #include "common_services.hpp"
 #include "hardware_services.hpp"
+#include "pci_bars.hpp"
 #include "nvplatform_gpu_rm.h"
 #include "nvplatform_memory_user.h"
 #include "nvplatform_mmio_user.h"
@@ -22,11 +23,7 @@ struct DeviceContext final
     DeviceResetInterface deviceReset;
     ConfigSpace configSpace;
     void* pciConfigRegistration;
-    RegisterAperture registerAperture;
-    void* mmioRegistration;
-    void* bar1ResourceRegistration;
-    RegisterAperture bar2Aperture;
-    void* bar2MmioRegistration;
+    PciBars bars;
     DmaEngine dmaEngine;
     void* dmaRegistration;
     Interrupt interrupt;

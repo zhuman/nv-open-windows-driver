@@ -15,6 +15,7 @@ extern "C" {
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <new>
 #include <thread>
 
@@ -156,6 +157,8 @@ void TestResources()
     Check(!nv::platform::IsSupportedUserMmioRange(0x1000, 1, 3000));
 }
 
+struct Mapping;
+
 struct Backend
 {
     unsigned maps = 0;
@@ -166,6 +169,7 @@ struct Backend
     unsigned duplicateMaps = 0;
     ULONGLONG lastStart = 0;
     SIZE_T lastLength = 0;
+    std::unique_ptr<Mapping> mapping;
 };
 
 struct Mapping
@@ -240,29 +244,32 @@ NTSTATUS Map(void* context, ULONGLONG start, SIZE_T length,
     {
         return STATUS_INVALID_PARAMETER;
     }
-    auto* mapping = new Mapping{};
+    auto mapping = std::make_unique<Mapping>();
     mapping->backend = &backend;
     mapping->reservedAddress = VirtualAlloc(nullptr, length, MEM_RESERVE, PAGE_NOACCESS);
     if (mapping->reservedAddress == nullptr)
     {
-        delete mapping;
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     ++backend.active;
     backend.lastStart = start;
     backend.lastLength = length;
-    *access = Access(mapping);
+    *access = Access(mapping.get());
     *address = backend.incomplete ? nullptr : mapping->reservedAddress;
+    backend.mapping = std::move(mapping);
     return STATUS_SUCCESS;
 }
 
-void Unmap(void* context)
+void Unmap(void* context, void* mappingContext)
 {
-    auto* mapping = static_cast<Mapping*>(context);
-    ++mapping->backend->unmaps;
-    --mapping->backend->active;
+    auto& backend = *static_cast<Backend*>(context);
+    auto* mapping = static_cast<Mapping*>(mappingContext);
+    Check(mapping == backend.mapping.get());
+    Check(mapping->backend == &backend);
+    ++backend.unmaps;
+    --backend.active;
     Check(VirtualFree(mapping->reservedAddress, 0, MEM_RELEASE) != FALSE);
-    delete mapping;
+    backend.mapping.reset();
 }
 
 NV_STATUS MapPhysical(NvU64 start, NvU64 length, void** address,
