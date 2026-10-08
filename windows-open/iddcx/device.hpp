@@ -24,6 +24,7 @@ struct DeviceContext final
     void* pciConfigRegistration;
     RegisterAperture registerAperture;
     void* mmioRegistration;
+    void* bar1ResourceRegistration;
     RegisterAperture bar2Aperture;
     void* bar2MmioRegistration;
     DmaEngine dmaEngine;

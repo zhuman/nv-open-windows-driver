@@ -133,14 +133,21 @@ but do not mark them as hardware-validated:
   status and acknowledgement logic.
 
 The IddCx path has now passed the original RM/GSP/NVKMS bring-up gate on an
-RTX 4070 (`DEV_2786`) with an ASUS PG27U connected over DisplayPort. UMDF maps
-BAR0 noncached and BAR2 write-combined by matching PCI BAR addresses to
-translated resources. It retains WDF pseudo addresses for framework access and
+RTX 4070 (`DEV_2786`) with an ASUS PG27U connected over DisplayPort. The
+hardware-validated baseline maps BAR0 noncached and BAR2 write-combined.
+It retains WDF pseudo addresses for framework access and
 unmapping, while `WdfDeviceGetHardwareRegisterMappedAddress` supplies the real
 process-visible mappings used by RM. BAR2 is a translated 32 MiB aperture at
 `0x2FFE000000` in that bring-up snapshot. BAR1 was reported unassigned and is
-not mapped by the UMDF path; large-memory descriptor filtering makes that
+not mapped by that baseline; large-memory descriptor filtering makes that
 assignment report provisional (see the direct-VRAM copy investigation below).
+The local source now decodes large-memory resources, resolves BAR identity
+through corresponding raw/translated descriptors, and registers the full
+64-bit BAR1 resource for bounded on-demand RM physical mappings. This hookup
+is deployed and tested on the RTX 4070: the complete 16-GiB resource backs a
+single shared sub-4-GiB CPU window. Warm restart initially required external
+recovery; the subsequent bounded in-place reset/startup retry is now tested. See
+the deployment assessment in the BAR1 implementation notes below.
 The current staging/CE upload path does not need a CPU framebuffer mapping.
 The INF must retain
 `UmdfRegisterAccessMode=RegisterAccessUsingUserModeMapping`.
@@ -616,19 +623,71 @@ Prefer allocation-aware RM mapping over arithmetic on PCI BAR addresses:
   implement the applicable hooks with bounds/cache/ownership validation and
   balanced unmapping, and propagate failure rather than returning a pointer
   from a different address space or bypassing the user-mapping contract.
-- The UMDF `NvPlatformRmMapPhysical()` implementation only accepts ranges
-  within already registered, cache-compatible physical apertures. Register a
-  framebuffer aperture only when Windows supplies its translated resource,
-  mapping it through the existing WDF hardware-resource ownership path and
-  retaining both the framework pseudo address and process-visible address.
-- `RegisterAperture::InitializeMemoryBar()` and the RM attach-info builder
-  currently recognize only `CmResourceTypeMemory`; add checked decoding of
-  `CmResourceTypeMemoryLarge` and its 40/48/64-bit lengths. The attach builder's
-  next-memory-resource fallback is not proof of BAR identity and can associate
-  BAR2 with a skipped BAR1. Match raw/translated descriptors reliably, retain
-  the translated address for mapping/registration, and explicitly wire BAR1
-  into startup, RM attach state, and teardown; currently only BAR0/BAR2 have
-  mapped addresses registered with the UMDF platform provider.
+- The UMDF `NvPlatformRmMapPhysical()` implementation now accepts both eager
+  registered apertures and bounded requests against assigned, registered
+  demand-mapped resources. BAR1 uses the existing WDF ownership path,
+  retaining both framework pseudo and process-visible addresses. Its complete
+  physical size is independent of individual mappings; page-padded backing
+  spans are limited to `0xFFFFF000` bytes, rounded down for the system page size.
+  UMDF allows only one active mapping per assigned CM resource. The first
+  request selects a bounded shared window; contained aliases are
+  reference-counted and reused. An out-of-window request while leases remain
+  returns `NV_ERR_STATE_IN_USE`; final unmap releases the window so a new one
+  can be selected. Hardware release
+  drains any remaining mappings after RM/NVKMS stop. Requests outside the BAR,
+  beyond the per-map limit, or with conflicting cache policy fail explicitly.
+- `RegisterAperture::InitializeMemoryBar()` and the RM attach builder now share
+  checked `CmResourceTypeMemory`/`CmResourceTypeMemoryLarge` decoding, including
+  40/48/64-bit encoded lengths. PCI config addresses match raw descriptors;
+  the corresponding translated descriptor supplies the mapped address and
+  full 64-bit size. Missing, inconsistent, or ambiguous matches fail instead
+  of selecting the next memory resource. BAR0/BAR2 remain eager mappings and
+  register their actual translated bases; BAR1 is a write-combined demand
+  provider wired into preparation, RM attach metadata, and teardown.
+- Local validation: over 200,000 resource/mapping checks and 8,000 concurrent
+  map/unmap cycles pass against the production decoder/registry. Tests cover
+  full 16-GiB resource metadata, high offsets, crossing 4-GiB boundaries,
+  page-padded mapping limits, cache policy, reference counts, failure cleanup,
+  resource isolation, exhaustion, teardown, and a backend enforcing the
+  one-active-mapping rule. x64 IddCx/KMDOD builds and
+  DDC/presentation regressions pass, as do ARM64 kernel/user platform library
+  builds (not a full ARM64 driver or hardware test).
+- RTX 4070 hardware assessment (2026-10-07): BAR1 is `0x2C00000000`,
+  length `0x400000000` (16 GiB). An initial successful 64-KiB WDF map was
+  followed by a verifier failure on a second mapping within that resource.
+  The corrected shared-window driver (`oem193.inf`, DLL hash prefix
+  `27E5BDFE`) maps `0xFFFFF000` bytes once and reuses aliases. Activation,
+  desktop mode/layout, D3D12 pixel verification, CE uploads/latches, and DDC
+  brightness 80 -> 105 -> 80 with exact restoration were tested. No new WER
+  host/verifier reports occurred with the corrected build.
+- Warm-restart testing released the window, but GSP returned
+  `NV_ERR_TIMEOUT` (`0x65`) before a new BAR1 map; disable/enable recovered.
+  A reset-only reproduction remained at Code 10 with no UMDF host/NVIDIA
+  display for 60 seconds. This was a timeout, not `NV_ERR_RESET_REQUIRED`.
+- The subsequent startup-recovery driver (`oem197.inf`, DLL hash prefix
+  `BA95F22D`) uses advertised PCI function-level reset in place (`KeepStackReset`)
+  and retries RM startup once after tearing down failed RM state/BAR1 leases.
+  It retains WDF interrupts, the DMA enabler, and fixed BAR0/BAR2 mappings.
+  Recreating the WDF interrupt within one preparation callback caused an
+  experimental verifier failure; the corrected RM-only retry avoids it.
+  Standard capabilities are `0x1`; bus-specific capabilities are `0x31`.
+  No platform, secondary-bus, or power-controller reset is advertised/attempted.
+  Three actual timeouts (activation and two restarts) recovered in the same
+  startup host without external assistance. Each restart then retained a healthy
+  host for 60 seconds, with no new WER host/verifier reports from the corrected
+  candidate. Presentation, layout/mode, brightness 80 and DDC string retrieval
+  pass after recovery. Reset/retry failures remain explicit and the retry is
+  bounded; unsupported in-place reset retains the standard reset fallback,
+  not an unverified in-process restart. See
+  [PCI reset/startup recovery](windows-open/README.md#pci-reset-and-startup-recovery).
+- The final driver is enabled with problem code 0 and verified presentation/DDC.
+  Automatic startup recovery does not imply uninterrupted display output or
+  recovery from arbitrary runtime hangs. High-offset hardware mappings, exact refresh/HDR
+  comparison, and physical-panel output remain unvalidated. Baseline ETW has
+  no frame events, so no before/after performance equivalence is claimed.
+  No direct-copy change was made. Keep future allocation mappings alive across
+  frames rather than introducing WDF map/unmap traffic per upload. See
+  [BAR1 implementation notes](windows-open/README.md#bar1-resources-and-bounded-mappings).
 - Earlier RTX 4070 evidence decoded BAR1 as `0x2800000000`, but the function's
   bring-up reported it unassigned while mapping BAR0 (16 MiB) and BAR2
   (32 MiB). The descriptor-filtering gap above makes that report inconclusive

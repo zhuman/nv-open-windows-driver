@@ -314,8 +314,86 @@ void WriteMmio32(void* context, SIZE_T offset, ULONG value)
     static_cast<RegisterAperture*>(context)->WriteRegister32(offset, value);
 }
 
+NV_PLATFORM_MMIO_ACCESS MakeMmioAccess(RegisterAperture* aperture) noexcept
+{
+    return { aperture, ReadMmio8, ReadMmio16, ReadMmio32, ReadMmioBuffer32,
+        WriteMmio8, WriteMmio16, WriteMmio32 };
+}
+
+NTSTATUS MapBar1Range(
+    void* context,
+    ULONGLONG physicalAddress,
+    SIZE_T length,
+    NV_PLATFORM_MMIO_CACHE_TYPE cacheType,
+    volatile void** address,
+    NV_PLATFORM_MMIO_ACCESS* access)
+{
+    *address = nullptr;
+    *access = {};
+    auto* aperture = new (std::nothrow) RegisterAperture{};
+    if (aperture == nullptr)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_PCI, "BAR1 mapping allocation failed");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    PHYSICAL_ADDRESS start = {};
+    start.QuadPart = static_cast<LONGLONG>(physicalAddress);
+    const NTSTATUS status = aperture->InitializeRange(
+        static_cast<WDFDEVICE>(context), start, length,
+        cacheType == NV_PLATFORM_MMIO_CACHE_WRITE_COMBINED ? MmWriteCombined : MmNonCached);
+    TraceEvents(NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI, "BAR1 demand mapping: status=%!STATUS! start=0x%llX length=0x%llX",
+        status, physicalAddress, static_cast<ULONGLONG>(length));
+    if (!NT_SUCCESS(status))
+    {
+        delete aperture;
+        return status;
+    }
+    *address = aperture->Address();
+    *access = MakeMmioAccess(aperture);
+    return STATUS_SUCCESS;
+}
+
+void UnmapBar1Range(void* mappingContext)
+{
+    auto* aperture = static_cast<RegisterAperture*>(mappingContext);
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_PCI,
+        "BAR1 demand unmap: start=0x%llX length=0x%llX",
+        aperture->PhysicalAddress().QuadPart, static_cast<ULONGLONG>(aperture->Length()));
+    aperture->Reset();
+    delete aperture;
+}
+
+NTSTATUS RegisterBar1Resource(
+    WDFDEVICE device,
+    DeviceContext* context,
+    WDFCMRESLIST resourcesRaw,
+    WDFCMRESLIST resourcesTranslated) noexcept
+{
+    nv::platform::MemoryResource bar1 = {};
+    NTSTATUS status = context->configSpace.ResolveMemoryBar(
+        resourcesRaw, resourcesTranslated, 1, &bar1);
+    if (NT_SUCCESS(status))
+    {
+        const NV_PLATFORM_MMIO_MAPPING_PROVIDER provider = {
+            device, MapBar1Range, UnmapBar1Range };
+        status = NvPlatformRegisterMmioResource(
+            static_cast<ULONGLONG>(bar1.physicalAddress.QuadPart),
+            bar1.length, NV_PLATFORM_MMIO_CACHE_WRITE_COMBINED,
+            &provider, &context->bar1ResourceRegistration);
+    }
+    TraceEvents(NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_PCI,
+        "BAR1 resource registration: status=%!STATUS! start=0x%llX length=0x%llX mapLimit=0x%llX",
+        status, bar1.physicalAddress.QuadPart, bar1.length,
+        NV_PLATFORM_MAX_USER_MMIO_MAPPING_LENGTH);
+    return status;
+}
+
 void ResetMmioApertures(_Inout_ DeviceContext* context) noexcept
 {
+    NvPlatformUnregisterMmioResource(context->bar1ResourceRegistration);
+    context->bar1ResourceRegistration = nullptr;
     NvPlatformUnregisterMmioAperture(context->bar2MmioRegistration);
     context->bar2MmioRegistration = nullptr;
     context->bar2Aperture.Reset();
@@ -326,6 +404,7 @@ void ResetMmioApertures(_Inout_ DeviceContext* context) noexcept
 
 NTSTATUS CreateRmGpuContext(
     _Inout_ DeviceContext* context,
+    _In_ WDFCMRESLIST resourcesRaw,
     _In_ WDFCMRESLIST resourcesTranslated) noexcept
 {
     const PciIdentity* identity = context->configSpace.Identity();
@@ -340,69 +419,30 @@ NTSTATUS CreateRmGpuContext(
     attachInfo.device = identity->device;
     attachInfo.function = identity->function;
 
-    const ULONG resourceCount = WdfCmResourceListGetCount(resourcesTranslated);
     const ULONG barCount = context->configSpace.MemoryBarCount();
-    ULONG nextMemoryResource = 0;
     for (ULONG barIndex = 0; barIndex < barCount; ++barIndex)
     {
-        const PHYSICAL_ADDRESS barAddress =
-            context->configSpace.MemoryBarAddress(barIndex);
-        PCM_PARTIAL_RESOURCE_DESCRIPTOR barRange = nullptr;
-        for (ULONG resourceIndex = 0; resourceIndex < resourceCount; ++resourceIndex)
-        {
-            PCM_PARTIAL_RESOURCE_DESCRIPTOR candidate =
-                WdfCmResourceListGetDescriptor(resourcesTranslated, resourceIndex);
-            if (candidate != nullptr &&
-                candidate->Type == CmResourceTypeMemory &&
-                candidate->u.Memory.Start.QuadPart == barAddress.QuadPart)
-            {
-                barRange = candidate;
-                nextMemoryResource = resourceIndex + 1;
-                break;
-            }
-        }
-
-        if (barRange == nullptr)
-        {
-            for (ULONG resourceIndex = nextMemoryResource;
-                 resourceIndex < resourceCount;
-                 ++resourceIndex)
-            {
-                PCM_PARTIAL_RESOURCE_DESCRIPTOR candidate =
-                    WdfCmResourceListGetDescriptor(
-                        resourcesTranslated,
-                        resourceIndex);
-                if (candidate != nullptr &&
-                    candidate->Type == CmResourceTypeMemory)
-                {
-                    barRange = candidate;
-                    nextMemoryResource = resourceIndex + 1;
-                    TraceEvents(
-                        TRACE_LEVEL_INFORMATION,
-                        TRACE_PCI,
-                        "RM attach BAR translated fallback: index=%u config=0x%llX assigned=0x%llX",
-                        barIndex,
-                        barAddress.QuadPart,
-                        barRange->u.Memory.Start.QuadPart);
-                    break;
-                }
-            }
-        }
-
-        if (barRange == nullptr)
+        nv::platform::MemoryResource range = {};
+        const NTSTATUS status = context->configSpace.ResolveMemoryBar(
+            resourcesRaw, resourcesTranslated, barIndex, &range);
+        if (!NT_SUCCESS(status))
         {
             TraceEvents(
-                TRACE_LEVEL_WARNING,
+                TRACE_LEVEL_ERROR,
                 TRACE_PCI,
-                "RM attach BAR unassigned: index=%u config=0x%llX",
+                "RM attach BAR resolution failed: index=%u config=0x%llX status=%!STATUS!",
                 barIndex,
-                barAddress.QuadPart);
-            continue;
+                context->configSpace.MemoryBarAddress(barIndex).QuadPart,
+                status);
+            return status;
         }
 
         attachInfo.apertures[barIndex].physicalAddress =
-            static_cast<NvU64>(barRange->u.Memory.Start.QuadPart);
-        attachInfo.apertures[barIndex].length = barRange->u.Memory.Length;
+            static_cast<NvU64>(range.physicalAddress.QuadPart);
+        attachInfo.apertures[barIndex].length = range.length;
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_PCI,
+            "RM attach BAR: index=%u translated=0x%llX length=0x%llX",
+            barIndex, range.physicalAddress.QuadPart, range.length);
     }
 
     attachInfo.apertureCount = static_cast<NvU8>(barCount);
@@ -492,6 +532,26 @@ void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
     NvPlatformRmGpuContextDestroy(context->rmGpuContext);
     context->rmGpuContext = nullptr;
 }
+
+#if defined(NV_RM_USER_LINK_PROBE)
+NV_STATUS AttachRmGpuContext(DeviceContext* context) noexcept
+{
+    context->rmGpuInstance = NV_U32_MAX;
+    context->rmDeviceInstance = NV_U32_MAX;
+    context->rmGpuId = 0;
+    const NV_STATUS status = NvRmAttachGpuContext(
+        context->rmGpuContext,
+        &context->rmGpuInstance,
+        &context->rmDeviceInstance,
+        &context->rmGpuId);
+    TraceEvents(status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "NvRmAttachGpuContext: 0x%08X instance=%u device=%u gpuId=0x%08X",
+        status, context->rmGpuInstance, context->rmDeviceInstance, context->rmGpuId);
+    context->rmGpuAttached = status == NV_OK;
+    return status;
+}
+#endif
 
 } // namespace
 
@@ -776,6 +836,7 @@ NTSTATUS PrepareHardware(
 
     status = context->registerAperture.Initialize(
         device,
+        resourcesRaw,
         resourcesTranslated,
         context->configSpace);
     TraceEvents(
@@ -791,19 +852,10 @@ NTSTATUS PrepareHardware(
         return status;
     }
 
-    const NV_PLATFORM_MMIO_ACCESS mmioAccess = {
-        &context->registerAperture,
-        ReadMmio8,
-        ReadMmio16,
-        ReadMmio32,
-        ReadMmioBuffer32,
-        WriteMmio8,
-        WriteMmio16,
-        WriteMmio32,
-    };
+    const NV_PLATFORM_MMIO_ACCESS mmioAccess = MakeMmioAccess(&context->registerAperture);
     status = NvPlatformRegisterMmioAperture(
         static_cast<ULONGLONG>(
-            context->configSpace.RegisterBarAddress().QuadPart),
+            context->registerAperture.PhysicalAddress().QuadPart),
         context->registerAperture.Address(),
         context->registerAperture.Length(),
         NV_PLATFORM_MMIO_CACHE_UNCACHED,
@@ -823,8 +875,19 @@ NTSTATUS PrepareHardware(
         return status;
     }
 
+    status = RegisterBar1Resource(device, context, resourcesRaw, resourcesTranslated);
+    if (!NT_SUCCESS(status))
+    {
+        ResetMmioApertures(context);
+        NvPlatformUnregisterPciConfig(context->pciConfigRegistration);
+        context->pciConfigRegistration = nullptr;
+        context->configSpace.Reset();
+        return status;
+    }
+
     status = context->bar2Aperture.InitializeMemoryBar(
         device,
+        resourcesRaw,
         resourcesTranslated,
         context->configSpace,
         2,
@@ -843,19 +906,10 @@ NTSTATUS PrepareHardware(
         return status;
     }
 
-    const NV_PLATFORM_MMIO_ACCESS bar2Access = {
-        &context->bar2Aperture,
-        ReadMmio8,
-        ReadMmio16,
-        ReadMmio32,
-        ReadMmioBuffer32,
-        WriteMmio8,
-        WriteMmio16,
-        WriteMmio32,
-    };
+    const NV_PLATFORM_MMIO_ACCESS bar2Access = MakeMmioAccess(&context->bar2Aperture);
     status = NvPlatformRegisterMmioAperture(
         static_cast<ULONGLONG>(
-            context->configSpace.MemoryBarAddress(2).QuadPart),
+            context->bar2Aperture.PhysicalAddress().QuadPart),
         context->bar2Aperture.Address(),
         context->bar2Aperture.Length(),
         NV_PLATFORM_MMIO_CACHE_WRITE_COMBINED,
@@ -967,7 +1021,7 @@ NTSTATUS PrepareHardware(
         return status;
     }
 
-    status = CreateRmGpuContext(context, resourcesTranslated);
+    status = CreateRmGpuContext(context, resourcesRaw, resourcesTranslated);
     TraceEvents(
         NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,
@@ -1000,22 +1054,7 @@ NTSTATUS PrepareHardware(
         directBoot1,
         routedBoot1);
 
-    context->rmGpuInstance = NV_U32_MAX;
-    context->rmDeviceInstance = NV_U32_MAX;
-    context->rmGpuId = 0;
-    const NV_STATUS attachStatus = NvRmAttachGpuContext(
-        context->rmGpuContext,
-        &context->rmGpuInstance,
-        &context->rmDeviceInstance,
-        &context->rmGpuId);
-    TraceEvents(
-        attachStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
-        TRACE_DRIVER,
-        "NvRmAttachGpuContext: 0x%08X instance=%u device=%u gpuId=0x%08X",
-        attachStatus,
-        context->rmGpuInstance,
-        context->rmDeviceInstance,
-        context->rmGpuId);
+    const NV_STATUS attachStatus = AttachRmGpuContext(context);
     if (attachStatus != NV_OK)
     {
         DestroyRmGpuContext(context);
@@ -1029,23 +1068,61 @@ NTSTATUS PrepareHardware(
         context->configSpace.Reset();
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
-    context->rmGpuAttached = true;
-
     context->deviceReset.Initialize(device);
 
-    const NV_STATUS firmwareStatus = InitializeRmGpuFirmware(
+    NV_STATUS firmwareStatus = InitializeRmGpuFirmware(
         context->rmGpuContext);
     TraceEvents(
         firmwareStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
         TRACE_DRIVER,
         "NvRmInitializeGpuFirmware: 0x%08X",
         firmwareStatus);
-    if (firmwareStatus != NV_OK)
+    if (firmwareStatus == NV_ERR_TIMEOUT)
     {
-        if (firmwareStatus == NV_ERR_TIMEOUT)
+        // Retain framework resources; rebuild only failed RM state and its BAR1 leases.
+        DestroyRmGpuContext(context);
+        NvPlatformUnregisterMmioResource(context->bar1ResourceRegistration);
+        context->bar1ResourceRegistration = nullptr;
+        const NTSTATUS resetStatus = context->deviceReset.ResetDeviceInPlace();
+        if (resetStatus == STATUS_NOT_SUPPORTED)
         {
             context->deviceReset.ResetDevice(0);
+            return STATUS_DRIVER_INTERNAL_ERROR;
         }
+        if (!NT_SUCCESS(resetStatus) || resetStatus == STATUS_PENDING)
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "Firmware startup recovery reset did not complete: %!STATUS!", resetStatus);
+            return STATUS_DRIVER_INTERNAL_ERROR;
+        }
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+            "Firmware startup recovery: in-place reset completed; rebuilding RM and retrying once");
+        status = context->configSpace.EnableMemorySpace();
+        if (NT_SUCCESS(status))
+        {
+            status = RegisterBar1Resource(device, context, resourcesRaw, resourcesTranslated);
+        }
+        if (NT_SUCCESS(status))
+        {
+            status = CreateRmGpuContext(context, resourcesRaw, resourcesTranslated);
+        }
+        TraceEvents(NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER, "Firmware startup recovery RM context: %!STATUS!", status);
+        if (!NT_SUCCESS(status))
+        {
+            return status;
+        }
+        if (AttachRmGpuContext(context) != NV_OK)
+        {
+            DestroyRmGpuContext(context);
+            return STATUS_DRIVER_INTERNAL_ERROR;
+        }
+        firmwareStatus = InitializeRmGpuFirmware(context->rmGpuContext);
+        TraceEvents(firmwareStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER, "Firmware startup recovery retry: 0x%08X", firmwareStatus);
+    }
+    if (firmwareStatus != NV_OK)
+    {
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
     context->rmGpuStateLoaded = true;

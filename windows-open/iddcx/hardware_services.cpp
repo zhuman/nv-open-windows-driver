@@ -130,7 +130,58 @@ NTSTATUS DeviceResetInterface::Initialize(_In_ WDFDEVICE device) noexcept
         Reset();
         return NT_SUCCESS(status) ? STATUS_NOT_SUPPORTED : status;
     }
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+        "Device reset extended handlers: busQuery=%p busReset=%p resetStatus=%p",
+        interface_.version >= 2 ? interface_.queryBusSpecificResetInfo : nullptr,
+        interface_.version >= 2 ? interface_.deviceBusSpecificReset : nullptr,
+        interface_.version >= 3 ? interface_.getDeviceResetStatus : nullptr);
+    if (interface_.version >= 2 && interface_.queryBusSpecificResetInfo != nullptr)
+    {
+        UmBusSpecificResetInfo info[16] = {};
+        ULONG count = ARRAYSIZE(info);
+        const NTSTATUS queryStatus = interface_.queryBusSpecificResetInfo(
+            interface_.context, &count, info);
+        TraceEvents(NT_SUCCESS(queryStatus) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_WARNING,
+            TRACE_DRIVER, "Bus-specific reset query: status=%!STATUS! count=%u",
+            queryStatus, count);
+        if (NT_SUCCESS(queryStatus) && count <= ARRAYSIZE(info))
+        {
+            for (ULONG index = 0; index < count; ++index)
+            {
+                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+                    "Bus-specific reset support: bus=%!GUID! types=0x%llX",
+                    &info[index].busType, info[index].supported.value);
+                if (IsEqualGUID(info[index].busType, GUID_BUS_TYPE_PCI))
+                {
+                    pciResetTypes_ = info[index].supported.value;
+                }
+            }
+        }
+        else if (NT_SUCCESS(queryStatus))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "Bus-specific reset query returned an invalid count: %u", count);
+        }
+    }
+    TraceResetStatus();
     return STATUS_SUCCESS;
+}
+
+void DeviceResetInterface::TraceResetStatus() const noexcept
+{
+    if (interface_.version < 3 || interface_.getDeviceResetStatus == nullptr)
+    {
+        return;
+    }
+    BOOLEAN resetting = FALSE;
+    UmBusSpecificResetType selected = {};
+    UmDeviceResetStatusFlags flags = {};
+    const NTSTATUS status = interface_.getDeviceResetStatus(
+        interface_.context, &resetting, &selected, &flags);
+    TraceEvents(NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_WARNING,
+        TRACE_DRIVER,
+        "Device reset status: status=%!STATUS! resetting=%u selected=0x%llX flags=0x%llX",
+        status, resetting, selected.value, flags.value);
 }
 
 NTSTATUS DeviceResetInterface::ResetDevice(_In_ ULONG resetType) noexcept
@@ -153,6 +204,29 @@ NTSTATUS DeviceResetInterface::ResetDevice(_In_ ULONG resetType) noexcept
         "Device reset requested: type=%u status=%!STATUS!",
         resetType,
         status);
+    TraceResetStatus();
+    return status;
+}
+
+NTSTATUS DeviceResetInterface::ResetDeviceInPlace() noexcept
+{
+    constexpr ULONGLONG FunctionLevelResetInPlace = 1ULL << 5;
+    constexpr ULONGLONG KeepStackReset = 1ULL;
+    if (interface_.version < 2 || interface_.deviceBusSpecificReset == nullptr ||
+        (pciResetTypes_ & FunctionLevelResetInPlace) == 0)
+    {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER,
+            "In-place function reset unavailable: supported=0x%llX", pciResetTypes_);
+        return STATUS_NOT_SUPPORTED;
+    }
+    UmBusSpecificResetType selected = { FunctionLevelResetInPlace };
+    UmBusSpecificResetFlags flags = { KeepStackReset };
+    const NTSTATUS status = interface_.deviceBusSpecificReset(
+        interface_.context, &GUID_BUS_TYPE_PCI, selected, &flags, nullptr);
+    TraceEvents(NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER, "In-place function reset requested: status=%!STATUS! flags=0x%llX",
+        status, flags.value);
+    TraceResetStatus();
     return status;
 }
 
@@ -163,6 +237,7 @@ void DeviceResetInterface::Reset() noexcept
         interface_.interfaceDereference(interface_.context);
     }
     ZeroMemory(&interface_, sizeof(interface_));
+    pciResetTypes_ = 0;
 }
 
 bool DeviceResetInterface::IsAvailable() const noexcept
@@ -532,13 +607,39 @@ PHYSICAL_ADDRESS ConfigSpace::RegisterBarAddress() const noexcept
     return MemoryBarAddress(0);
 }
 
+NTSTATUS ConfigSpace::ResolveMemoryBar(
+    WDFCMRESLIST resourcesRaw,
+    WDFCMRESLIST resourcesTranslated,
+    ULONG index,
+    nv::platform::MemoryResource* resource) const noexcept
+{
+    if (index >= memoryBarCount_ || resourcesRaw == nullptr ||
+        resourcesTranslated == nullptr || resource == nullptr)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    return nv::platform::ResolveMemoryBar(
+        static_cast<ULONGLONG>(memoryBarAddresses_[index].QuadPart),
+        WdfCmResourceListGetCount(resourcesRaw),
+        WdfCmResourceListGetCount(resourcesTranslated),
+        [resourcesRaw](ULONG resourceIndex) {
+            return WdfCmResourceListGetDescriptor(resourcesRaw, resourceIndex);
+        },
+        [resourcesTranslated](ULONG resourceIndex) {
+            return WdfCmResourceListGetDescriptor(resourcesTranslated, resourceIndex);
+        },
+        resource);
+}
+
 NTSTATUS RegisterAperture::Initialize(
     _In_ WDFDEVICE device,
+    _In_ WDFCMRESLIST resourcesRaw,
     _In_ WDFCMRESLIST resourcesTranslated,
     _In_ const ConfigSpace& configSpace) noexcept
 {
     NTSTATUS status = InitializeMemoryBar(
         device,
+        resourcesRaw,
         resourcesTranslated,
         configSpace,
         0,
@@ -576,6 +677,7 @@ NTSTATUS RegisterAperture::Initialize(
 
 NTSTATUS RegisterAperture::InitializeMemoryBar(
     _In_ WDFDEVICE device,
+    _In_ WDFCMRESLIST resourcesRaw,
     _In_ WDFCMRESLIST resourcesTranslated,
     _In_ const ConfigSpace& configSpace,
     _In_ ULONG barIndex,
@@ -583,29 +685,17 @@ NTSTATUS RegisterAperture::InitializeMemoryBar(
 {
     Reset();
 
-    if (barIndex >= configSpace.MemoryBarCount())
+    nv::platform::MemoryResource range = {};
+    NTSTATUS status = configSpace.ResolveMemoryBar(
+        resourcesRaw, resourcesTranslated, barIndex, &range);
+    if (!NT_SUCCESS(status))
     {
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_PCI,
+            "memory BAR resolution failed: index=%u status=%!STATUS!", barIndex, status);
+        return status;
     }
-
-    const PHYSICAL_ADDRESS barAddress = configSpace.MemoryBarAddress(barIndex);
-    const ULONG resourceCount = WdfCmResourceListGetCount(resourcesTranslated);
-    PCM_PARTIAL_RESOURCE_DESCRIPTOR barRange = nullptr;
-    for (ULONG index = 0; index < resourceCount; ++index)
-    {
-        PCM_PARTIAL_RESOURCE_DESCRIPTOR resource =
-            WdfCmResourceListGetDescriptor(resourcesTranslated, index);
-        if (resource != nullptr &&
-            resource->Type == CmResourceTypeMemory &&
-            resource->u.Memory.Start.QuadPart == barAddress.QuadPart)
-        {
-            barRange = resource;
-            break;
-        }
-    }
-
-    if (barRange == nullptr ||
-        (barIndex == 0 && barRange->u.Memory.Length < RequiredIdentityLength))
+    if (range.length > NV_PLATFORM_MAX_USER_MMIO_MAPPING_LENGTH ||
+        (barIndex == 0 && range.length < RequiredIdentityLength))
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
@@ -613,17 +703,39 @@ NTSTATUS RegisterAperture::InitializeMemoryBar(
     TraceEvents(
         TRACE_LEVEL_INFORMATION,
         TRACE_PCI,
-        "memory BAR resource: index=%u config=0x%llX translated=0x%llX length=0x%X flags=0x%X",
+        "memory BAR resource: index=%u config=0x%llX translated=0x%llX length=0x%llX flags=0x%X",
         barIndex,
-        barAddress.QuadPart,
-        barRange->u.Memory.Start.QuadPart,
-        barRange->u.Memory.Length,
-        barRange->Flags);
+        configSpace.MemoryBarAddress(barIndex).QuadPart,
+        range.physicalAddress.QuadPart,
+        range.length,
+        range.flags);
 
+    return InitializeRange(device, range.physicalAddress,
+        static_cast<SIZE_T>(range.length), cacheType);
+}
+
+NTSTATUS RegisterAperture::InitializeRange(
+    WDFDEVICE device,
+    PHYSICAL_ADDRESS physicalAddress,
+    SIZE_T length,
+    MEMORY_CACHING_TYPE cacheType) noexcept
+{
+    Reset();
+    SYSTEM_INFO systemInfo = {};
+    GetSystemInfo(&systemInfo);
+    if (device == nullptr || physicalAddress.QuadPart < 0 ||
+        !nv::platform::IsSupportedUserMmioRange(
+            static_cast<ULONGLONG>(physicalAddress.QuadPart), length, systemInfo.dwPageSize))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_PCI,
+            "Invalid UMDF MMIO mapping: start=0x%llX length=0x%llX",
+            physicalAddress.QuadPart, static_cast<ULONGLONG>(length));
+        return STATUS_INVALID_PARAMETER;
+    }
     NTSTATUS status = WdfDeviceMapIoSpace(
         device,
-        barRange->u.Memory.Start,
-        barRange->u.Memory.Length,
+        physicalAddress,
+        length,
         cacheType,
         &pseudoAddress_);
     if (!NT_SUCCESS(status))
@@ -631,17 +743,17 @@ NTSTATUS RegisterAperture::InitializeMemoryBar(
         TraceEvents(
             TRACE_LEVEL_ERROR,
             TRACE_PCI,
-            "memory BAR map failed: index=%u status=%!STATUS! start=0x%llX length=0x%X",
-            barIndex,
+            "memory BAR map failed: status=%!STATUS! start=0x%llX length=0x%llX",
             status,
-            barRange->u.Memory.Start.QuadPart,
-            barRange->u.Memory.Length);
+            physicalAddress.QuadPart,
+            static_cast<ULONGLONG>(length));
         Reset();
         return status;
     }
 
     device_ = device;
-    length_ = barRange->u.Memory.Length;
+    length_ = length;
+    physicalAddress_ = physicalAddress;
     address_ = WdfDeviceGetHardwareRegisterMappedAddress(
         device,
         pseudoAddress_);
@@ -650,8 +762,8 @@ NTSTATUS RegisterAperture::InitializeMemoryBar(
         TraceEvents(
             TRACE_LEVEL_ERROR,
             TRACE_PCI,
-            "memory BAR user mapping unavailable: index=%u pseudo=%p",
-            barIndex,
+            "memory BAR user mapping unavailable: start=0x%llX pseudo=%p",
+            physicalAddress.QuadPart,
             pseudoAddress_);
         Reset();
         return STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -660,8 +772,9 @@ NTSTATUS RegisterAperture::InitializeMemoryBar(
     TraceEvents(
         TRACE_LEVEL_INFORMATION,
         TRACE_PCI,
-        "memory BAR mapped: index=%u pseudo=%p user=%p",
-        barIndex,
+        "memory BAR mapped: start=0x%llX length=0x%llX pseudo=%p user=%p",
+        physicalAddress.QuadPart,
+        static_cast<ULONGLONG>(length),
         pseudoAddress_,
         address_);
 
@@ -679,6 +792,7 @@ void RegisterAperture::Reset() noexcept
     pseudoAddress_ = nullptr;
     address_ = nullptr;
     length_ = 0;
+    physicalAddress_ = {};
     RtlZeroMemory(&identity_, sizeof(identity_));
 }
 
@@ -780,6 +894,11 @@ volatile void* RegisterAperture::Address() const noexcept
 SIZE_T RegisterAperture::Length() const noexcept
 {
     return length_;
+}
+
+PHYSICAL_ADDRESS RegisterAperture::PhysicalAddress() const noexcept
+{
+    return physicalAddress_;
 }
 
 const BootIdentity* RegisterAperture::Identity() const noexcept

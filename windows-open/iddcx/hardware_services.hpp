@@ -7,6 +7,8 @@ extern "C" {
 #include <wudfwdm.h>
 }
 
+#include "nvplatform_memory_resource.hpp"
+
 namespace nv::iddcx {
 
 struct PciIdentity final
@@ -37,6 +39,41 @@ using DeviceResetHandler = NTSTATUS (NTAPI*)(
     _In_ ULONG flags,
     _In_opt_ void* resetParameters);
 
+union UmBusSpecificResetType
+{
+    ULONGLONG value;
+};
+
+struct UmBusSpecificResetInfo
+{
+    GUID busType;
+    UmBusSpecificResetType supported;
+};
+
+union UmDeviceResetStatusFlags
+{
+    ULONGLONG value;
+};
+
+union UmBusSpecificResetFlags
+{
+    ULONGLONG value;
+};
+
+static_assert(sizeof(UmBusSpecificResetType) == sizeof(ULONGLONG));
+static_assert(sizeof(UmDeviceResetStatusFlags) == sizeof(ULONGLONG));
+static_assert(sizeof(UmBusSpecificResetFlags) == sizeof(ULONGLONG));
+static_assert(sizeof(UmBusSpecificResetInfo) == 24);
+
+using QueryBusSpecificResetHandler = NTSTATUS (NTAPI*)(
+    void* context, ULONG* count, UmBusSpecificResetInfo* info);
+using GetDeviceResetStatusHandler = NTSTATUS (NTAPI*)(
+    void* context, BOOLEAN* resetting, UmBusSpecificResetType* selected,
+    UmDeviceResetStatusFlags* flags);
+using BusSpecificResetHandler = NTSTATUS (NTAPI*)(
+    void* context, const GUID* busType, UmBusSpecificResetType selected,
+    UmBusSpecificResetFlags* flags, void* parameters);
+
 struct UmDeviceResetInterface final
 {
     USHORT size;
@@ -47,9 +84,9 @@ struct UmDeviceResetInterface final
     DeviceResetHandler deviceReset;
     ULONG supportedResetTypes;
     void* reserved;
-    void* queryBusSpecificResetInfo;
-    void* deviceBusSpecificReset;
-    void* getDeviceResetStatus;
+    QueryBusSpecificResetHandler queryBusSpecificResetInfo;
+    BusSpecificResetHandler deviceBusSpecificReset;
+    GetDeviceResetStatusHandler getDeviceResetStatus;
 };
 
 class DeviceResetInterface final
@@ -57,13 +94,16 @@ class DeviceResetInterface final
 public:
     NTSTATUS Initialize(_In_ WDFDEVICE device) noexcept;
     NTSTATUS ResetDevice(_In_ ULONG resetType) noexcept;
+    NTSTATUS ResetDeviceInPlace() noexcept;
     void Reset() noexcept;
 
     [[nodiscard]] bool IsAvailable() const noexcept;
     [[nodiscard]] ULONG SupportedResetTypes() const noexcept;
 
 private:
+    void TraceResetStatus() const noexcept;
     UmDeviceResetInterface interface_;
+    ULONGLONG pciResetTypes_;
 };
 
 class ConfigSpace final
@@ -90,6 +130,11 @@ public:
     [[nodiscard]] ULONG MemoryBarCount() const noexcept;
     [[nodiscard]] PHYSICAL_ADDRESS MemoryBarAddress(_In_ ULONG index) const noexcept;
     [[nodiscard]] PHYSICAL_ADDRESS RegisterBarAddress() const noexcept;
+    NTSTATUS ResolveMemoryBar(
+        _In_ WDFCMRESLIST resourcesRaw,
+        _In_ WDFCMRESLIST resourcesTranslated,
+        _In_ ULONG index,
+        _Out_ nv::platform::MemoryResource* resource) const noexcept;
 
 private:
     BUS_INTERFACE_STANDARD interface_;
@@ -105,14 +150,22 @@ class RegisterAperture final
 public:
     NTSTATUS Initialize(
         _In_ WDFDEVICE device,
+        _In_ WDFCMRESLIST resourcesRaw,
         _In_ WDFCMRESLIST resourcesTranslated,
         _In_ const ConfigSpace& configSpace) noexcept;
 
     NTSTATUS InitializeMemoryBar(
         _In_ WDFDEVICE device,
+        _In_ WDFCMRESLIST resourcesRaw,
         _In_ WDFCMRESLIST resourcesTranslated,
         _In_ const ConfigSpace& configSpace,
         _In_ ULONG barIndex,
+        _In_ MEMORY_CACHING_TYPE cacheType) noexcept;
+
+    NTSTATUS InitializeRange(
+        _In_ WDFDEVICE device,
+        _In_ PHYSICAL_ADDRESS physicalAddress,
+        _In_ SIZE_T length,
         _In_ MEMORY_CACHING_TYPE cacheType) noexcept;
 
     void Reset() noexcept;
@@ -132,6 +185,7 @@ public:
     [[nodiscard]] bool IsMapped() const noexcept;
     [[nodiscard]] volatile void* Address() const noexcept;
     [[nodiscard]] SIZE_T Length() const noexcept;
+    [[nodiscard]] PHYSICAL_ADDRESS PhysicalAddress() const noexcept;
     [[nodiscard]] const BootIdentity* Identity() const noexcept;
 
 private:
@@ -139,6 +193,7 @@ private:
     void* pseudoAddress_;
     void* address_;
     SIZE_T length_;
+    PHYSICAL_ADDRESS physicalAddress_;
     BootIdentity identity_;
 };
 

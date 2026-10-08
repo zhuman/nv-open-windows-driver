@@ -10,6 +10,17 @@ constexpr NTSTATUS StatusSuccess = 0;
 constexpr NTSTATUS StatusInvalidParameter = static_cast<NTSTATUS>(0xC000000DL);
 constexpr NTSTATUS StatusInsufficientResources = static_cast<NTSTATUS>(0xC000009AL);
 
+struct Resource
+{
+    NvU64 physicalAddress;
+    NvU64 length;
+    NvU64 maximumMappingLength;
+    NvU64 pageMask;
+    NV_PLATFORM_MMIO_CACHE_TYPE cacheType;
+    NV_PLATFORM_MMIO_MAPPING_PROVIDER provider;
+    bool registered;
+};
+
 struct Aperture
 {
     NvU64 physicalAddress;
@@ -20,11 +31,14 @@ struct Aperture
     ULONG* read32Cache;
     SIZE_T read32CacheOffset;
     NvU32 read32CacheCount;
+    Resource* resource;
+    NvU32 references;
     bool registered;
 };
 
 SRWLOCK apertureLock = SRWLOCK_INIT;
 Aperture apertures[MaximumApertures];
+Resource resources[MaximumApertures];
 
 Aperture* ApertureFromHandle(void* handle) noexcept
 {
@@ -35,6 +49,45 @@ Aperture* ApertureFromHandle(void* handle) noexcept
         (value - first) % sizeof(Aperture) == 0
         ? static_cast<Aperture*>(handle)
         : nullptr;
+}
+
+Resource* ResourceFromHandle(void* handle) noexcept
+{
+    const ULONG_PTR value = reinterpret_cast<ULONG_PTR>(handle);
+    const ULONG_PTR first = reinterpret_cast<ULONG_PTR>(&resources[0]);
+    const ULONG_PTR end = reinterpret_cast<ULONG_PTR>(&resources[MaximumApertures]);
+    return value >= first && value < end &&
+        (value - first) % sizeof(Resource) == 0
+        ? static_cast<Resource*>(handle)
+        : nullptr;
+}
+
+bool IsValidPhysicalRange(NvU64 physicalAddress, NvU64 length) noexcept
+{
+    return physicalAddress != 0 && length != 0 &&
+        length - 1 <= NV_U64_MAX - physicalAddress;
+}
+
+bool IsValidAccess(const NV_PLATFORM_MMIO_ACCESS* access) noexcept
+{
+    return access != nullptr && access->context != nullptr &&
+        access->read8 != nullptr && access->read16 != nullptr &&
+        access->read32 != nullptr && access->read32Buffer != nullptr &&
+        access->write8 != nullptr && access->write16 != nullptr &&
+        access->write32 != nullptr;
+}
+
+void ReleaseAperture(Aperture& aperture) noexcept
+{
+    if (aperture.resource != nullptr)
+    {
+        aperture.resource->provider.unmap(aperture.access.context);
+    }
+    if (aperture.read32Cache != nullptr)
+    {
+        HeapFree(GetProcessHeap(), 0, aperture.read32Cache);
+    }
+    ZeroMemory(&aperture, sizeof(aperture));
 }
 
 bool IsSupportedProtection(NvU32 protect, NvU32 cacheType) noexcept
@@ -93,14 +146,10 @@ extern "C" NTSTATUS NvPlatformRegisterMmioAperture(
     const NV_PLATFORM_MMIO_ACCESS* access,
     void** registration) noexcept
 {
-    if (physicalAddress == 0 || address == nullptr || length == 0 ||
+    if (!IsValidPhysicalRange(physicalAddress, length) || address == nullptr ||
         (cacheType != NV_PLATFORM_MMIO_CACHE_UNCACHED &&
          cacheType != NV_PLATFORM_MMIO_CACHE_WRITE_COMBINED) ||
-        access == nullptr || access->context == nullptr ||
-        access->read8 == nullptr || access->read16 == nullptr ||
-        access->read32 == nullptr || access->read32Buffer == nullptr ||
-        access->write8 == nullptr ||
-        access->write16 == nullptr || access->write32 == nullptr ||
+        !IsValidAccess(access) ||
         registration == nullptr)
     {
         return StatusInvalidParameter;
@@ -138,8 +187,79 @@ extern "C" void NvPlatformUnregisterMmioAperture(void* registration) noexcept
         return;
     }
     AcquireSRWLockExclusive(&apertureLock);
-    HeapFree(GetProcessHeap(), 0, aperture->read32Cache);
-    ZeroMemory(aperture, sizeof(*aperture));
+    ReleaseAperture(*aperture);
+    ReleaseSRWLockExclusive(&apertureLock);
+}
+
+extern "C" NTSTATUS NvPlatformRegisterMmioResource(
+    ULONGLONG physicalAddress,
+    ULONGLONG length,
+    NV_PLATFORM_MMIO_CACHE_TYPE cacheType,
+    const NV_PLATFORM_MMIO_MAPPING_PROVIDER* provider,
+    void** registration) noexcept
+{
+    if (!IsValidPhysicalRange(physicalAddress, length) ||
+        (cacheType != NV_PLATFORM_MMIO_CACHE_UNCACHED &&
+         cacheType != NV_PLATFORM_MMIO_CACHE_WRITE_COMBINED) ||
+        provider == nullptr || provider->context == nullptr ||
+        provider->map == nullptr || provider->unmap == nullptr ||
+        registration == nullptr)
+    {
+        return StatusInvalidParameter;
+    }
+    *registration = nullptr;
+    SYSTEM_INFO systemInfo = {};
+    GetSystemInfo(&systemInfo);
+    const NvU64 pageMask = static_cast<NvU64>(systemInfo.dwPageSize) - 1;
+    const NvU64 maximumMappingLength =
+        NV_PLATFORM_MAX_USER_MMIO_MAPPING_LENGTH & ~pageMask;
+    if (systemInfo.dwPageSize == 0 ||
+        (systemInfo.dwPageSize & (systemInfo.dwPageSize - 1)) != 0 ||
+        (physicalAddress & pageMask) != 0 || maximumMappingLength == 0)
+    {
+        return StatusInvalidParameter;
+    }
+    AcquireSRWLockExclusive(&apertureLock);
+    Resource* available = nullptr;
+    for (auto& resource : resources)
+    {
+        if (!resource.registered)
+        {
+            available = &resource;
+            break;
+        }
+    }
+    if (available != nullptr)
+    {
+        available->physicalAddress = physicalAddress;
+        available->length = length;
+        available->maximumMappingLength = maximumMappingLength;
+        available->pageMask = pageMask;
+        available->cacheType = cacheType;
+        available->provider = *provider;
+        available->registered = true;
+        *registration = available;
+    }
+    ReleaseSRWLockExclusive(&apertureLock);
+    return available != nullptr ? StatusSuccess : StatusInsufficientResources;
+}
+
+extern "C" void NvPlatformUnregisterMmioResource(void* registration) noexcept
+{
+    Resource* resource = ResourceFromHandle(registration);
+    if (resource == nullptr)
+    {
+        return;
+    }
+    AcquireSRWLockExclusive(&apertureLock);
+    for (auto& aperture : apertures)
+    {
+        if (aperture.registered && aperture.resource == resource)
+        {
+            ReleaseAperture(aperture);
+        }
+    }
+    ZeroMemory(resource, sizeof(*resource));
     ReleaseSRWLockExclusive(&apertureLock);
 }
 
@@ -150,15 +270,23 @@ extern "C" NV_STATUS NvPlatformRmMapPhysical(
     NvU32 cacheType,
     void** virtualAddress)
 {
-    if (length == 0 || length > MAXSIZE_T || virtualAddress == nullptr ||
-        !IsSupportedProtection(protect, cacheType))
+    if (virtualAddress == nullptr)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
     *virtualAddress = nullptr;
+    if (!IsValidPhysicalRange(physicalAddress, length) ||
+        !IsSupportedProtection(protect, cacheType))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    if (length > NV_PLATFORM_MAX_USER_MMIO_MAPPING_LENGTH)
+    {
+        return NV_ERR_INVALID_LIMIT;
+    }
 
-    AcquireSRWLockShared(&apertureLock);
-    for (const auto& aperture : apertures)
+    AcquireSRWLockExclusive(&apertureLock);
+    for (auto& aperture : apertures)
     {
         if (!aperture.registered || physicalAddress < aperture.physicalAddress ||
             !IsCompatibleCacheType(aperture.cacheType, cacheType))
@@ -168,16 +296,122 @@ extern "C" NV_STATUS NvPlatformRmMapPhysical(
         const NvU64 offset = physicalAddress - aperture.physicalAddress;
         if (offset <= aperture.length && length <= aperture.length - offset)
         {
+            if (aperture.resource != nullptr)
+            {
+                if (aperture.references == NV_U32_MAX)
+                {
+                    ReleaseSRWLockExclusive(&apertureLock);
+                    return NV_ERR_NO_MEMORY;
+                }
+                ++aperture.references;
+            }
             *virtualAddress = const_cast<NvU8*>(aperture.address + offset);
             break;
         }
     }
-    ReleaseSRWLockShared(&apertureLock);
-    return *virtualAddress != nullptr ? NV_OK : NV_ERR_OBJECT_NOT_FOUND;
+    if (*virtualAddress != nullptr)
+    {
+        ReleaseSRWLockExclusive(&apertureLock);
+        return NV_OK;
+    }
+    NV_STATUS result = NV_ERR_OBJECT_NOT_FOUND;
+    for (auto& resource : resources)
+    {
+        if (!resource.registered || physicalAddress < resource.physicalAddress ||
+            !IsCompatibleCacheType(resource.cacheType, cacheType))
+        {
+            continue;
+        }
+        const NvU64 offset = physicalAddress - resource.physicalAddress;
+        if (offset > resource.length || length > resource.length - offset)
+        {
+            continue;
+        }
+        Aperture* available = nullptr;
+        bool alreadyMapped = false;
+        for (auto& aperture : apertures)
+        {
+            if (aperture.registered && aperture.resource == &resource)
+            {
+                alreadyMapped = true;
+                break;
+            }
+            if (!aperture.registered && available == nullptr)
+            {
+                available = &aperture;
+            }
+        }
+        // UMDF permits only one active WDF mapping per assigned CM resource.
+        if (alreadyMapped)
+        {
+            result = NV_ERR_STATE_IN_USE;
+            break;
+        }
+        if (available == nullptr)
+        {
+            result = NV_ERR_NO_MEMORY;
+            break;
+        }
+        NvU64 windowOffset =
+            (offset / resource.maximumMappingLength) * resource.maximumMappingLength;
+        if (length > resource.maximumMappingLength - (offset - windowOffset))
+        {
+            windowOffset = offset & ~resource.pageMask;
+        }
+        const NvU64 remaining = resource.length - windowOffset;
+        const NvU64 windowLength = remaining < resource.maximumMappingLength ?
+            remaining : resource.maximumMappingLength;
+        const NvU64 mappingOffset = offset - windowOffset;
+        if (mappingOffset > windowLength || length > windowLength - mappingOffset)
+        {
+            result = NV_ERR_INVALID_LIMIT;
+            break;
+        }
+        volatile void* address = nullptr;
+        NV_PLATFORM_MMIO_ACCESS access = {};
+        const NTSTATUS status = resource.provider.map(
+            resource.provider.context, resource.physicalAddress + windowOffset,
+            static_cast<SIZE_T>(windowLength),
+            resource.cacheType, &address, &access);
+        if (status < 0 || address == nullptr || !IsValidAccess(&access))
+        {
+            if (access.context != nullptr)
+            {
+                resource.provider.unmap(access.context);
+            }
+            result = status == StatusInsufficientResources ?
+                NV_ERR_NO_MEMORY : NV_ERR_OPERATING_SYSTEM;
+            break;
+        }
+        available->physicalAddress = resource.physicalAddress + windowOffset;
+        available->address = static_cast<volatile NvU8*>(address);
+        available->length = static_cast<SIZE_T>(windowLength);
+        available->cacheType = resource.cacheType;
+        available->access = access;
+        available->resource = &resource;
+        available->references = 1;
+        available->registered = true;
+        *virtualAddress = const_cast<NvU8*>(available->address + mappingOffset);
+        result = NV_OK;
+        break;
+    }
+    ReleaseSRWLockExclusive(&apertureLock);
+    return result;
 }
 
-extern "C" void NvPlatformRmUnmapPhysical(void*)
+extern "C" void NvPlatformRmUnmapPhysical(void* address)
 {
+    AcquireSRWLockExclusive(&apertureLock);
+    SIZE_T offset = 0;
+    Aperture* aperture = FindAperture(address, 1, &offset);
+    if (aperture != nullptr && aperture->resource != nullptr)
+    {
+        if (--aperture->references == 0)
+        {
+            ReleaseAperture(*aperture);
+        }
+    }
+    ReleaseSRWLockExclusive(&apertureLock);
 }
 
 extern "C" NvBool NvPlatformRmCopyMemory(

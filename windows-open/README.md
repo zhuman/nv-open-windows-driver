@@ -36,8 +36,11 @@ For PCI-enumerated IddCx devices, hardware preparation retains authoritative
 segment, bus, device, and function properties, validates NVIDIA PCI identity,
 and catalogs the first three valid memory BARs in the same register,
 framebuffer, and instance-memory order as KMDOD and upstream. It matches the
-register BAR to the translated memory resource and maps it noncached through
-UMDF before creating DMA and interrupt objects. Framework-mediated reads
+register BAR through corresponding raw/translated resources and maps it
+noncached through UMDF before creating DMA and interrupt objects. Ordinary
+and `MEMORY_LARGE` descriptors share checked 64-bit decoding. BAR0 and BAR2
+remain eagerly mapped; BAR1 retains its full translated resource and provides
+bounded on-demand RM mappings (see below). Framework-mediated reads
 collect `PMC_BOOT_0` and `PMC_BOOT_42`; an all-ones response fails preparation
 as a missing device. Release and every failure path unwind interrupt, DMA,
 MMIO, and bus-interface state in reverse ownership order. The root-enumerated
@@ -338,6 +341,153 @@ The next NvPort expansion should follow the first thread and allocator call
 sites reached while importing the selected RM core. Keep using sidecar Windows
 backends and explicit module definitions; do not modify the published NvPort
 headers or compile Unix kernel backend files.
+
+## BAR1 resources and bounded mappings
+
+The earlier UMDF code filtered out `CmResourceTypeMemoryLarge` in both BAR
+mapping and RM attach discovery. Its descriptor-order fallback could then
+misidentify BAR2 as BAR1; an "unassigned BAR1" trace was not reliable evidence
+that Windows had left the framebuffer aperture unassigned.
+
+The source now:
+
+- Decodes ordinary memory and all `MEMORY_LARGE` 40/48/64-bit length encodings
+  without truncating the complete BAR size.
+- Matches each PCI BAR address against the raw resource list, then uses the
+  corresponding translated address and length for WDF and RM. Missing,
+  inconsistent, or ambiguous resources fail explicitly; there is no
+  next-memory-descriptor fallback.
+- Supplies RM with the complete BAR1 physical address and 64-bit length,
+  independently of the size of any individual CPU mapping.
+- Registers BAR1 as a write-combined, demand-mapped resource. Existing RM
+  physical-mapping hooks obtain aliases into a single shared CPU window.
+  The first request maps a page-aligned window covering the request, up to
+  `0xFFFFF000` bytes (4 GiB minus 4 KiB, rounded down for the system page size).
+  Later contained requests reuse that window without another WDF mapping.
+- Enforces UMDF's **one active mapping per assigned CM resource** restriction.
+  A request outside a leased window returns `NV_ERR_STATE_IN_USE`, rather than
+  triggering the framework verifier with a second mapping. After the last
+  lease ends, another window can be selected, including above 4 GiB or across
+  a 4-GiB boundary. Simultaneous windows spanning the full large BAR are not
+  supported. Oversized, out-of-resource, and cache-incompatible requests also
+  fail explicitly.
+- Reference-counts aliases, releases the backing window after the final unmap,
+  and drains remaining mappings after RM/NVKMS teardown in
+  hardware release. The existing global registry has 32 mapped-aperture slots,
+  shared with eager BAR0/BAR2 mappings; exhaustion is an explicit error.
+
+The WDF backend retains both the framework pseudo address and the process
+address from `WdfDeviceGetHardwareRegisterMappedAddress`. Register access stays
+framework-mediated. BAR0 remains noncached and BAR2 remains write-combined.
+No new per-frame BAR1 mapping is introduced in the existing common-buffer/CE
+presentation path. Future CPU-copy clients should retain an allocation-lifetime
+mapping rather than map/unmap every frame; an idle mapping cache is not added.
+
+Microsoft's [map](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfdevice/nf-wdfdevice-wdfdevicemapiospace)
+and [unmap](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfdevice/nf-wdfdevice-wdfdeviceunmapiospace)
+references specify `PASSIVE_LEVEL` and describe startup/release usage. They do
+not list a startup-only DDI restriction or document the user-mode 4-GiB limit.
+This backend permits demand maps only while its assigned-resource provider is
+registered between hardware preparation and release. Actual runtime mapping of
+the target's large BAR has now been tested. The
+[framework implementation](https://github.com/microsoft/Windows-Driver-Frameworks/blob/master/src/framework/shared/support/um/fxresourcecollectionum.cpp)
+explicitly rejects multiple active mappings within one assigned resource;
+disjoint subranges are not an exception.
+
+Local validation covers **over 200,000 resource/mapping checks and 8,000 concurrent
+map/unmap cycles**, using the production decoder and mapping registry:
+
+```powershell
+& .\windows-open\iddcx\tests\run-bar-resource-tests.ps1
+```
+
+The x64 IddCx and experimental KMDOD compatibility builds pass, as do DDC and
+presentation regressions. ARM64 kernel/user platform libraries also build;
+the full ARM64 driver and ARM64 hardware remain untested. Unit tests use a mock
+backend, now enforcing one active mapping, not the real WDF mapping APIs.
+
+**RTX 4070 deployment assessment (2026-10-07):**
+
+- Windows assigned BAR1 at `0x2C00000000`, length `0x400000000` (**16 GiB**).
+  RM receives the full address and size.
+- The initial candidate successfully mapped 64 KiB, but its second submapping
+  caused `WUDFVerifierFailure` in `ValidateRegisterPhysicalAddressRange` and
+  repeated host restarts. The shared-window correction fixes that violation
+  without disabling verification or bypassing framework register access.
+- Corrected package `oem193.inf` (DLL SHA-256 prefix `27E5BDFE`) successfully
+  maps the window at `0x2C00000000`, length `0xFFFFF000`. The host stayed stable
+  through initial activation, animation, DDC tests, and recovered activation.
+- The AMD display remains primary. NVIDIA's reported 3840x2160, 32-bpp,
+  integer-60-Hz mode, orientation, and desktop layout match the baseline.
+  Logical bounds remain 2560x1440; do not equate these DPI-virtualized bounds
+  with physical timing. Exact fractional refresh and HDR state were not queried.
+- Twelve-second animation tests produced 370 and 375 application paints
+  (baseline: 372). ETW confirms D3D12 common-buffer pixel verification, CE
+  uploads, and scanout latch observations. Application paints are not displayed
+  frames; the baseline trace lacks frame events, so no before/after FPS claim
+  is made. No capture-device or physical-panel verification was available.
+- DDC capabilities-string retrieval and brightness **80 -> 105 -> 80** pass,
+  with exact restoration. `GetMonitorCapabilities` retains the known MCCS 2.2
+  `0xC02625DC` error; it is not reported as a passing API.
+- A scoped warm restart released the BAR1 window, then hit GSP
+  `NV_ERR_TIMEOUT` (`0x65`) before another BAR1 mapping. Disable/enable recovered
+  normal operation in that initial assessment. The later reset/startup retry
+  below removes that manual recovery requirement for the tested timeout.
+
+Only the tested window has hardware evidence; high-offset windows and
+cross-4-GiB requests remain software-tested.
+
+This is **not yet direct CPU-to-VRAM presentation**. `osMapPciMemoryUser` and
+`osMapPciMemoryAreaUser` remain unsupported, and allocation-aware RM aperture
+translation, WC visibility ordering, and readback/image validation remain
+necessary. Do not derive a CPU pointer as `BAR1 base + VRAM allocation offset`
+or assume the aperture is a permanently linear view of all VRAM.
+
+## PCI reset and startup recovery
+
+The reset-only startup path previously returned a failure even when Windows
+successfully reset the device. A deliberate RTX 4070 restart reproduced
+**Code 10 / `CM_PROB_FAILED_START`**, no UMDF host, and no NVIDIA desktop monitor
+for 60 seconds without external intervention. The GSP result was
+`NV_ERR_TIMEOUT` (`0x65`), not `NV_ERR_RESET_REQUIRED`.
+
+The driver now queries the versioned
+[device reset interface](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_device_reset_interface_standard),
+including bus-specific capabilities and reset status. On this USB4 RTX 4070:
+
+- Standard reset mask `0x1`: function-level reset only.
+- PCI bus-specific mask `0x31`: function-level reset, no-op, and function-level
+  reset in place. Platform-level, secondary-bus, and power-controller resets
+  are not advertised and are not attempted.
+
+After a firmware startup timeout, the driver tears down failed RM state and
+its BAR1 leases, requests the advertised in-place function reset with
+`KeepStackReset`, and **reattaches/reinitializes RM once**. WDF's interrupt
+object, DMA enabler, and fixed BAR0/BAR2 mappings remain intact; RM-owned DMA
+allocations and context are rebuilt. Recreating the WDF interrupt during the
+same preparation callback caused a verifier failure in an earlier experiment;
+the corrected retry avoids that invalid lifecycle.
+
+The retry requires a completed in-place reset, does not loop indefinitely,
+and reports reset/reattach/firmware failures explicitly. If in-place reset is
+unavailable, the existing standard function-level reset remains the fallback;
+that stack-changing path is not treated as an in-process recovery.
+
+**Hardware verification (2026-10-07):** package `oem197.inf`, DLL SHA-256
+`BA95F22DF1A898737E4DD7C9DA9FF49A2DAC47BE5523ADE619EA23C52E5E5AC1`,
+recovered three actual GSP startup timeouts (activation and two deliberate
+restarts). Each trace records timeout, successful in-place reset, RM rebuild,
+and successful firmware retry in the same host, without external recovery.
+Both restart assessments retained a healthy host for 60 seconds; no new WER
+host/verifier reports occurred with the corrected candidate.
+
+The final desktop layout/mode, animation uploads/latches, read-only brightness
+(80), and DDC capabilities string pass. This is automatic recovery, **not
+uninterrupted display output**: a deliberate restart still removes/reannounces
+the monitor and takes several seconds. No camera-based blanking measurement
+was available. This recovery covers firmware startup timeouts, not arbitrary
+runtime GPU hangs; other GPUs, unsupported reset paths, and a second failed
+firmware attempt remain hardware-unverified.
 
 ## Monitor control (I2C/DDC/CI)
 

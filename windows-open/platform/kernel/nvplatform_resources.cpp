@@ -1,4 +1,5 @@
 #include "nvplatform_resources.h"
+#include "nvplatform_memory_resource.hpp"
 
 namespace {
 
@@ -14,45 +15,20 @@ NTSTATUS DecodeMemoryResource(
     _In_ const CM_PARTIAL_RESOURCE_DESCRIPTOR& descriptor,
     _Out_ NV_PLATFORM_MEMORY_RESOURCE* resource) noexcept
 {
-    ULONGLONG decodedLength = 0;
-
-    if (descriptor.Type == CmResourceTypeMemory)
+    nv::platform::MemoryResource decoded = {};
+    const NTSTATUS status = nv::platform::DecodeMemoryResource(descriptor, &decoded);
+    if (!NT_SUCCESS(status))
     {
-        resource->physicalAddress = descriptor.u.Memory.Start;
-        decodedLength = descriptor.u.Memory.Length;
+        return status;
     }
-    else if (descriptor.Type == CmResourceTypeMemoryLarge)
-    {
-        switch (descriptor.Flags & CM_RESOURCE_MEMORY_LARGE)
-        {
-        case CM_RESOURCE_MEMORY_LARGE_40:
-            resource->physicalAddress = descriptor.u.Memory40.Start;
-            decodedLength = static_cast<ULONGLONG>(descriptor.u.Memory40.Length40) << 8;
-            break;
-        case CM_RESOURCE_MEMORY_LARGE_48:
-            resource->physicalAddress = descriptor.u.Memory48.Start;
-            decodedLength = static_cast<ULONGLONG>(descriptor.u.Memory48.Length48) << 16;
-            break;
-        case CM_RESOURCE_MEMORY_LARGE_64:
-            resource->physicalAddress = descriptor.u.Memory64.Start;
-            decodedLength = static_cast<ULONGLONG>(descriptor.u.Memory64.Length64) << 32;
-            break;
-        default:
-            return STATUS_DEVICE_CONFIGURATION_ERROR;
-        }
-    }
-    else
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (decodedLength == 0 || decodedLength > MAXSIZE_T)
+    if (decoded.length > MAXSIZE_T)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
-    resource->length = static_cast<SIZE_T>(decodedLength);
-    resource->flags = descriptor.Flags;
+    resource->physicalAddress = decoded.physicalAddress;
+    resource->length = static_cast<SIZE_T>(decoded.length);
+    resource->flags = decoded.flags;
     return STATUS_SUCCESS;
 }
 

@@ -73,6 +73,7 @@
     <ClInclude Include="frame_slots.hpp" />
     <ClInclude Include="dirty_regions.hpp" />
     <ClInclude Include="hardware_services.hpp" />
+    <ClInclude Include="..\platform\kernel\nvplatform_memory_resource.hpp" />
     <ClInclude Include="hwcursor.h" />
     <ClInclude Include="output.hpp" />
     <ClInclude Include="swapchain_d3d11.hpp" />
