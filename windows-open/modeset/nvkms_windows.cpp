@@ -1,4 +1,7 @@
 #include "nvkms_windows.h"
+#include "monitor_i2c.hpp"
+#include "monitor_i2c_aux.hpp"
+#include "monitor_i2c_native.hpp"
 
 #include "nv-kernel-rmapi-ops.h"
 #include "nv-gpu-info.h"
@@ -6,10 +9,15 @@
 extern "C" {
 #include "nvidia-modeset-os-interface.h"
 #include "nvkms-kapi.h"
+#include "nvkms-kapi-internal.h"
 #include "nvrm_gpu_attach.h"
 }
 
 #include <class/cl0000.h>
+#include <class/cl0073.h>
+#include <class/cl402c.h>
+#include <ctrl/ctrl0073/ctrl0073dp.h>
+#include <ctrl/ctrl0073/ctrl0073specific.h>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -77,6 +85,8 @@ nv_gpu_info_t registeredGpu = {};
 NvBool gpuRegistered = NV_FALSE;
 NvKmsKapiFunctionsTable kmsFunctions = {};
 NvKmsKapiDevice* kmsDevice = nullptr;
+NvU32 monitorControlHandle = 0;
+NvU32 monitorI2cHandle = 0;
 NV_KMS_WINDOWS_SURFACE* kmsDefaultLutSurface = nullptr;
 NV_KMS_WINDOWS_SURFACE* kmsGammaSurfaces[NVKMS_KAPI_MAX_HEADS] = {};
 NvKmsKapiGpuInfo enumeratedKmsGpu = {};
@@ -211,6 +221,20 @@ void DestroySurface(NV_KMS_WINDOWS_SURFACE* surface)
 
     if (kmsDevice != nullptr)
     {
+        if (monitorI2cHandle != 0)
+        {
+            const NV_STATUS status = nvRmApiFree(kmsDevice->hRmClient,
+                kmsDevice->hRmDevice, monitorI2cHandle);
+            if (status != NV_OK)
+            {
+                char message[128];
+                std::snprintf(message, sizeof(message),
+                    "Monitor I2C object release failed: 0x%08X", status);
+                NvKmsWindowsTraceMessage(message);
+            }
+            nvKmsKapiFreeRmHandle(kmsDevice, monitorI2cHandle);
+            monitorI2cHandle = 0;
+        }
         if (surface->surface != nullptr)
         {
             kmsFunctions.destroySurface(kmsDevice, surface->surface);
@@ -1136,6 +1160,20 @@ extern "C" void NvKmsWindowsShutdown(void)
 
     if (kmsDevice != nullptr)
     {
+        if (monitorControlHandle != 0)
+        {
+            const NV_STATUS status = nvRmApiFree(kmsDevice->hRmClient,
+                kmsDevice->hRmDevice, monitorControlHandle);
+            if (status != NV_OK)
+            {
+                char message[128];
+                std::snprintf(message, sizeof(message),
+                    "Monitor I2C display object release failed: 0x%08X", status);
+                NvKmsWindowsTraceMessage(message);
+            }
+            nvKmsKapiFreeRmHandle(kmsDevice, monitorControlHandle);
+            monitorControlHandle = 0;
+        }
         for (auto*& surface : kmsGammaSurfaces)
         {
             DestroySurface(surface);
@@ -1303,6 +1341,216 @@ extern "C" NV_STATUS NvKmsWindowsGetConnectedDisplayCount(
 
     *displayCount = displayInfo.connectedCount;
     return NV_OK;
+}
+
+namespace {
+
+class MonitorBus
+{
+public:
+    explicit MonitorBus(NvU32 display) noexcept :
+        display_(display), auxChannel_(*this, display) {}
+
+    NV_STATUS Begin() noexcept
+    {
+        deadline_ = GetTickCount64() + 1000;
+        return NV_OK;
+    }
+
+    NV_STATUS Write(NvU32 address, const NvU8* data, NvU32 size, bool more) noexcept
+    {
+        return auxChannel_.Write(address, data, size, more);
+    }
+
+    NV_STATUS Read(NvU32 address, NvU8* data, NvU32 size, bool more) noexcept
+    {
+        return auxChannel_.Read(address, data, size, more);
+    }
+
+    NV_STATUS Finish() noexcept
+    {
+        return auxChannel_.Finish();
+    }
+
+    NV_STATUS SubmitAux(NV0073_CTRL_DP_AUXCH_CTRL_PARAMS* parameters) noexcept
+    {
+        const NvU32 requested = parameters->size;
+        const NV_STATUS status = nvRmApiControl(kmsDevice->hRmClient,
+            monitorControlHandle, NV0073_CTRL_CMD_DP_AUXCH_CTRL,
+            parameters, sizeof(*parameters));
+        if (status != NV_OK || parameters->replyType != NV0073_CTRL_DP_AUXCH_REPLYTYPE_ACK)
+        {
+            char message[192];
+            std::snprintf(message, sizeof(message),
+                "Monitor I2C AUX: display=0x%08X cmd=%u addr=0x%02X addrOnly=%u requested=%u size=%u reply=%u retry=%u nv=0x%08X",
+                display_, parameters->cmd, parameters->addr, parameters->bAddrOnly,
+                requested, parameters->size, parameters->replyType, parameters->retryTimeMs, status);
+            NvKmsWindowsTraceMessage(message);
+        }
+        return status;
+    }
+
+    bool AuxExpired() const noexcept { return GetTickCount64() >= deadline_; }
+
+    bool WaitAux(NvU32 milliseconds) noexcept
+    {
+        if (AuxExpired() || milliseconds > 20)
+        {
+            return false;
+        }
+        Sleep(milliseconds != 0 ? milliseconds : 1);
+        return !AuxExpired();
+    }
+
+    NV_STATUS SubmitNative(NV402C_CTRL_I2C_INDEXED_PARAMS* parameters) noexcept
+    {
+        const NV_STATUS status = nvRmApiControl(kmsDevice->hRmClient, monitorI2cHandle,
+            NV402C_CTRL_CMD_I2C_INDEXED, parameters, sizeof(*parameters));
+        if (status != NV_OK)
+        {
+            char message[160];
+            std::snprintf(message, sizeof(message),
+                "Monitor I2C native failure: display=0x%08X port=%u write=%u index=%u size=%u nv=0x%08X",
+                display_, parameters->portId, parameters->bIsWrite,
+                parameters->indexLength, parameters->messageLength, status);
+            NvKmsWindowsTraceMessage(message);
+        }
+        return status;
+    }
+
+private:
+    NvU32 display_;
+    ULONGLONG deadline_ = 0;
+    nv::monitor_i2c::AuxBus<MonitorBus> auxChannel_;
+};
+
+} // namespace
+
+extern "C" NV_STATUS NvKmsWindowsMonitorI2c(
+    NvU32 displayHandle, NvU32 transmitAddress, NvU32 transmitSize,
+    const NvU8* transmit, NvU32 receiveAddress, NvU32 receiveSize,
+    NvU8* receive, NvU32 receiveFlags)
+{
+    const nv::monitor_i2c::Request request = {
+        transmitAddress, transmitSize, transmit,
+        receiveAddress, receiveSize, receive, receiveFlags };
+    const NV_STATUS validation = nv::monitor_i2c::Validate(request);
+    if (validation != NV_OK)
+    {
+        return validation;
+    }
+    const ULONGLONG lockDeadline = GetTickCount64() + 1000;
+    while (!TryAcquireSRWLockExclusive(&kmsDeviceLock))
+    {
+        if (GetTickCount64() >= lockDeadline)
+        {
+            return NV_ERR_BUSY_RETRY;
+        }
+        Sleep(1);
+    }
+    struct DeviceLockGuard
+    {
+        ~DeviceLockGuard() { ReleaseSRWLockExclusive(&kmsDeviceLock); }
+    } deviceLock;
+    if (kmsDevice == nullptr)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+    // The same recursive lock covers NVKMS EDID, hotplug, link training and timers.
+    InitOnceExecuteOnce(&kmsLockInitOnce, NvKmsInitializeLock, nullptr, nullptr);
+    while (!TryEnterCriticalSection(&kmsLock))
+    {
+        if (GetTickCount64() >= lockDeadline)
+        {
+            return NV_ERR_BUSY_RETRY;
+        }
+        Sleep(1);
+    }
+    struct BusLockGuard
+    {
+        ~BusLockGuard() { NvKmsUnlock(); }
+    } busLock;
+    NvKmsKapiStaticDisplayInfo staticInfo = {};
+    NvKmsKapiDynamicDisplayParams dynamicInfo = {};
+    dynamicInfo.handle = displayHandle;
+    if (!kmsFunctions.getStaticDisplayInfo(kmsDevice, displayHandle, &staticInfo) ||
+        !kmsFunctions.getDynamicDisplayInfo(kmsDevice, &dynamicInfo))
+    {
+        return NV_ERR_OBJECT_NOT_FOUND;
+    }
+    if (!dynamicInfo.connected)
+    {
+        return NV_ERR_NOT_READY;
+    }
+    NvKmsKapiConnectorInfo connector = {};
+    if (!kmsFunctions.getConnectorInfo(kmsDevice, staticInfo.connectorHandle, &connector))
+    {
+        return NV_ERR_GENERIC;
+    }
+    const bool aux = connector.type == NVKMS_CONNECTOR_TYPE_DP ||
+        connector.type == NVKMS_CONNECTOR_TYPE_USBC;
+    if (staticInfo.isDpMST || staticInfo.internal ||
+        (!aux && connector.type != NVKMS_CONNECTOR_TYPE_HDMI &&
+         connector.type != NVKMS_CONNECTOR_TYPE_DVI_I &&
+         connector.type != NVKMS_CONNECTOR_TYPE_DVI_D &&
+         connector.type != NVKMS_CONNECTOR_TYPE_VGA))
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+    if (monitorControlHandle == 0)
+    {
+        const NvU32 handle = nvKmsKapiGenerateRmHandle(kmsDevice);
+        if (handle == 0)
+        {
+            return NV_ERR_NO_MEMORY;
+        }
+        const NV_STATUS status = nvRmApiAlloc(kmsDevice->hRmClient,
+            kmsDevice->hRmDevice, handle, NV04_DISPLAY_COMMON, nullptr);
+        if (status != NV_OK)
+        {
+            nvKmsKapiFreeRmHandle(kmsDevice, handle);
+            return status;
+        }
+        monitorControlHandle = handle;
+    }
+    NV0073_CTRL_SPECIFIC_GET_I2C_PORTID_PARAMS port = {};
+    if (!aux)
+    {
+        port.displayId = displayHandle;
+        const NV_STATUS status = nvRmApiControl(kmsDevice->hRmClient,
+            monitorControlHandle, NV0073_CTRL_CMD_SPECIFIC_GET_I2C_PORTID,
+            &port, sizeof(port));
+        if (status != NV_OK)
+        {
+            return status;
+        }
+        if (port.ddcPortId == 0 || port.ddcPortId > 16)
+        {
+            return NV_ERR_NOT_SUPPORTED;
+        }
+    }
+    MonitorBus bus(displayHandle);
+    if (aux)
+    {
+        return nv::monitor_i2c::Transfer(bus, request);
+    }
+    if (monitorI2cHandle == 0)
+    {
+        const NvU32 handle = nvKmsKapiGenerateRmHandle(kmsDevice);
+        if (handle == 0)
+        {
+            return NV_ERR_NO_MEMORY;
+        }
+        const NV_STATUS status = nvRmApiAlloc(kmsDevice->hRmClient,
+            kmsDevice->hRmDevice, handle, NV40_I2C, nullptr);
+        if (status != NV_OK)
+        {
+            nvKmsKapiFreeRmHandle(kmsDevice, handle);
+            return status;
+        }
+        monitorI2cHandle = handle;
+    }
+    return nv::monitor_i2c::IndexedTransfer(bus, port.ddcPortId, request);
 }
 
 extern "C" NV_STATUS NvKmsWindowsGetDisplay(

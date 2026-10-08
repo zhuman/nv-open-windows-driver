@@ -340,6 +340,7 @@ NTSTATUS Adapter::RefreshDisplays() noexcept
             status = departureStatus;
             continue;
         }
+        output->StopMonitorControl();
         OnOutputDestroyed(output);
         WdfObjectDelete(output->Monitor());
     }
@@ -348,6 +349,10 @@ NTSTATUS Adapter::RefreshDisplays() noexcept
 
 void Adapter::ResetOutputs() noexcept
 {
+    for (NvU32 index = 0; index < outputCount_; ++index)
+    {
+        outputs_[index]->StopMonitorControl();
+    }
     if (outputCount_ != 0)
     {
         NvKmsWindowsSetDisplayModes(nullptr, 0);

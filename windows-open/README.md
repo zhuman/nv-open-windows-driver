@@ -338,3 +338,92 @@ The next NvPort expansion should follow the first thread and allocator call
 sites reached while importing the selected RM core. Keep using sidecar Windows
 backends and explicit module definitions; do not modify the published NvPort
 headers or compile Unix kernel backend files.
+
+## Monitor control (I2C/DDC/CI)
+
+IddCx now registers monitor I2C transmit, receive, and availability-gated
+combined transmit/receive callbacks. The shared NVKMS facade resolves the
+current display/connector on every request and permits only the DDC/CI endpoint
+`0x37`. Windows' directional `0x6E`/`0x6F` addresses are normalized at the
+IddCx boundary; arbitrary board, EDID, and HDCP bus access is not exposed.
+
+- **DisplayPort/USB-C:** RM I2C-over-AUX with 16-byte chunks, repeated-start/MOT
+  handling, terminal STOP, bounded DEFER/write-status retries, and staged
+  receive-buffer publication. Length-prefixed replies are supported.
+- **HDMI/DVI/VGA:** published RM indexed I2C, fixed-length transmit/receive,
+  and combined requests with at most four transmit/index bytes. Length-prefixed
+  native receives and larger combined prefixes return `NOT_SUPPORTED` before
+  bus traffic. This path is software-tested, not hardware-validated.
+- **Limits:** 64 transmit bytes and 256 receive bytes per callback. Internal
+  displays and DP MST are unsupported. KMDOD's OS-facing I2C interface is
+  still pending.
+
+Transactions retain a WDF power reference and serialize with NVKMS EDID,
+hotplug, link training, and other NVKMS users through the existing device and
+recursive NVKMS locks. This is conservative global serialization, not
+independent per-connector concurrency. Lifecycle/lock acquisition and AUX
+software retries are bounded; synchronous RM calls still use RM's own hardware
+timeouts. Disconnect, power loss, and teardown return explicit errors.
+
+### Build and run the Win32 test tool
+
+From the repository root:
+
+```powershell
+& .\windows-open\tools\build-monitor-ddc.ps1
+$ddc = '.\windows-open\out\x64\monitor-ddc\monitor-ddc.exe'
+& $ddc --list
+& $ddc --display '\\.\DISPLAYn' --capabilities-string
+```
+
+Replace `DISPLAYn` with the NVIDIA-connected display shown by `--list`;
+display numbers can change after a driver restart. Run the executable in the
+logged-in **interactive desktop**, not directly through SSH/session 0 or RDP.
+Listing shows the actual GPU and monitor paths to avoid testing another GPU.
+The tool is read-only by default and exercises `GetMonitorCapabilities` and
+`GetMonitorBrightness`; `--capabilities-string` also retrieves the MCCS text.
+
+For manual monitor-OSD observation:
+
+```powershell
+& $ddc --display '\\.\DISPLAYn' --brightness-only --exercise --hold-ms 10000
+```
+
+This changes brightness by approximately 5% of its reported range, checks exact
+readback, holds it for ten seconds, then restores and verifies the original.
+Let the tool finish; killing it or unplugging the monitor can prevent
+restoration. Writes require an explicit display; `--physical N` selects a
+physical monitor index (default `0`). Hold time is limited to 60 seconds.
+`--brightness-only` explicitly skips the capabilities API, rather than hiding
+its failure. Exit codes are `0` for success, `1` for API/verification failure,
+and `2` for invalid command-line arguments.
+
+### Validation and remaining work
+
+RTX 4070 / ROG PG27U DisplayPort testing successfully read brightness
+`min=0, current=80, max=500`, changed **80 -> 105 -> 80**, verified restoration,
+and retrieved the full MCCS capabilities string. The monitor advertises MCCS
+2.2; Windows `GetMonitorCapabilities` returns
+`0xC02625DC` (`ERROR_GRAPHICS_MCA_UNSUPPORTED_MCCS_VERSION`). Default tool mode
+therefore reports failure even when the independent brightness operations
+succeed; the monitor's version and capability data are not rewritten.
+
+The final scoped `--brightness-only --exercise` test passed, as did a separate
+post-restoration read. All 46 monitor-I2C callbacks in that final trace succeeded;
+the maximum recorded callback time was 16 ms, below IddCx's five-second
+deadline. There were no lost ETW events or runtime errors during those tests.
+These observations do not certify the untested failure/power scenarios below.
+
+The production framing, AUX, and native-indexed helpers have **67,411 counted
+software cases** covering bounds, addresses, chunking, partial ACKs,
+DEFER/write-status polling, cleanup, and error propagation:
+
+```powershell
+& .\windows-open\iddcx\tests\run-monitor-i2c-tests.ps1
+```
+
+This runner uses the production Clang-CL toolchain. Native HDMI/DVI/VGA,
+positive length-prefixed/combined hardware requests, unplug during a
+transaction, forced timeouts, power transitions, and HLK certification remain
+unvalidated. No capture device was connected for these DDC tests; physical
+brightness/OSD confirmation remains a manual step.

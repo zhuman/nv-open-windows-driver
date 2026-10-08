@@ -7,6 +7,7 @@
 #include "driver_parameters.hpp"
 #include "hwcursor.h"
 #include "trace.h"
+#include "monitor_i2c.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -151,6 +152,7 @@ Output::Output(
 
 Output::~Output() noexcept
 {
+    StopMonitorControl();
     cursor_.reset();
     // The monitor outlives its swapchain context and scanout allocation.
     QuiesceSwapChain();
@@ -766,6 +768,106 @@ NTSTATUS SetGammaRamp(IDDCX_MONITOR monitor, const IDARG_IN_SET_GAMMARAMP* input
     return context == nullptr
         ? STATUS_INVALID_DEVICE_STATE
         : context->SetGammaRamp(input);
+}
+
+NTSTATUS Output::MonitorI2c(
+    NvU32 transmitAddress, NvU32 transmitSize, const NvU8* transmit,
+    NvU32 receiveAddress, NvU32 receiveSize, NvU8* receive,
+    NvU32 receiveFlags) noexcept
+{
+    const WDFDEVICE device = owner_->Device();
+    const ULONGLONG start = GetTickCount64();
+    NTSTATUS status = WdfDeviceStopIdle(device, FALSE);
+    NV_STATUS nvStatus = NV_ERR_NOT_READY;
+    if (NT_SUCCESS(status))
+    {
+        DeviceContext* const context = GetDeviceContext(device);
+        bool locked = false;
+        while (!(locked = TryAcquireSRWLockShared(&context->lifecycleLock)))
+        {
+            if (GetTickCount64() - start >= 1000)
+            {
+                nvStatus = NV_ERR_BUSY_RETRY;
+                break;
+            }
+            Sleep(1);
+        }
+        if (locked)
+        {
+            if (InterlockedCompareExchange(&context->d0Active, 0, 0) != 0 &&
+                context->nvKmsInitialized && monitorControlAvailable_.load())
+            {
+                nvStatus = NvKmsWindowsMonitorI2c(displayState_.displayHandle,
+                    monitor_i2c::WindowsAddress(transmitAddress, false), transmitSize, transmit,
+                    monitor_i2c::WindowsAddress(receiveAddress, true), receiveSize, receive, receiveFlags);
+            }
+            ReleaseSRWLockShared(&context->lifecycleLock);
+        }
+        WdfDeviceResumeIdle(device);
+        switch (nvStatus)
+        {
+        case NV_OK: status = STATUS_SUCCESS; break;
+        case NV_ERR_INVALID_ARGUMENT: status = STATUS_INVALID_PARAMETER; break;
+        case NV_ERR_NOT_SUPPORTED: status = STATUS_NOT_SUPPORTED; break;
+        case NV_ERR_BUFFER_TOO_SMALL: status = STATUS_BUFFER_TOO_SMALL; break;
+        case NV_ERR_OBJECT_NOT_FOUND: status = STATUS_GRAPHICS_I2C_DEVICE_DOES_NOT_EXIST; break;
+        case NV_ERR_TIMEOUT: status = STATUS_IO_TIMEOUT; break;
+        case NV_ERR_BUSY_RETRY: status = STATUS_DEVICE_BUSY; break;
+        case NV_ERR_INVALID_STATE:
+        case NV_ERR_NOT_READY: status = STATUS_DEVICE_NOT_READY; break;
+        default: status = receiveSize != 0 ?
+            STATUS_GRAPHICS_I2C_ERROR_RECEIVING_DATA :
+            STATUS_GRAPHICS_I2C_ERROR_TRANSMITTING_DATA; break;
+        }
+    }
+    TraceEvents(NT_SUCCESS(status) ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+        TRACE_DRIVER,
+        "Monitor I2C: display=0x%08X txAddr=0x%02X tx=%u rxAddr=0x%02X rx=%u flags=%u nv=0x%08X status=%!STATUS! elapsedMs=%llu",
+        displayState_.displayHandle, transmitAddress, transmitSize,
+        receiveAddress, receiveSize, receiveFlags, nvStatus, status, GetTickCount64() - start);
+    return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS MonitorI2cTransmit(IDDCX_MONITOR monitor, const IDARG_IN_I2C_TRANSMIT* input)
+{
+    if (input == nullptr || input->DataSizeInBytes == 0)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "Invalid monitor I2C transmit request");
+        return STATUS_INVALID_PARAMETER;
+    }
+    return GetOutput(monitor)->MonitorI2c(input->SevenBitI2CAddress,
+        input->DataSizeInBytes, static_cast<const NvU8*>(input->pData),
+        0, 0, nullptr, 0);
+}
+
+_Use_decl_annotations_
+NTSTATUS MonitorI2cReceive(IDDCX_MONITOR monitor, const IDARG_IN_I2C_RECEIVE* input)
+{
+    if (input == nullptr || input->DataSizeInBytes == 0)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "Invalid monitor I2C receive request");
+        return STATUS_INVALID_PARAMETER;
+    }
+    return GetOutput(monitor)->MonitorI2c(0, 0, nullptr,
+        input->SevenBitI2CAddress, input->DataSizeInBytes,
+        static_cast<NvU8*>(input->pData), input->Flags);
+}
+
+_Use_decl_annotations_
+NTSTATUS MonitorI2cTransmitAndReceive(
+    IDDCX_MONITOR monitor, const IDARG_IN_I2C_TRANSMIT_AND_RECEIVE* input)
+{
+    if (input == nullptr || input->TransmitDataSizeInBytes == 0 ||
+        input->ReceiveDataSizeInBytes == 0)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "Invalid combined monitor I2C request");
+        return STATUS_INVALID_PARAMETER;
+    }
+    return GetOutput(monitor)->MonitorI2c(input->TransmitSevenBitI2CAddress,
+        input->TransmitDataSizeInBytes, static_cast<const NvU8*>(input->pTransmitData),
+        input->ReceiveSevenBitI2CAddress, input->ReceiveDataSizeInBytes,
+        static_cast<NvU8*>(input->pReceiveData), input->ReceiveFlags);
 }
 
 } // namespace nv::iddcx

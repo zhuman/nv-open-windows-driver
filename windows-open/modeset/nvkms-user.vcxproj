@@ -45,6 +45,9 @@
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="monitor_i2c.hpp" />
+    <ClInclude Include="monitor_i2c_aux.hpp" />
+    <ClInclude Include="monitor_i2c_native.hpp" />
     <ClInclude Include="nv-gpu-info.h" />
     <ClInclude Include="nvkms_windows.h" />
   </ItemGroup>

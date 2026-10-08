@@ -186,6 +186,15 @@ NV_STATUS NvKmsWindowsGetDisplay(
 	NV_KMS_WINDOWS_DISPLAY_STATE* displayState);
 NV_STATUS NvKmsWindowsGetPrimaryDisplay(
 	NV_KMS_WINDOWS_DISPLAY_STATE* displayState);
+NV_STATUS NvKmsWindowsMonitorI2c(
+	NvU32 displayHandle,
+	NvU32 transmitAddress,
+	NvU32 transmitSize,
+	const NvU8* transmit,
+	NvU32 receiveAddress,
+	NvU32 receiveSize,
+	NvU8* receive,
+	NvU32 receiveFlags);
 NV_STATUS NvKmsWindowsCreateScanoutSurface(
 	NvU32 width,
 	NvU32 height,

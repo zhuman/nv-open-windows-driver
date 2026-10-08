@@ -74,6 +74,7 @@ supported-device table has been tested.
 | Hardware bring-up | PCI/BAR access, interrupts, GSP boot, RM/NVKMS initialization, and scanout allocation. |
 | Physical displays | Connector/EDID discovery, mode enumeration and validation, Windows monitor arrival, modesetting, and live desktop/window presentation. |
 | Hotplug | HDMI and DisplayPort arrival/departure, connector reconciliation, and topology updates. |
+| Monitor control | DisplayPort DDC/CI brightness reads, writes, verified restoration, and MCCS capabilities-string retrieval on the ROG PG27U. |
 | Color and composition | SDR/HDR transitions, FP16/scRGB input, RGB10 HDR output, HDR10 metadata, gamma/LUT processing, and Windows color matrices including Night Light. |
 | Hardware cursor | Alpha cursor images, visibility/position updates, and rebinding across SDR/HDR modesets. XOR cursors are not advertised. |
 | Frame transfer | Native IddCx D3D12 common-buffer copying, D3D11 staging, and selectable reference/readback modes. |
@@ -133,6 +134,13 @@ ownership/damage schedules**.
   production power-management/reliability certification remain open.
   Experimental D3D11 `ReadFromSubresource` modes work but are much slower
   than the preferred paths.
+- **DDC/CI validation is DisplayPort-only so far.** The native HDMI/DVI/VGA
+  transport is implemented but hardware-unverified; internal displays and DP
+  MST are unsupported. On the tested MCCS 2.2 monitor, Windows
+  `GetMonitorCapabilities` rejects the advertised version even though
+  brightness control and capabilities-string retrieval work. These new tests
+  used API readback and traces, not capture or physical OSD observation. See
+  [monitor-control testing](windows-open/README.md#monitor-control-i2cddcci).
 
 **Start here:** [Windows build/platform notes](windows-open/README.md),
 [IddCx build script](build-windows-iddcx.ps1), and

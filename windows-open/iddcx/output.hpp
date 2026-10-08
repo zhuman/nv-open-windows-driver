@@ -126,6 +126,11 @@ public:
     NTSTATUS SetDefaultHdrMetadata(
         const IDARG_IN_MONITOR_SET_DEFAULT_HDR_METADATA* arguments) noexcept;
     NTSTATUS SetGammaRamp(const IDARG_IN_SET_GAMMARAMP* arguments) noexcept;
+    NTSTATUS MonitorI2c(
+        NvU32 transmitAddress, NvU32 transmitSize, const NvU8* transmit,
+        NvU32 receiveAddress, NvU32 receiveSize, NvU8* receive,
+        NvU32 receiveFlags) noexcept;
+    void StopMonitorControl() noexcept { monitorControlAvailable_.store(false); }
 
 private:
     Output(
@@ -166,6 +171,7 @@ private:
     SwapChainD3D11* swapChain_;
     SwapChainD3D12* swapChain12_ = nullptr;
     bool d3d12Failed_ = false;
+    std::atomic<bool> monitorControlAvailable_{true};
     std::unique_ptr<HwCursor> cursor_;
 };
 
@@ -178,5 +184,8 @@ EVT_IDD_CX_MONITOR_ASSIGN_SWAPCHAIN AssignSwapChain;
 EVT_IDD_CX_MONITOR_UNASSIGN_SWAPCHAIN UnassignSwapChain;
 EVT_IDD_CX_MONITOR_SET_DEFAULT_HDR_METADATA SetDefaultHdrMetadata;
 EVT_IDD_CX_MONITOR_SET_GAMMA_RAMP SetGammaRamp;
+EVT_IDD_CX_MONITOR_I2C_TRANSMIT MonitorI2cTransmit;
+EVT_IDD_CX_MONITOR_I2C_RECEIVE MonitorI2cReceive;
+EVT_IDD_CX_MONITOR_I2C_TRANSMIT_AND_RECEIVE MonitorI2cTransmitAndReceive;
 
 } // namespace nv::iddcx

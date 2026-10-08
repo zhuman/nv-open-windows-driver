@@ -420,22 +420,30 @@ in the Windows sidecar and do not modify published NVKMS sources. Treat exact
 it differently from RGB, 4:4:4, and 4:2:2; a preference is insufficient when
 Windows committed a precise wire format.
 
-Add a connector-scoped monitor-control transport to the same display facade.
-It accepts bounded seven-bit I2C transmit, receive, and atomic
+The connector-scoped monitor-control transport is implemented in the shared
+Windows display facade. It accepts bounded seven-bit I2C transmit, receive, and atomic
 transmit-then-receive requests against a resolved adapter/connector/display,
-not an arbitrary hardware port. Route native HDMI/DVI DDC through the
-appropriate RM display I2C operation and DisplayPort requests through
-`NV0073_CTRL_CMD_DP_AUXCH_CTRL` in I2C-over-AUX mode. Preserve repeated-start
-and middle-of-transaction semantics, split transfers only according to RM/AUX
-limits, handle ACK/NACK/DEFER/timeout distinctly, and use bounded retries.
+not an arbitrary hardware port. Native HDMI/DVI/VGA use `NV40_I2C` and
+`NV402C_CTRL_CMD_I2C_INDEXED`, resolving the connector's DDC port through
+`NV0073_CTRL_CMD_SPECIFIC_GET_I2C_PORTID`. DisplayPort/USB-C requests use
+`NV0073_CTRL_CMD_DP_AUXCH_CTRL` in I2C-over-AUX mode, with 16-byte chunks,
+repeated-start/MOT handling, terminal data-chunk STOP, distinct
+ACK/NACK/DEFER/timeout handling, and bounded write-status polling/retries.
+Transmit and receive limits are 64 and 256 bytes. Native combined prefixes
+are limited to four bytes; native length-prefixed receives return
+`NOT_SUPPORTED` before bus traffic. Internal displays and DP MST are rejected.
 
-Serialize this transport per physical connector with NVKMS EDID reads, DP link
-training, hotplug probing, HDCP, and any other DDC/AUX owner. Reject operations
-after disconnect, during teardown, or against adapter-local I2C ports. Enforce
-the Windows monitor-I2C address and protected-content rules, including refusal
-of HDCP addresses whenever protected-content state requires it. Keep bus
-locking, power references, timeout recovery, and RM status translation in the
-shared facade so KMDOD and IddCx cannot develop conflicting bus behavior.
+The transport serializes conservatively through the existing global device
+and recursive NVKMS locks shared with EDID, DP link training, hotplug, and
+other NVKMS users; finer per-connector concurrency is deferred. Each request
+checks connectivity and rejects adapter-local ports. Only DDC/CI address
+`0x37` is allowed, excluding EDID, HDCP, and board endpoints regardless of
+protected-content state. The IddCx boundary normalizes Windows' observed
+directional `0x6E`/`0x6F` addresses and owns the WDF power/lifecycle reference
+and NTSTATUS translation. The facade owns bus/device locking and RM
+translation, with bounded lock waits and AUX software retries; synchronous
+RM hardware calls retain RM's existing timeouts. KMDOD callback wiring is
+still pending.
 
 The initial Windows KAPI facade is now operational. It loads NVKMS, enumerates
 and allocates the device, acquires modeset ownership, queries
@@ -751,13 +759,17 @@ and report frame statistics through IddCx. A Direct3D texture path is optional
 later; it is not a prerequisite for the system-buffer path and must not assume
 an unpublished NVIDIA rendering UMD.
 
-Register `EVT_IDD_CX_MONITOR_I2C_TRANSMIT`,
+Registered `EVT_IDD_CX_MONITOR_I2C_TRANSMIT`,
 `EVT_IDD_CX_MONITOR_I2C_RECEIVE`, and
-`EVT_IDD_CX_MONITOR_I2C_TRANSMIT_AND_RECEIVE`. Resolve each monitor object to
-its adapter-owned connector and forward the request to the same shared
-transport used by KMDOD. Honor IddCx buffer-size and callback-lifetime rules,
-retain the device power reference for the complete blocking transaction, and
-cancel safely when monitor removal or device teardown begins.
+availability-gated `EVT_IDD_CX_MONITOR_I2C_TRANSMIT_AND_RECEIVE`. Each monitor
+resolves to its adapter-owned display and the shared transport. Callbacks
+retain a nonblocking WDF power reference, check D0/initialization state under
+lifecycle protection, and publish receive data only after successful transfer
+and cleanup. Monitor-control availability is retired after successful
+departure or during reset/destruction, not on a failed departure that could
+reuse the output. In-flight synchronous RM requests are lifetime-protected,
+not asynchronously cancellable; forced removal/timeout certification remains
+open.
 
 #### ReadFromSubresource Experiment
 
@@ -1676,6 +1688,20 @@ read/link training, device power transitions, and teardown. Verify DDC/CI
 interoperability, strict target-to-connector routing, rejection of invalid or
 adapter-local ports, protected-address policy, and absence of cross-adapter bus
 or lock state.
+
+Current IddCx monitor-control validation: 33,346 framing/bounds/address cases,
+8,461 production AUX cases, and 25,604 native indexed-I2C cases pass. The x64
+IddCx driver and strict-warning Win32 tool build; the experimental x64 KMDOD
+compatibility build also passed, without implementing its OS-facing I2C
+interface. RTX 4070 / ROG PG27U DisplayPort hardware tests read brightness,
+verified **80 -> 105 -> 80** writes/restoration, and retrieved the full MCCS
+capabilities string. Windows `GetMonitorCapabilities` rejects the monitor's
+advertised MCCS 2.2 with `0xC02625DC`; this remains an explicit API failure,
+not a synthesized success. Scoped `--brightness-only` testing skips that API.
+Native HDMI/DVI/VGA, positive length-prefixed/combined hardware requests,
+forced failure/removal/power cases, ARM64, and physical OSD/capture confirmation
+remain unverified. Tool usage and manual validation are documented in
+[Windows monitor control](windows-open/README.md#monitor-control-i2cddcci).
 
 Exercise Driver Verifier for KMDOD, Application Verifier and WDF diagnostics
 for IddCx, disable/enable, reboot, bugcheck display ownership, and eventually

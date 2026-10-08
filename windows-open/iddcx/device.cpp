@@ -514,6 +514,12 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     iddConfiguration.EvtIddCxMonitorAssignSwapChain = AssignSwapChain;
     iddConfiguration.EvtIddCxMonitorUnassignSwapChain = UnassignSwapChain;
     iddConfiguration.EvtIddCxMonitorSetGammaRamp = SetGammaRamp;
+    iddConfiguration.EvtIddCxMonitorI2CTransmit = MonitorI2cTransmit;
+    iddConfiguration.EvtIddCxMonitorI2CReceive = MonitorI2cReceive;
+    if (IDD_IS_FIELD_AVAILABLE(IDD_CX_CLIENT_CONFIG, EvtIddCxMonitorI2CTransmitAndReceive))
+    {
+        iddConfiguration.EvtIddCxMonitorI2CTransmitAndReceive = MonitorI2cTransmitAndReceive;
+    }
 
         if (IDD_IS_FIELD_AVAILABLE(
             IDD_CX_CLIENT_CONFIG,
