@@ -170,6 +170,15 @@ typedef struct NV_KMS_WINDOWS_PRESENT_TIMING
 	NvU64 uploadEnd;
 } NV_KMS_WINDOWS_PRESENT_TIMING;
 
+typedef struct NV_KMS_WINDOWS_CURSOR_TIMING
+{
+	NvU64 begin;
+	NvU64 lockTicks;
+	NvU64 uploadTicks;
+	NvU64 programStart;
+	NvU64 programEnd;
+} NV_KMS_WINDOWS_CURSOR_TIMING;
+
 NV_STATUS NvKmsWindowsRegisterGpu(
 	NvU32 gpuId,
 	NvU32 domain,
@@ -236,6 +245,15 @@ NV_STATUS NvKmsWindowsUpdateCursor(
 	NvS32 x,
 	NvS32 y,
 	NvU32 sdrWhiteLevel);
+NV_STATUS NvKmsWindowsUpdateCursorTimed(
+	NvU32 head,
+	NvU32 displayHandle,
+	NV_KMS_WINDOWS_SURFACE* surface,
+	NvBool surfaceChanged,
+	NvS32 x,
+	NvS32 y,
+	NvU32 sdrWhiteLevel,
+	NV_KMS_WINDOWS_CURSOR_TIMING* timing);
 NV_STATUS NvKmsWindowsProbeRmClient(NvHandle* clientHandle);
 void NvKmsWindowsSetDisplayChangeCallback(
 	NV_KMS_WINDOWS_DISPLAY_CHANGE_CALLBACK callback,

@@ -1211,6 +1211,45 @@ device, both experiment DWORDs absent from both journaled keys, and all four
 session packages removed. The owned scene task was unregistered and its
 temporary workload files removed; the owned ETW logger was stopped.
 
+### Cursor programming independent of CE uploads (October 8)
+
+Full-frame uploads previously held the same exclusive device lock as hardware
+cursor programming. Cursor moves also made a redundant RM resource query that
+could wait behind synchronous CE work. The Windows backend now uses shared
+device-lifetime protection, separate serialized CE transfers, short display
+programming/notifier exclusion, and complete-present transaction serialization.
+Uploads release display-programming exclusion; cursor position-only programming
+does not take CE exclusion. Hot paths use immutable KAPI topology fields.
+Lifecycle/modeset operations remain exclusive, and cursor image uploads still
+share the cached CE channel.
+
+Production-header concurrency tests pass 24,054 checks, including cursor/flip
+exclusion, actual cursor work while a copy guard remains held, CE/presenter
+serialization, moved guard ownership, and teardown waiting for active shared
+work. Existing damage, ownership, parameter, DDC/AUX/I2C, and BAR regressions
+pass, as does the signed x64 build.
+
+Deployed package `oem200.inf` (DLL SHA-256
+`8BA7FC24C991FCF2C526AE0742A098BDD6FD04EC11513C4FF2EB16B0A112333C`) passed
+initialization and warm restart. After a transient desktop/monitor enumeration
+change, the AMD primary and baseline layout returned without this session
+changing settings. A coordinated AMD session separately reported its own
+AMD-only install/rollback; the transient is not attributed to the NVIDIA patch.
+Read-only brightness 80 and MCCS string retrieval pass.
+
+The user's 60-second reproduction provides real concurrency evidence: the
+58.668-second analysis interval contains 589 complete 66,355,200-byte FP16
+uploads and 2,554 successful position-only cursor attempts. **759 cursor
+programming intervals are wholly inside complete-frame upload intervals**.
+Cursor lock-wait p95 is 1.1 microseconds, total backend cursor median/p95 is
+0.0699/0.2094 ms, and full-frame upload median/p95 is 18.2555/18.3834 ms.
+No cursor failures/retries or ETW loss/decoding errors were recorded.
+Automated GDI-window runs did not sustain hardware-cursor updates and are not
+accepted cursor-overlap evidence. This is backend timing/concurrency validation,
+not a camera measurement, physical input-latency claim, or matched before/after
+smoothness benchmark. See
+[synchronization details](windows-open/README.md#hardware-cursor-and-frame-upload-synchronization).
+
 ### Allocation-specific pixel cache and accumulated damage (October 6)
 
 The completed native IddCx checkpoint was committed as `5f12929a`; no push.

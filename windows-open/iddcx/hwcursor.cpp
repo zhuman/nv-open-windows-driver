@@ -197,10 +197,15 @@ void HwCursor::Process() noexcept
         {
             continue;
         }
-        const NV_STATUS status = NvKmsWindowsUpdateCursor(
+        NV_KMS_WINDOWS_CURSOR_TIMING timing = {};
+        const NV_STATUS status = NvKmsWindowsUpdateCursorTimed(
             output_->AssignedHead(), output_->DisplayState().displayHandle,
             show ? (pending ? pending.get() : image.get()) : nullptr,
-            imageChanged ? NV_TRUE : NV_FALSE, x, y, whiteLevel);
+            imageChanged ? NV_TRUE : NV_FALSE, x, y, whiteLevel, &timing);
+        TraceEvents(TRACE_LEVEL_VERBOSE, TRACE_DRIVER,
+            "Hardware cursor timing: head=%u image=%u status=0x%08X begin=%llu lock=%llu upload=%llu programStart=%llu programEnd=%llu",
+            output_->AssignedHead(), imageChanged, status, timing.begin, timing.lockTicks,
+            timing.uploadTicks, timing.programStart, timing.programEnd);
         if (status != NV_OK)
         {
             retry = status == NV_ERR_IN_USE;

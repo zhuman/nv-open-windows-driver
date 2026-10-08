@@ -50,6 +50,7 @@
     <ClInclude Include="monitor_i2c_native.hpp" />
     <ClInclude Include="nv-gpu-info.h" />
     <ClInclude Include="nvkms_windows.h" />
+    <ClInclude Include="presentation_locks.hpp" />
   </ItemGroup>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
     <ItemGroup>

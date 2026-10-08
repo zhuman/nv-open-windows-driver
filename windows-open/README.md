@@ -342,6 +342,79 @@ sites reached while importing the selected RM core. Keep using sidecar Windows
 backends and explicit module definitions; do not modify the published NvPort
 headers or compile Unix kernel backend files.
 
+## Hardware cursor and frame-upload synchronization
+
+The Windows NVKMS backend uses
+[`PresentationLocks`](modeset/presentation_locks.hpp) to separate device lifetime,
+CE transfers, display programming, and complete presentation transactions:
+
+- Uploads, cursor updates, presentations, scanout-buffer lookups, and flip
+  notifier reads take shared device-lifetime protection. Initialization,
+  shutdown, external surface allocation/destruction, modesets, and monitor
+  control retain exclusive protection.
+- All backend CE transfers serialize separately because common KAPI caches one
+  copy-channel handle. A position-only cursor update does not acquire this lock.
+- Cursor programming, flip programming, and flip-notifier reads exclude one
+  another, but the display-programming lock is not held across ordinary frame
+  uploads. Cursor image uploads finish before acquiring programming exclusion.
+- Complete presentations serialize across preflight, upload, and flip phases,
+  without excluding cursor programming during the upload phase. The pipeline's
+  existing RAM/VRAM leases still prevent uploads into front/pending storage.
+
+Acquire device lifetime first, then the presentation transaction when needed,
+then programming or copy exclusion. Infrequent LUT/gamma operations may take
+copy exclusion while holding programming exclusion; the reverse nesting is
+not permitted. Common NVKMS ioctl/timer synchronization remains unchanged.
+The hot paths read the allocated KAPI device's immutable head/layer counts
+instead of issuing a redundant RM resource query on every cursor update/flip.
+
+Cursor shape changes still share the CE channel with frame uploads, and surface
+allocation or modeset work still requires exclusive lifetime protection. This
+change does not make those infrequent operations asynchronous.
+
+The retained cursor API wraps a timed entry point. Verbose `Hardware cursor
+timing` events report the attempt's status, QPC begin, lifetime/programming lock
+wait ticks, image upload ticks, and programming start/end. These use the same
+clock as pipeline upload intervals; failures/retries are traced too.
+
+Run the presentation regressions with:
+
+```powershell
+& .\windows-open\iddcx\tests\run-dirty-regions-tests.ps1
+```
+
+The runner includes 24,054 production-header checks for cursor/copy overlap,
+cursor/flip exclusion, CE/presenter serialization, lifecycle teardown, moved
+guard ownership, and 12,000 concurrent copy/program operations.
+
+**RTX 4070 assessment (2026-10-08):** signed x64 package `oem200.inf`, loaded DLL
+SHA-256 `8BA7FC24C991FCF2C526AE0742A098BDD6FD04EC11513C4FF2EB16B0A112333C`,
+initialized and passed a deliberate warm restart. The restarted host remained
+healthy through the subsequent tests. Immediate post-restart desktop enumeration
+temporarily differed and a physical-monitor lookup failed; a later recheck
+returned the baseline layout with the AMD-connected BenQ primary, without
+this session changing display settings. The coordinated AMD session separately
+reported an AMD-only install/rollback, so the transient is not attributed to
+the NVIDIA changes. Read-only brightness 80 and MCCS capabilities-string
+retrieval passed; the known MCCS 2.2 `GetMonitorCapabilities` error remains.
+
+The user's 60-second workload reproduction decoded with zero lost events,
+unknowns, or format errors. Its 58.668-second analysis interval contained 1,149
+uploads/latches, including 589 complete 66,355,200-byte 3840x2160 FP16 uploads.
+Of 2,554 successful position-only cursor attempts, **759 programming intervals
+were entirely inside complete-frame upload intervals**. Cursor lock-wait p95
+was 0.0011 ms; total backend cursor duration median/p95 was 0.0699/0.2094 ms.
+Complete-frame upload median/p95 was 18.2555/18.3834 ms. No cursor failures or
+retries were recorded. Cursor event gaps include periods without mouse movement
+and are not an input-latency measurement.
+
+Earlier automated window tests confirmed full-frame transfers but did not
+produce sustained hardware-cursor updates, so they are not cursor-concurrency
+proof or a valid before/after cursor benchmark. The reproduction verifies backend
+overlap, not physical-panel input latency or camera-measured smoothness.
+The final NVIDIA check retained problem code 0 and the verified loaded DLL,
+with no new WER reports or owned test tasks/loggers left running.
+
 ## BAR1 resources and bounded mappings
 
 The earlier UMDF code filtered out `CmResourceTypeMemoryLarge` in both BAR

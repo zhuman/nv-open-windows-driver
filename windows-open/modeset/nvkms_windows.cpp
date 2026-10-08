@@ -2,6 +2,7 @@
 #include "monitor_i2c.hpp"
 #include "monitor_i2c_aux.hpp"
 #include "monitor_i2c_native.hpp"
+#include "presentation_locks.hpp"
 
 #include "nv-kernel-rmapi-ops.h"
 #include "nv-gpu-info.h"
@@ -179,6 +180,7 @@ void CopyHdrMetadata(
     destination->maxFALL = source.maxFrameAverageLightLevel;
 }
 SRWLOCK kmsDeviceLock = SRWLOCK_INIT;
+nv::modeset::PresentationLocks presentationLocks(kmsDeviceLock);
 INIT_ONCE kmsLockInitOnce = INIT_ONCE_STATIC_INIT;
 CRITICAL_SECTION kmsLock;
 
@@ -210,6 +212,16 @@ NvU64 PerformanceCounter()
     LARGE_INTEGER counter = {};
     QueryPerformanceCounter(&counter);
     return static_cast<NvU64>(counter.QuadPart);
+}
+
+NvBool CopyMemoryRange(
+    NvKmsKapiMemory* destination,
+    const NvKmsKapiMemory* source,
+    NvU64 offset,
+    NvU64 size)
+{
+    auto lock = presentationLocks.Copy();
+    return kmsFunctions.copyMemoryRange(kmsDevice, destination, source, offset, size);
 }
 
 void DestroySurface(NV_KMS_WINDOWS_SURFACE* surface)
@@ -374,8 +386,7 @@ NV_STATUS CreateLutSurface(
     lut->surface = kmsFunctions.createSurface(kmsDevice, &surfaceParams);
     FlushProcessWriteBuffers();
     if (lut->surface == nullptr ||
-        !kmsFunctions.copyMemory(
-            kmsDevice, lut->memory, lut->stagingMemory, lut->size))
+        !CopyMemoryRange(lut->memory, lut->stagingMemory, 0, lut->size))
     {
         DestroySurface(lut);
         return NV_ERR_GENERIC;
@@ -1941,7 +1952,7 @@ extern "C" NV_STATUS NvKmsWindowsGetScanoutBuffer(
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
-    KmsDeviceLockGuard lock;
+    auto lock = presentationLocks.DeviceShared();
     if (kmsDevice == nullptr || surface->stagingMemory == nullptr ||
         surface->pixels == nullptr)
     {
@@ -2004,11 +2015,7 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
         }
 
         NV_KMS_WINDOWS_SURFACE* const surface = outputs[index].surface;
-        if (!kmsFunctions.copyMemory(
-                kmsDevice,
-                surface->memory,
-                surface->stagingMemory,
-                surface->size))
+        if (!CopyMemoryRange(surface->memory, surface->stagingMemory, 0, surface->size))
         {
             NvKmsWindowsTraceMessage("NVKMS scanout upload failed");
             return NV_ERR_GENERIC;
@@ -2016,11 +2023,8 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
 
 #if NV_KMS_WINDOWS_VERIFY_SCANOUT_UPLOAD
         const NvU32 uploadHash = HashSurface(surface->pixels, surface->size);
-        const NvBool readbackSucceeded = kmsFunctions.copyMemory(
-            kmsDevice,
-            surface->stagingMemory,
-            surface->memory,
-            surface->size);
+        const NvBool readbackSucceeded = CopyMemoryRange(
+            surface->stagingMemory, surface->memory, 0, surface->size);
         const NvU32 readbackHash = readbackSucceeded ?
             HashSurface(surface->pixels, surface->size) : 0;
         char uploadMessage[160] = {};
@@ -2351,6 +2355,24 @@ extern "C" NV_STATUS NvKmsWindowsUpdateCursor(
     NvS32 y,
     NvU32 sdrWhiteLevel)
 {
+    return NvKmsWindowsUpdateCursorTimed(
+        head, displayHandle, surface, surfaceChanged, x, y, sdrWhiteLevel, nullptr);
+}
+
+extern "C" NV_STATUS NvKmsWindowsUpdateCursorTimed(
+    NvU32 head,
+    NvU32 displayHandle,
+    NV_KMS_WINDOWS_SURFACE* surface,
+    NvBool surfaceChanged,
+    NvS32 x,
+    NvS32 y,
+    NvU32 sdrWhiteLevel,
+    NV_KMS_WINDOWS_CURSOR_TIMING* timing)
+{
+    NV_KMS_WINDOWS_CURSOR_TIMING localTiming = {};
+    if (timing == nullptr)
+        timing = &localTiming;
+    *timing = {};
     if (displayHandle == 0 || x < -32768 || x > 32767 ||
         y < -32768 || y > 32767 || sdrWhiteLevel == 0 ||
         sdrWhiteLevel > 10000)
@@ -2358,14 +2380,15 @@ extern "C" NV_STATUS NvKmsWindowsUpdateCursor(
         return NV_ERR_INVALID_ARGUMENT;
     }
 
-    KmsDeviceLockGuard lock;
-    NvKmsKapiDeviceResourcesInfo resources = {};
+    timing->begin = PerformanceCounter();
+    auto deviceLock = presentationLocks.DeviceShared();
+    timing->lockTicks = PerformanceCounter() - timing->begin;
     if (kmsDevice == nullptr)
     {
         return NV_ERR_INVALID_STATE;
     }
-    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources) ||
-        head >= resources.numHeads)
+    // These topology fields are immutable for the allocated KAPI device.
+    if (head >= kmsDevice->numHeads)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
@@ -2377,14 +2400,20 @@ extern "C" NV_STATUS NvKmsWindowsUpdateCursor(
             return NV_ERR_INVALID_ARGUMENT;
         }
         FlushProcessWriteBuffers();
-        if (!kmsFunctions.copyMemory(
-            kmsDevice, surface->memory, surface->stagingMemory,
-                surface->size))
+        const NvU64 uploadStart = PerformanceCounter();
+        const NvBool copied = CopyMemoryRange(
+            surface->memory, surface->stagingMemory, 0, surface->size);
+        timing->uploadTicks = PerformanceCounter() - uploadStart;
+        if (!copied)
         {
             return NV_ERR_GENERIC;
         }
     }
 
+    const NvU64 lockStart = PerformanceCounter();
+    auto programmingLock = presentationLocks.Programming();
+    timing->programStart = PerformanceCounter();
+    timing->lockTicks += timing->programStart - lockStart;
     NvKmsKapiRequestedModeSetConfig requested = {};
     NvKmsKapiModeSetReplyConfig reply = {};
     requested.headsMask = 1U << head;
@@ -2402,8 +2431,10 @@ extern "C" NV_STATUS NvKmsWindowsUpdateCursor(
     cursor.dstY = static_cast<NvS16>(y);
     cursor.flags.surfaceChanged = surfaceChanged;
     cursor.flags.dstXYChanged = NV_TRUE;
-    if (!kmsFunctions.applyModeSetConfig(
-            kmsDevice, &requested, &reply, NV_TRUE))
+    const NvBool committed = kmsFunctions.applyModeSetConfig(
+        kmsDevice, &requested, &reply, NV_TRUE);
+    timing->programEnd = PerformanceCounter();
+    if (!committed)
     {
         char message[128] = {};
         nvkms_snprintf(message, sizeof(message),
@@ -2424,6 +2455,20 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
 {
     return NvKmsWindowsPresentLayersTimed(
         head, displayHandle, layers, layerCount, NV_FALSE, nullptr);
+}
+
+static bool IsValidLayerGeometry(const NV_KMS_WINDOWS_LAYER& layer)
+{
+    return layer.surface != nullptr && layer.sourceWidth != 0 &&
+        layer.sourceHeight != 0 && layer.destinationWidth != 0 &&
+        layer.destinationHeight != 0 && layer.sourceX <= 0xffffU &&
+        layer.sourceY <= 0xffffU && layer.sourceWidth <= 0xffffU &&
+        layer.sourceHeight <= 0xffffU && layer.destinationX >= -32768 &&
+        layer.destinationX <= 32767 && layer.destinationY >= -32768 &&
+        layer.destinationY <= 32767 && layer.destinationWidth <= 0xffffU &&
+        layer.destinationHeight <= 0xffffU &&
+        layer.sourceX + layer.sourceWidth <= layer.surface->width &&
+        layer.sourceY + layer.sourceHeight <= layer.surface->height;
 }
 
 static NV_STATUS UploadLayerPixels(
@@ -2458,8 +2503,7 @@ static NV_STATUS UploadLayerPixels(
             const auto& band = layer->dirtyBands[index];
             const NvU64 offset = static_cast<NvU64>(band.top) * layer->surface->pitch;
             const NvU64 bytes = static_cast<NvU64>(band.bottom - band.top) * layer->surface->pitch;
-            if (!kmsFunctions.copyMemoryRange(kmsDevice, layer->surface->memory,
-                    source->stagingMemory, offset, bytes))
+            if (!CopyMemoryRange(layer->surface->memory, source->stagingMemory, offset, bytes))
                 return NV_ERR_GENERIC;
             timing->uploadBytes += bytes;
             ++timing->uploadRegions;
@@ -2467,8 +2511,7 @@ static NV_STATUS UploadLayerPixels(
     }
     else
     {
-        if (!kmsFunctions.copyMemory(kmsDevice, layer->surface->memory,
-                source->stagingMemory, layer->surface->size))
+        if (!CopyMemoryRange(layer->surface->memory, source->stagingMemory, 0, layer->surface->size))
             return NV_ERR_GENERIC;
         timing->uploadBytes += layer->surface->size;
         ++timing->uploadRegions;
@@ -2485,7 +2528,7 @@ extern "C" NV_STATUS NvKmsWindowsUploadLayer(
         return NV_ERR_INVALID_ARGUMENT;
     *timing = {};
     const NvU64 start = PerformanceCounter();
-    KmsDeviceLockGuard lock;
+    auto lock = presentationLocks.DeviceShared();
     timing->lockTicks = PerformanceCounter() - start;
     if (kmsDevice == nullptr)
         return NV_ERR_INVALID_STATE;
@@ -2496,7 +2539,8 @@ extern "C" NV_STATUS NvKmsWindowsGetFlipPending(NvU32 head, NvBool* pending)
 {
     if (pending == nullptr)
         return NV_ERR_INVALID_ARGUMENT;
-    KmsDeviceLockGuard lock;
+    auto deviceLock = presentationLocks.DeviceShared();
+    auto programmingLock = presentationLocks.Programming();
     if (kmsDevice == nullptr)
         return NV_ERR_INVALID_STATE;
     return kmsFunctions.getFlipPendingStatus(
@@ -2508,7 +2552,8 @@ extern "C" NV_STATUS NvKmsWindowsGetFlipTimestamp(NvU32 head, NvU64* timestamp)
 {
     if (timestamp == nullptr)
         return NV_ERR_INVALID_ARGUMENT;
-    KmsDeviceLockGuard lock;
+    auto deviceLock = presentationLocks.DeviceShared();
+    auto programmingLock = presentationLocks.Programming();
     if (kmsDevice == nullptr)
         return NV_ERR_INVALID_STATE;
     return kmsFunctions.getFlipTimestamp(
@@ -2538,44 +2583,61 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
     }
 
     const NvU64 lockStart = PerformanceCounter();
-    KmsDeviceLockGuard lock;
-    timing->lockTicks = PerformanceCounter() - lockStart;
+    auto deviceLock = presentationLocks.DeviceShared();
+    auto presentLock = presentationLocks.Present();
     if (kmsDevice == nullptr)
     {
         return NV_ERR_INVALID_STATE;
     }
 
-    NvKmsKapiDeviceResourcesInfo resources = {};
-    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources) ||
-        head >= resources.numHeads || layerCount > resources.numLayers[head])
+    if (head >= kmsDevice->numHeads || layerCount > kmsDevice->numLayers[head])
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
 
-    if (preserveFrontBuffer)
+    const NvU32 numLayers = kmsDevice->numLayers[head];
     {
-        const NvU64 pendingStart = PerformanceCounter();
+        auto programmingLock = presentationLocks.Programming();
+        timing->lockTicks = PerformanceCounter() - lockStart;
         for (NvU32 layerIndex = 0; layerIndex < layerCount; ++layerIndex)
         {
-            NvBool pending = NV_FALSE;
-            if (layers[layerIndex].surface != nullptr &&
-                layers[layerIndex].surface->presented &&
-                !kmsFunctions.getFlipPendingStatus(kmsDevice, head, layerIndex, &pending))
+            if (!IsValidLayerGeometry(layers[layerIndex]))
             {
-                return NV_ERR_INVALID_STATE;
+                return NV_ERR_INVALID_ARGUMENT;
             }
-            timing->pendingTicks = PerformanceCounter() - pendingStart;
-            if (pending)
+            if (preserveFrontBuffer)
             {
-                return NV_ERR_IN_USE;
-            }
-            if (layers[layerIndex].surface != nullptr &&
-                layerCache[head][layerIndex].surface == layers[layerIndex].surface->surface)
-            {
-                return NV_ERR_INVALID_STATE;
+                const NvU64 pendingStart = PerformanceCounter();
+                NvBool pending = NV_FALSE;
+                if (layers[layerIndex].surface->presented &&
+                    !kmsFunctions.getFlipPendingStatus(kmsDevice, head, layerIndex, &pending))
+                {
+                    return NV_ERR_INVALID_STATE;
+                }
+                timing->pendingTicks += PerformanceCounter() - pendingStart;
+                if (pending)
+                {
+                    return NV_ERR_IN_USE;
+                }
+                if (layerCache[head][layerIndex].surface == layers[layerIndex].surface->surface)
+                {
+                    return NV_ERR_INVALID_STATE;
+                }
             }
         }
     }
+    for (NvU32 layerIndex = 0; layerIndex < layerCount; ++layerIndex)
+    {
+        if (!layers[layerIndex].skipUpload)
+        {
+            const NV_STATUS upload = UploadLayerPixels(&layers[layerIndex], timing);
+            if (upload != NV_OK)
+                return upload;
+        }
+    }
+    const NvU64 programmingLockStart = PerformanceCounter();
+    auto programmingLock = presentationLocks.Programming();
+    timing->lockTicks += PerformanceCounter() - programmingLockStart;
 
     const NvU64 prepareStart = PerformanceCounter();
     NvKmsKapiRequestedModeSetConfig requested = {};
@@ -2602,7 +2664,7 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
     }
 
     for (NvU32 layerIndex = 0;
-         layerIndex < resources.numLayers[head];
+         layerIndex < numLayers;
          ++layerIndex)
     {
         auto* const requestedLayer =
@@ -2621,31 +2683,6 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
         requestedLayer->flags.surfaceChanged = NV_TRUE;
 
         const NV_KMS_WINDOWS_LAYER* const layer = &layers[layerIndex];
-        if (layer->surface == nullptr || layer->sourceWidth == 0 ||
-            layer->sourceHeight == 0 || layer->destinationWidth == 0 ||
-            layer->destinationHeight == 0 ||
-            layer->sourceX > 0xffffU || layer->sourceY > 0xffffU ||
-            layer->sourceWidth > 0xffffU ||
-            layer->sourceHeight > 0xffffU ||
-            layer->destinationX < -32768 ||
-            layer->destinationX > 32767 ||
-            layer->destinationY < -32768 ||
-            layer->destinationY > 32767 ||
-            layer->destinationWidth > 0xffffU ||
-            layer->destinationHeight > 0xffffU ||
-            layer->sourceX + layer->sourceWidth > layer->surface->width ||
-            layer->sourceY + layer->sourceHeight > layer->surface->height)
-        {
-            return NV_ERR_INVALID_ARGUMENT;
-        }
-
-        if (!layer->skipUpload)
-        {
-            const NV_STATUS upload = UploadLayerPixels(layer, timing);
-            if (upload != NV_OK)
-                return upload;
-        }
-
         auto* const config = &requestedLayer->config;
         config->surface = layer->surface->surface;
         config->srcX = static_cast<NvU16>(layer->sourceX);
@@ -2775,7 +2812,7 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
                          sizeof(config->hdrMetadata.val)) != 0);
     }
 
-    timing->prepareTicks = PerformanceCounter() - prepareStart - timing->uploadTicks;
+    timing->prepareTicks = PerformanceCounter() - prepareStart;
     const NvU64 submitStart = PerformanceCounter();
     const NvBool committed = kmsFunctions.applyModeSetConfig(
         kmsDevice, &requested, &reply, NV_TRUE);
@@ -2795,7 +2832,7 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
             NV_ERR_IN_USE : NV_ERR_INVALID_STATE;
     }
     for (NvU32 layerIndex = 0;
-         layerIndex < resources.numLayers[head];
+         layerIndex < numLayers;
          ++layerIndex)
     {
         layerCache[head][layerIndex] =

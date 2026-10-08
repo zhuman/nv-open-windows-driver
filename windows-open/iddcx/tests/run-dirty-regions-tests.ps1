@@ -23,12 +23,16 @@ $source = Join-Path $PSScriptRoot '..\dirty_regions.cpp'
 $tests = Join-Path $PSScriptRoot 'dirty_regions_test.cpp'
 $parametersTests = Join-Path $PSScriptRoot 'driver_parameters_test.cpp'
 $ownershipTests = Join-Path $PSScriptRoot 'frame_slots_test.cpp'
+$presentationTests = Join-Path $PSScriptRoot 'presentation_locks_test.cpp'
 try {
     & $env:ComSpec /c "call `"$VcVarsPath`" >nul && cd /d `"$output`" && cl /nologo /std:c++20 /EHsc /W4 /WX /MT /Fe:dirty_regions_test.exe `"$source`" `"$tests`" && dirty_regions_test.exe && cl /nologo /std:c++20 /EHsc /W4 /WX /MT /DUMDF_DRIVER /external:W0 /external:I`"$WdfIncludePath`" /external:I`"$WilIncludePath`" /Fe:driver_parameters_test.exe `"$parametersTests`" && driver_parameters_test.exe && cl /nologo /std:c++20 /EHsc /W4 /WX /MT /Fe:frame_slots_test.exe `"$ownershipTests`" dirty_regions.obj && frame_slots_test.exe"
     if ($LASTEXITCODE -ne 0) { throw "Dirty-region tests failed: $LASTEXITCODE" }
+    & $env:ComSpec /c "call `"$VcVarsPath`" >nul && cd /d `"$output`" && cl /nologo /std:c++20 /EHsc /W4 /WX /MT /Fe:presentation_locks_test.exe `"$presentationTests`" && presentation_locks_test.exe"
+    if ($LASTEXITCODE -ne 0) { throw "Presentation lock tests failed: $LASTEXITCODE" }
 } finally {
     foreach ($name in @('dirty_regions.obj','dirty_regions_test.obj','dirty_regions_test.exe',
-        'driver_parameters_test.obj','driver_parameters_test.exe','frame_slots_test.obj','frame_slots_test.exe')) {
+        'driver_parameters_test.obj','driver_parameters_test.exe','frame_slots_test.obj','frame_slots_test.exe',
+        'presentation_locks_test.obj','presentation_locks_test.exe')) {
         $path = Join-Path $output $name
         if (Test-Path -LiteralPath $path) {
             # Windows can briefly retain the executable after process exit.
