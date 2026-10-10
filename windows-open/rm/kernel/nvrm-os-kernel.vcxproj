@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Debug|ARM64"><Configuration>Debug</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid Condition="'$(ProjectGuid)' == ''">{B37EC62F-F957-4EED-B69D-87E9DF43F0A7}</ProjectGuid>
@@ -18,6 +30,12 @@
     <PlatformToolset>ClangCL</PlatformToolset>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ItemDefinitionGroup>
@@ -44,7 +62,7 @@
       <AdditionalIncludeDirectories>$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)rm\include;$(RepoRoot)src\common\inc\swref;$(RepoRoot)src\common\inc\swref\published;$(RepoRoot)src\common\nvlink\inband\interface;$(RepoRoot)src\common\shared\inc;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;$(RepoRoot)src\nvidia\inc;$(RepoRoot)src\nvidia\inc\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\generated;$(RepoRoot)src\nvidia\interface;$(RepoRoot)src\nvidia\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>$(WindowsOpenRoot)nvport\include\nvport_windows_profile.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <PreprocessorDefinitions>__NO_CTYPE;LOCK_VAL_ENABLED=0;PORT_ATOMIC_64_BIT_SUPPORTED=1;PORT_IS_KERNEL_BUILD=1;PORT_IS_CHECKED_BUILD=0;PORT_MODULE_atomic=1;PORT_MODULE_core=1;PORT_MODULE_cpu=1;PORT_MODULE_crypto=1;PORT_MODULE_debug=1;PORT_MODULE_memory=1;PORT_MODULE_mmio=0;PORT_MODULE_safe=1;PORT_MODULE_string=1;PORT_MODULE_sync=1;PORT_MODULE_thread=1;PORT_MODULE_time=1;PORT_MODULE_util=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalOptions>/clang:-Wno-gnu-folding-constant /clang:-Wno-missing-field-initializers /clang:-Wno-unused-parameter %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/clang:-Wno-gnu-folding-constant /clang:-Wno-missing-field-initializers /clang:-Wno-unused-parameter /clang:-Wno-unused-but-set-variable %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <ClCompile Include="nvrm_os_cpu.c" />
     <ClCompile Include="nvrm_os_crypto.c" />

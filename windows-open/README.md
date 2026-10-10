@@ -317,14 +317,45 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
 
 ```powershell
 & 'C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\amd64\MSBuild.exe' `
-  .\nv-windows-drivers.slnx /t:Build /p:Configuration=Debug /p:Platform=x64 /m
+  .\nv-windows-drivers.slnx /t:Build /restore `
+  /p:Configuration=Debug /p:Platform=x64 /m
 ```
+
+The IddCx and user-mode RM projects default `NvRmUserLinkProbe` to `true`.
+Despite its historical name, this enables the real RM/NVKMS GPU backend used
+by the driver; the IDE therefore links the same backend as the build helper.
+Explicit property overrides remain available, and kernel-mode RM activation
+gates are unchanged.
+
+WIL is pinned as a `PackageReference` in
+[iddcx/nv-iddcx.vcxproj](iddcx/nv-iddcx.vcxproj). The project's
+`EnableNativePackageReferenceSupport=true` property enables native C++ support
+in Visual Studio and MSBuild. Command-line builds should include `/restore`;
+NuGet supplies the package's native build imports without hand-written paths
+or a solution-local `packages` directory.
+
+For automated builds, use the 64-bit MSBuild `/restore` command above or the
+[repository build helper](../build-windows-iddcx.ps1). Visual Studio 18.10.3
+can report `ProjectNotNominatedException` from its background NuGet service
+when starting `devenv /Build` on a WDK project, even though compilation and
+linking succeed. This was also reproduced with an isolated WDK project.
+MSBuild restores native `PackageReference` dependencies directly and reports
+restore failures through its exit code; changing to `packages.config` is not
+required.
 
 Both INFs retain root-enumerated development hardware IDs and also match every
 NVIDIA PCI device listed in the repository's top-level compatible-GPU table.
 Generic rows generate `PCI\VEN_10DE&DEV_xxxx` matches; subsystem-specific rows
 generate the more specific Windows `SUBSYS_<device><vendor>` form. Device
 Manager therefore displays the corresponding product name from that table.
+
+The NVKMS x64 shader-pack custom build explicitly selects Clang's
+`x86_64-pc-windows-msvc` target. Custom commands do not inherit the normal
+`ClCompile` architecture selection; using the compiler's default target can
+produce an ARM64 shader object inside an x64 intermediate directory. If an
+older build left that object behind, rebuild `nvkms-user` in the selected
+x64 configuration rather than disabling optimization or forcing the
+librarian to accept mixed architectures.
 
 The generated model and string blocks are authoritative output. Regenerate
 both INFs after the compatible-GPU table changes instead of editing those

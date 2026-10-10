@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Debug|ARM64"><Configuration>Debug</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid Condition="'$(ProjectGuid)' == ''">{5B71846E-DBED-493B-B59F-DF739FA90A55}</ProjectGuid>
@@ -18,6 +30,12 @@
     <PlatformToolset>ClangCL</PlatformToolset>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
@@ -57,8 +75,7 @@
       <ObjectFileName>$(IntDir)upstream\nvlink\</ObjectFileName>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\nvlink\kernel\nvlink;$(RepoRoot)src\common\nvlink\kernel\nvlink\core;$(RepoRoot)src\common\nvlink\kernel\nvlink\interface;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
-    <ClCompile Include="$(RepoRoot)src\nvidia\generated\*.c"
-      Exclude="$(RepoRoot)src\nvidia\generated\g_object_nvoc.c;$(RepoRoot)src\nvidia\generated\g_os_nvoc.c;$(RepoRoot)src\nvidia\generated\g_platform_nvoc.c;$(RepoRoot)src\nvidia\generated\g_chipset_nvoc.c;$(RepoRoot)src\nvidia\generated\g_hal_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_hal_nvoc.c;$(RepoRoot)src\nvidia\generated\g_hypervisor_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gsync_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gsync_api_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_acct_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_db_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_mgmt_api_nvoc.c;$(RepoRoot)src\nvidia\generated\g_mps_api_nvoc.c;$(RepoRoot)src\nvidia\generated\g_fabric_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_boost_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_journal_nvoc.c;$(RepoRoot)src\nvidia\generated\g_kernel_vgpu_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_kernel_watchdog_nvoc.c;$(RepoRoot)src\nvidia\generated\g_platform_request_handler_nvoc.c;$(RepoRoot)src\nvidia\generated\g_rmconfig_util.c;$(RepoRoot)src\nvidia\generated\g_system_nvoc.c;$(RepoRoot)src\nvidia\generated\g_syncgpuboost_nvoc.c;$(RepoRoot)src\nvidia\generated\g_rs_server_nvoc.c;$(RepoRoot)src\nvidia\generated\g_rs_client_nvoc.c;$(RepoRoot)src\nvidia\generated\g_rs_resource_nvoc.c;$(RepoRoot)src\nvidia\generated\g_client_nvoc.c;$(RepoRoot)src\nvidia\generated\g_client_resource_nvoc.c;$(RepoRoot)src\nvidia\generated\g_resource_nvoc.c;$(RepoRoot)src\nvidia\generated\g_event_api_nvoc.c;$(RepoRoot)src\nvidia\generated\g_vaspace_nvoc.c;$(RepoRoot)src\nvidia\generated\g_io_vaspace_nvoc.c;$(RepoRoot)src\nvidia\generated\g_ioaccess_nvoc.c;$(RepoRoot)src\nvidia\generated\g_intr_service_nvoc.c;$(RepoRoot)src\nvidia\generated\g_intr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_mem_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_virt_mem_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_halspec_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_access_nvoc.c;$(RepoRoot)src\nvidia\generated\g_device_nvoc.c;$(RepoRoot)src\nvidia\generated\g_eng_state_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_resource_nvoc.c;$(RepoRoot)src\nvidia\generated\g_tmr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_objtmr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_ref_count_nvoc.c;$(RepoRoot)src\nvidia\generated\g_traceable_nvoc.c">
+    <ClCompile Include="$(RepoRoot)src\nvidia\generated\*.c" Exclude="$(RepoRoot)src\nvidia\generated\g_object_nvoc.c;$(RepoRoot)src\nvidia\generated\g_os_nvoc.c;$(RepoRoot)src\nvidia\generated\g_platform_nvoc.c;$(RepoRoot)src\nvidia\generated\g_chipset_nvoc.c;$(RepoRoot)src\nvidia\generated\g_hal_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_hal_nvoc.c;$(RepoRoot)src\nvidia\generated\g_hypervisor_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gsync_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gsync_api_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_acct_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_db_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_mgmt_api_nvoc.c;$(RepoRoot)src\nvidia\generated\g_mps_api_nvoc.c;$(RepoRoot)src\nvidia\generated\g_fabric_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_boost_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_journal_nvoc.c;$(RepoRoot)src\nvidia\generated\g_kernel_vgpu_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_kernel_watchdog_nvoc.c;$(RepoRoot)src\nvidia\generated\g_platform_request_handler_nvoc.c;$(RepoRoot)src\nvidia\generated\g_rmconfig_util.c;$(RepoRoot)src\nvidia\generated\g_system_nvoc.c;$(RepoRoot)src\nvidia\generated\g_syncgpuboost_nvoc.c;$(RepoRoot)src\nvidia\generated\g_rs_server_nvoc.c;$(RepoRoot)src\nvidia\generated\g_rs_client_nvoc.c;$(RepoRoot)src\nvidia\generated\g_rs_resource_nvoc.c;$(RepoRoot)src\nvidia\generated\g_client_nvoc.c;$(RepoRoot)src\nvidia\generated\g_client_resource_nvoc.c;$(RepoRoot)src\nvidia\generated\g_resource_nvoc.c;$(RepoRoot)src\nvidia\generated\g_event_api_nvoc.c;$(RepoRoot)src\nvidia\generated\g_vaspace_nvoc.c;$(RepoRoot)src\nvidia\generated\g_io_vaspace_nvoc.c;$(RepoRoot)src\nvidia\generated\g_ioaccess_nvoc.c;$(RepoRoot)src\nvidia\generated\g_intr_service_nvoc.c;$(RepoRoot)src\nvidia\generated\g_intr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_mem_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_virt_mem_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_mgr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_halspec_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_access_nvoc.c;$(RepoRoot)src\nvidia\generated\g_device_nvoc.c;$(RepoRoot)src\nvidia\generated\g_eng_state_nvoc.c;$(RepoRoot)src\nvidia\generated\g_gpu_resource_nvoc.c;$(RepoRoot)src\nvidia\generated\g_tmr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_objtmr_nvoc.c;$(RepoRoot)src\nvidia\generated\g_ref_count_nvoc.c;$(RepoRoot)src\nvidia\generated\g_traceable_nvoc.c">
       <Link>generated\%(Filename)%(Extension)</Link>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>$(RepoRoot)src\common\nvlink\interface\nvlink.h;$(RepoRoot)src\common\sdk\nvidia\inc\ctrl\ctrl0000\ctrl0000unix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
@@ -205,8 +222,7 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\generated\g_traceable_nvoc.c">
       <Link>generated\g_traceable_nvoc.c</Link>
     </ClCompile>
-    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\**\*.c"
-      Exclude="$(RepoRoot)src\nvidia\src\kernel\gpu\dce_client\dce_client_rpc.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_desc.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\heap.c;$(RepoRoot)src\nvidia\src\kernel\gpu\device.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_access.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_register_access_map.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_resource.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_timeout.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gr\kernel_watchdog.c;$(RepoRoot)src\nvidia\src\kernel\gpu\eng_state.c;$(RepoRoot)src\nvidia\src\kernel\gpu\intr\intr_service.c;$(RepoRoot)src\nvidia\src\kernel\gpu\intr\intr.c;$(RepoRoot)src\nvidia\src\kernel\gpu\timer\timer.c;$(RepoRoot)src\nvidia\src\kernel\gpu\timer\timer_ostimer.c;$(RepoRoot)src\nvidia\src\kernel\gpu\external_device\gsync.c;$(RepoRoot)src\nvidia\src\kernel\gpu\external_device\gsync_api.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_device_mapping.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_mgr.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_utils.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\objheap.c">
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\**\*.c" Exclude="$(RepoRoot)src\nvidia\src\kernel\gpu\dce_client\dce_client_rpc.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_desc.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\heap.c;$(RepoRoot)src\nvidia\src\kernel\gpu\device.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_access.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_register_access_map.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_resource.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_timeout.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gr\kernel_watchdog.c;$(RepoRoot)src\nvidia\src\kernel\gpu\eng_state.c;$(RepoRoot)src\nvidia\src\kernel\gpu\intr\intr_service.c;$(RepoRoot)src\nvidia\src\kernel\gpu\intr\intr.c;$(RepoRoot)src\nvidia\src\kernel\gpu\timer\timer.c;$(RepoRoot)src\nvidia\src\kernel\gpu\timer\timer_ostimer.c;$(RepoRoot)src\nvidia\src\kernel\gpu\external_device\gsync.c;$(RepoRoot)src\nvidia\src\kernel\gpu\external_device\gsync_api.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gpu_device_mapping.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_mgr.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_utils.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\objheap.c">
       <Link>upstream\gpu\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <ObjectFileName>$(IntDir)upstream\gpu\%(RecursiveDir)</ObjectFileName>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\include\hal;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\include;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub;$(RepoRoot)src\nvidia\src\libraries\libspdm\3.5.0\os_stub\cryptlib_null;$(RepoRoot)src\nvidia\src\libraries\libspdm\nvidia;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -304,8 +320,7 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\mmu\gmmu_fmt.c">
       <Link>upstream\mmu\gmmu_fmt.c</Link>
     </ClCompile>
-    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\mmu\*.c"
-      Exclude="$(RepoRoot)src\nvidia\src\libraries\mmu\gmmu_fmt.c">
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\libraries\mmu\*.c" Exclude="$(RepoRoot)src\nvidia\src\libraries\mmu\gmmu_fmt.c">
       <Link>upstream\mmu\%(Filename)%(Extension)</Link>
       <ObjectFileName>$(IntDir)upstream\mmu\</ObjectFileName>
     </ClCompile>
@@ -421,8 +436,7 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\compute\imex_session_api.c">
       <Link>upstream\compute\imex_session_api.c</Link>
     </ClCompile>
-    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\**\*.c"
-      Exclude="$(RepoRoot)src\nvidia\src\kernel\diagnostics\gpu_acct.c;$(RepoRoot)src\nvidia\src\kernel\diagnostics\journal.c;$(RepoRoot)src\nvidia\src\kernel\diagnostics\op_event_log.c;$(RepoRoot)src\nvidia\src\kernel\diagnostics\nvlog.c;$(RepoRoot)src\nvidia\src\kernel\diagnostics\nvlog_printf.c">
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\diagnostics\**\*.c" Exclude="$(RepoRoot)src\nvidia\src\kernel\diagnostics\gpu_acct.c;$(RepoRoot)src\nvidia\src\kernel\diagnostics\journal.c;$(RepoRoot)src\nvidia\src\kernel\diagnostics\op_event_log.c;$(RepoRoot)src\nvidia\src\kernel\diagnostics\nvlog.c;$(RepoRoot)src\nvidia\src\kernel\diagnostics\nvlog_printf.c">
       <Link>upstream\diagnostics\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <ObjectFileName>$(IntDir)upstream\diagnostics\%(RecursiveDir)</ObjectFileName>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -443,8 +457,7 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\disp\nvfbc_session.c">
       <Link>upstream\disp\nvfbc_session.c</Link>
     </ClCompile>
-    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\**\*.c"
-      Exclude="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\alloc_free.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\control.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\client.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\client_resource.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\embedded_param_copy.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\param_copy.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\resource.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\event_api.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\event_notification.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_utils.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_finn.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\mapping.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\mapping_cpu.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\sharing.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rs_utils.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_cache.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_stubs.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\resource_desc.c">
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\rmapi\**\*.c" Exclude="$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\alloc_free.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\control.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\client.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\client_resource.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\embedded_param_copy.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\param_copy.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\resource.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\event_api.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\event_notification.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_utils.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_finn.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\mapping.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\mapping_cpu.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\sharing.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rs_utils.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_cache.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\rmapi_stubs.c;$(RepoRoot)src\nvidia\src\kernel\rmapi\resource_desc.c">
       <Link>upstream\rmapi\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <ObjectFileName>$(IntDir)upstream\rmapi\%(RecursiveDir)</ObjectFileName>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -705,8 +718,7 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\objheap.c">
       <Link>upstream\memory\objheap.c</Link>
     </ClCompile>
-    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\**\*.c"
-      Exclude="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\ctx_buf_pool.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\io_vaspace.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\video_mem.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\virt_mem_mgr.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\vaspace.c">
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\**\*.c" Exclude="$(RepoRoot)src\nvidia\src\kernel\mem_mgr\ctx_buf_pool.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\io_vaspace.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\video_mem.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\virt_mem_mgr.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\vaspace.c">
       <Link>upstream\memory\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <ObjectFileName>$(IntDir)upstream\memory\%(RecursiveDir)</ObjectFileName>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -745,8 +757,7 @@
     <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpcstructurecopy.c">
       <Link>upstream\rpcstructurecopy.c</Link>
     </ClCompile>
-    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\**\*.c"
-      Exclude="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpc.c;$(RepoRoot)src\nvidia\src\kernel\vgpu\rpcstructurecopy.c">
+    <ClCompile Include="$(RepoRoot)src\nvidia\src\kernel\vgpu\**\*.c" Exclude="$(RepoRoot)src\nvidia\src\kernel\vgpu\rpc.c;$(RepoRoot)src\nvidia\src\kernel\vgpu\rpcstructurecopy.c">
       <Link>upstream\vgpu\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <ObjectFileName>$(IntDir)upstream\vgpu\%(RecursiveDir)</ObjectFileName>
       <AdditionalIncludeDirectories>$(RepoRoot)src\common\nvlink\interface;$(RepoRoot)src\common\uproc\os\common\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc\gsp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -827,20 +838,12 @@
     <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator.c" />
     <NvRmProfileInput Include="$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator_util.c" />
   </ItemGroup>
-  <Target
-    Name="GenerateWindowsRmProfile"
-    BeforeTargets="ClCompile"
-    Inputs="@(NvRmProfileInput)"
-    Outputs="$(NvRmFilteredRoot)\profile.stamp">
+  <Target Name="GenerateWindowsRmProfile" BeforeTargets="ClCompile" Inputs="@(NvRmProfileInput)" Outputs="$(NvRmFilteredRoot)\profile.stamp">
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(WindowsOpenRoot)rm\Generate-WindowsRmProfile.ps1&quot; -RepositoryRoot &quot;$(MSBuildProjectDirectory)\..\..\..&quot; -OutputRoot &quot;$(NvRmFilteredRoot)&quot;" />
     <Touch Files="$(NvRmFilteredRoot)\profile.stamp" AlwaysCreate="true" />
   </Target>
   <Target Name="GenerateNvRmVersionHeader" BeforeTargets="ClCompile">
-    <WriteLinesToFile
-      File="$(IntDir)nvrm_version.h"
-      Lines="#ifndef NVRM_VERSION_H;#define NVRM_VERSION_H;#define NV_VERSION_STRING &quot;$(NvidiaVersion)&quot;;#endif"
-      Overwrite="true"
-      WriteOnlyWhenDifferent="true" />
+    <WriteLinesToFile File="$(IntDir)nvrm_version.h" Lines="#ifndef NVRM_VERSION_H;#define NVRM_VERSION_H;#define NV_VERSION_STRING &quot;$(NvidiaVersion)&quot;;#endif" Overwrite="true" WriteOnlyWhenDifferent="true" />
   </Target>
   <Target Name="GetDriverProjectAttributes" Returns="@(DriverProjectAttributes)">
     <ItemGroup>

@@ -4,7 +4,99 @@ This fork hosts the common, OS-agnostic portions of NVIDIA's open Linux GPU
 driver inside a **Windows UMDF 2 / IddCx display driver**. It already drives
 real NVIDIA display outputs; it is not just a virtual-monitor sample.
 The project is an independent, experimental port, not an official NVIDIA
-Windows driver.
+Windows driver. It can be built and installed as the driver of real Nvidia
+GPUs and provides all display functionality possible through IddCx today.
+It does *not* provide rendering support to D3D or other APIs.
+
+## 📖 Background Concepts
+
+### Windows graphics drivers
+
+On Windows, full graphics drivers (providing both rendering and display) follow
+the Windows Display Driver Model (WDDM). This involves building a kernel driver
+to manage the low-level aspects of device initialization, VRAM management, PCIe
+details, interrupts, command submission, power management, monitor enumeration,
+monitor modesets, and frame flipping. Windows provides a large graphics kernel
+subsystem called DxgKrnl which works in tandem with the GPU vendor's kernel
+driver to provide these functions and implements many common aspects of the
+graphics device abstraction.
+
+A WDDM kernel driver can optionally expose only display or only render
+functionality. For example, some server GPUs may not have any display connectors
+and so run as render-only. If a WDDM driver exposes only display functionality,
+it's referred to as a Kernel-Mode Display-Only Driver (KMDOD), and it uses
+a small subset of WDDM.
+
+For rendering (e.g. in Direct3D or Vulkan), GPU vendors also provide user-mode
+libraries which translate from the rendering APIs into low-level GPU commands
+which the kernel driver can understand and schedule. These are usually referred
+to as GPU user-mode drivers (UMDs), but they really form one half of the whole
+user + kernel graphics driver abstraction and are not related to UMDF.
+
+#### Indirect Display drivers
+
+Windows also has a second graphics driver model called Indirect Display Drivers
+or IddCx (Indirect Display Driver Class Extension). This model is built on the
+User-Mode Driver Framework (UMDF), which enables writing many kinds of Windows
+drivers entirely in user-mode for greatly increased stability and isolation.
+IddCx brings these benefits to display-only graphics devices.
+
+It should be emphasized that IddCx *only* provides display functionality
+(monitor enumeration, monitor modesets, frame flipping, etc.) without any
+rendering capability for the device itself. However, Windows will pick a
+rendering-capable graphics device to pair with an IddCx device and enable
+accelerated rendering onto the display device. This is traditionally used to
+implement features like Remote Desktop and Miracast, with a real GPU being used
+for rendering and an IddCx driver implementing the remote/virtual display
+abstraction.
+
+### Linux graphics drivers
+
+Full Linux graphics drivers have a similar architecture to WDDM, with a kernel
+module handling the low-level device functionality and a user-mode library
+providing the translation from rendering APIs into GPU command buffers. The
+Linux kernel provides the Direct Rendering Manager (DRM) subsystem, which also
+implements common functionality/abstractions shared by all graphics drivers.
+
+Likely in order to make porting easier between Windows and Linux drivers,
+Nvidia's Linux kernel module implementation contains a large portion of
+OS-agnostic code managing most of the device state. Then there is an adaptation
+layer which "hosts" the OS-agnostic code and adapts it for Linux and the DRM.
+
+### Bringing these together
+
+This project takes the OS-agnostic portion of the Nvidia Linux kernel driver and
+implements a totally new adaptation layer onto the IddCx + UMDF driver model for
+Windows. This enables a large portion of the Nvidia Linux kernel driver to run
+in user-mode on Windows and provide much of the *display* functionality of their
+traditional Windows display driver. Despite not providing rendering abstractions
+to the rest of the system, internally the driver does retain many portions of
+VRAM management and command scheduling that would be used by the full Linux and
+Windows drivers.
+
+## 🎯 Why build this?
+
+This is mostly an educational project only interesting to graphics, OS, and
+driver developers right now. Users should just use the full graphics drivers
+provided by Nvidia.
+
+- This started as a fun weekend project to see how AI could accelerate low-level
+  driver/OS development as well as refactoring/porting projects. It is mostly
+  successful in that regard, although it was given fairly detailed outlines on
+  how to achieve that goal and many corrections to keep it on track. The coding
+  agent was given access to an off-the-shelf HDMI capture device to be able to
+  self-verify display output functionality, which was a very successful part of
+  this strategy.
+- It demonstrates the power, stability, and flexibility of UMDF on Windows with
+  a very complex PCIe device driver. It exercises the very latest UMDF
+  functionality only available on Windows Insider builds.
+- It also demonstrates the ability for IddCx to encapsulate real PCIe GPUs and
+  provide full functional fidelity of most display features.
+- It enables debugging, analysis, and prototyping of low-level GPU functionality
+  on real GPUs without needing a kernel debugger.
+- It enables using Nvidia cards in GPU enclosures on ARM64 Windows systems
+  (again, for display functionality).
+- Because it's cool!
 
 ## 🧩 How it works
 
@@ -52,16 +144,12 @@ It is not a claim of complete sleep/resume or production power certification.
 ### 🛡️ Fault isolation by design
 
 The driver and its RM/NVKMS code run in a **user-mode `WUDFHost.exe` process,
-outside the kernel's address space**. Ordinary driver memory faults and crashes
-are contained to the host/device rather than directly bugchecking Windows;
-a failed host can be restarted. This makes experimentation substantially safer
-than running the same code in a kernel-mode miniport. See Microsoft's
+outside the kernel's address space**. Ordinary driver memory faults and
+crashes are contained to the host/device rather than directly bugchecking
+Windows (bugcheck == blue screen of death); a failed host can be restarted.
+This makes experimentation substantially safer than running the same code in a
+kernel-mode miniport. See Microsoft's
 [UMDF host-process overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/wdf/umdf-driver-host-process).
-
-**Isolation is not an absolute no-hang/no-bugcheck guarantee.** The GPU still
-has real MMIO/DMA access, and hardware, firmware, or kernel-stack faults can
-affect the system. A host failure may also interrupt its displays or other
-drivers sharing that host process.
 
 ## ✅ Confirmed working
 
@@ -81,7 +169,7 @@ supported-device table has been tested.
 | Damage tracking | Per-buffer accumulated dirty regions, conservative full-refresh recovery, and at most two non-overlapping horizontal copy bands. |
 | Pipelined presentation | Overlapped source-GPU copy and CE upload, independent RAM/VRAM leases, two/three/four buffers, and safe latest-ready coalescing with notifier-based retirement. |
 | Lifecycle and diagnostics | Device restart and mode changes, native swapchain invalidation/recreation, WPP/ETW stage timing, and complete-image verification. |
-| Scheduling | MMCSS `DisplayPostProcessing` registration and D3D11 realtime-GPU priority requests. Native D3D12 priority rejection falls back explicitly to a normal queue. |
+| Scheduling | MMCSS high-priority CPU registration and D3D11 realtime-GPU priority requests. Native D3D12 priority rejection falls back explicitly to a normal queue. |
 
 Dirty copies always use the **current complete incoming image**. RAM and VRAM
 damage histories are independent, and coalescing retains skipped-frame damage
@@ -103,7 +191,7 @@ Native D3D12 direct copies and dirty regions are enabled by default. API,
 readback, pixel-cache, and scheduling overrides remain available; see
 [the implementation and validation plan](PLAN-WINDOWS.md).
 
-### 📊 Measured, not promised
+### 📊 Measured frame copy performance
 
 With sparse animated damage at **1920x1080 / ~59.94 Hz**, the native-default
 120-second measured window averaged **59.00 uploads/s**, versus **49.66** for
@@ -142,20 +230,151 @@ ownership/damage schedules**.
   used API readback and traces, not capture or physical OSD observation. See
   [monitor-control testing](windows-open/README.md#monitor-control-i2cddcci).
 
-**Start here:** [Windows build/platform notes](windows-open/README.md),
-[IddCx build script](build-windows-iddcx.ps1), and
+## 🏗️ How to build and install
+
+These instructions build the **UMDF/IddCx driver**, not the experimental KMDOD
+variant or the upstream Linux modules. Use a dedicated test machine with a
+recovery path; replacing a GPU's driver can interrupt its display output.
+
+### Prerequisites
+
+- **Build machine:** Visual Studio 2026 (18.x) with the Desktop development with
+  C++ workload, the bundled ClangCL toolset, and WDK integration for C++ driver
+  projects. Install the matching Windows SDK and **Windows Insider WDK
+  10.0.28000.0**. The projects explicitly target this kit version.
+- **Target machine:** **Windows 11 Insider build 28000, based on 26H1**. This is
+  a runtime requirement, not just a build-tool requirement: the current driver
+  uses UMDF **2.35**, IddCx **1.11** with a **1.10** minimum, and newer native
+  D3D12/common-buffer functionality. A retail 24H2/25H2 installation is not a
+  substitute for the required Insider runtime.
+- **Hardware:** an experimental NVIDIA GPU and a separate rendering-capable
+  adapter with its normal driver. Keep the rendering adapter and preferably
+  its primary display available for recovery. The validated driver/package
+  configuration is **Debug|x64**; ARM64 project configurations also exist, but
+  full ARM64 driver linking and hardware operation are not validated here.
+- **Firmware:** GSP firmware matching [version.mk](version.mk), currently
+  **610.43.03**. Obtain it from the matching NVIDIA Linux driver distribution.
+  The current loader expects `gsp_ga10x.bin` at
+  `%ProgramData%\nv-iddcx\gsp_ga10x.bin` on the target. Create that directory
+  and copy the firmware there before enabling the device. The build does not
+  download or install this firmware.
+
+### Build on the development machine
+
+From the repository root, run:
+
+```powershell
+.\build-windows-iddcx.ps1 -Configuration Debug -Platform x64
+```
+
+The [build script](build-windows-iddcx.ps1) locates 64-bit MSBuild, restores the
+WIL NuGet dependency, and rebuilds the driver and its RM/NVKMS dependencies.
+It also explicitly sets `NvRmUserLinkProbe=true`, the historical name for
+enabling the real GPU backend. The IddCx and user-mode RM projects now default
+to that same backend, so Visual Studio builds do not need an extra property.
+Open [the solution](windows-open/nv-windows-drivers.slnx) and select
+`Debug|x64` or `Release|x64`. WIL uses native C++ `PackageReference` support,
+enabled by `EnableNativePackageReferenceSupport=true` in the IddCx project.
+Manual MSBuild commands should include `/restore`. Use `-MSBuildPath` if
+automatic Visual Studio discovery selects the wrong installation.
+
+WDK's normal build stages stamp the INF, generate the catalog, and test-sign
+the DLL and catalog. **No separate manual signing command is normally needed.**
+If you change signing settings, ensure **Driver Signing > Sign Mode = Test
+Sign** and **Inf2Cat > Run Inf2Cat = Yes**. See Microsoft's
+[development-signing guidance][wdk-signing].
+
+The packaged output normally appears in
+`windows-open\iddcx\x64\Debug\nv-iddcx`, containing `nv-iddcx.inf`,
+`nv-iddcx.cat`, and `nv-iddcx.dll`. The script prints the selected DLL path,
+timestamp, and SHA-256; use the corresponding package folder if your output
+layout differs. Copy the **whole package**, not just the DLL, to the target.
+Do not edit the INF or signed binaries after catalog generation.
+
+### Prepare the target for test-signed drivers
+
+**Building does not configure the target's boot policy or certificate stores.**
+Manual deployment requires both certificate trust and test mode.
+
+Export the build's **public** signing certificate on the development machine.
+For the default package path:
+
+```powershell
+$package = (Resolve-Path `
+    '.\windows-open\iddcx\x64\Debug\nv-iddcx').Path
+$signature = Get-AuthenticodeSignature "$package\nv-iddcx.dll"
+if (-not $signature.SignerCertificate) {
+    throw 'The driver has no signing certificate; check WDK signing settings.'
+}
+$certificate = $signature.SignerCertificate.Export(
+    [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+[IO.File]::WriteAllBytes("$package\nv-iddcx-test.cer", $certificate)
+```
+
+Copy the package and this `.cer` to, for example, `C:\NvIddCx` on the target.
+Do **not** copy or publish the private-key `.pfx`. In an elevated PowerShell
+window on the target, import your test certificate into both machine stores:
+
+```powershell
+certutil.exe -addstore -f Root C:\NvIddCx\nv-iddcx-test.cer
+certutil.exe -addstore -f TrustedPublisher C:\NvIddCx\nv-iddcx-test.cer
+bcdedit.exe /set testsigning on
+```
+
+Reboot the target after changing test mode. **Secure Boot must be disabled for
+this test-mode setup**; otherwise BCDEdit can reject the change as protected by
+Secure Boot policy. Have your BitLocker recovery key available and account for
+device-encryption policy before changing firmware or boot settings. Test mode
+does not replace signing the binaries, including when Memory Integrity/HVCI
+is enabled.
+
+These steps are target provisioning, not extra driver-signing steps. Visual
+Studio's configured deployment can provision a test machine, but the repository
+build script does not. See Microsoft's
+[test-certificate instructions][test-cert] and
+[test-mode requirements][test-mode].
+
+### Install and verify
+
+Back up the target GPU's existing driver package and record its device instance
+ID before replacing it. Keep a local or remote recovery path that does not
+depend on the experimental GPU.
+
+Stage the package from an elevated target PowerShell window:
+
+```powershell
+pnputil.exe /add-driver C:\NvIddCx\nv-iddcx.inf
+```
+
+Then use **Device Manager > the intended NVIDIA GPU > Update driver > Browse
+my computer > Let me pick > Have Disk** and select that INF. This explicitly
+chooses the experimental driver for that device, even if Windows ranks the
+vendor driver higher. Avoid an indiscriminate `/install` across multiple
+matching NVIDIA adapters, and do not bind IddCx and KMDOD to the same GPU.
+
+Allow the device restart, reboot if Windows requests one, and verify that
+Device Manager reports no problem code and the attached monitor appears in
+Display Settings. Missing/mismatched firmware, certificate trust, or the
+required Insider runtime can prevent startup; keep the original driver package
+available to restore if initialization fails. Installing this driver replaces
+the NVIDIA rendering driver on that GPU; it does not add Direct3D or CUDA
+rendering support.
+
+**More detail:** [Windows build/platform notes](windows-open/README.md) and
 [architecture, controls, measurements, and remaining work](PLAN-WINDOWS.md).
-Development currently uses WDK **10.0.28000.0**, UMDF **2.35**, and IddCx
-**1.11** with a **1.10** minimum; native D3D12 requires the newer runtime.
-Use a dedicated test system and a test-signing/deployment environment.
+
+[wdk-signing]: https://learn.microsoft.com/en-us/windows-hardware/drivers/develop/signing-a-driver-during-development-and-testing
+[test-cert]: https://learn.microsoft.com/en-us/windows-hardware/drivers/install/installing-a-test-certificate-on-a-test-computer
+[test-mode]: https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option
 
 ## 🤖 Developed with AI and physical feedback
 
 The Windows harness was developed with **almost entirely AI-written code**,
 under human direction, through iterative builds, deployments, trace analysis,
-and hardware tests. A **USB HDMI capture device (ShadowCast 2 Pro)** was connected
-to the GPU's physical output so the AI could inspect captured images and
-recorded motion while working on changes, not just infer success from logs.
+and hardware tests. A **USB HDMI capture device (ShadowCast 2 Pro)** was
+connected to the GPU's physical output so the AI could inspect captured
+images and recorded motion while working on changes, not just infer success
+from logs.
 
 That feedback helped check desktop composition, color transitions, cursor
 behavior, and animation correctness. Capture evidence complements ETW,
