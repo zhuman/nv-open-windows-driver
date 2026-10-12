@@ -11,6 +11,7 @@
 namespace nv::iddcx {
 
 class Output;
+class MpoScene;
 
 class SwapChainUploadPipeline final
 {
@@ -22,6 +23,7 @@ public:
         ID3D12Resource* mapped, NvU64 sourceStart, NvU64 sourceEnd,
         NvU64 gpuSubmit, NvU64 gpuComplete) noexcept;
     HRESULT Stop() noexcept;
+    HRESULT Poll() noexcept { return !enabled_ && !scene_ ? Refresh() : result_.load(); }
     bool Enabled() const noexcept { return enabled_; }
 
 private:
@@ -40,8 +42,12 @@ private:
     static DWORD WINAPI ThreadEntry(void* context) noexcept;
     void Process() noexcept;
     HRESULT Refresh() noexcept;
+    void TraceLayerRetirement() noexcept;
     HRESULT Consume(Job& job) noexcept;
     HRESULT AddDamage(const Job& job) noexcept;
+    HRESULT WaitForLayers() noexcept;
+    HRESULT Animate() noexcept;
+    HRESULT DisableDemo() noexcept;
     void Unmap(Job& job) noexcept;
     void Fail(HRESULT result) noexcept;
     Output* output_ = nullptr;
@@ -49,11 +55,17 @@ private:
     bool enabled_ = false;
     NvU32 sourceApi_ = 0;
     bool submitted_ = false;
+    MpoScene* scene_ = nullptr;
+    bool demoSubmitted_ = false;
+    NV_KMS_WINDOWS_LAYER desktop_ = {};
+    NV_KMS_WINDOWS_COLOR_TRANSFORM desktopTransform_ = {};
     ULONGLONG lastSubmissionMs_ = 0;
     wil::unique_handle thread_;
     wil::unique_handle wake_;
     wil::unique_handle available_;
+    wil::unique_handle animationTimer_;
     wil::srwlock lock_;
+    wil::srwlock presentLock_;
     FrameSlots slots_;
     FrameRamSlots ramSlots_;
     DirtyRegionTracker vramDamage_;

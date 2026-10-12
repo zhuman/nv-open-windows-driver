@@ -2676,6 +2676,18 @@ _kgspCheckIfMemsysError
     NV_STATUS   status;
     KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
 
+#if defined(NV_WINDOWS_IDDCX)
+    // An RPC-backed membar cannot classify a timeout while its parent RPC polls.
+    if (pGpu->bMemsubsysErrDetectionEnabled &&
+        GPU_GET_KERNEL_GSP(pGpu)->bPollingForRpcResponse &&
+        kbusSendSysmembarSingle_FNPTR(GPU_GET_KERNEL_BUS(pGpu)) ==
+            kbusSendSysmembarSingle_KERNEL)
+    {
+        portDbgPrintf("NVRM: memory subsystem timeout probe unavailable: sysmembar requires a nested GSP RPC\n");
+        return NV_ERR_NOT_SUPPORTED;
+    }
+#endif
+
     //
     // kgmmuCheckMemSubsysHang_HAL checks if the memory HW is 'stuck' anywhere,
     // by probing it through TLB invalidate, sys membars and check if they timeout.

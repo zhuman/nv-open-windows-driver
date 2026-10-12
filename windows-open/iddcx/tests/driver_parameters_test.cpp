@@ -92,6 +92,78 @@ void ExpectMmcss(const Parameters& parameters, ULONG expected)
 
 int main()
 {
+    using nv::iddcx::SwapChainConfig;
+    const auto missing = [](PCWSTR, ULONG*) noexcept { return STATUS_OBJECT_NAME_NOT_FOUND; };
+    SwapChainConfig configuration;
+    Require(nv::iddcx::ReadSwapChainConfig(&configuration, missing) == STATUS_SUCCESS);
+    Require(configuration.Mode() == 1 && configuration.HonorCache() &&
+        configuration.demo == 0 && configuration.connector == nv::iddcx::MaximumDword);
+    const struct { PCWSTR name; ULONG minimum; ULONG maximum; } fields[] = {
+        {L"D3D12Mode", 0, 3}, {L"D3D11ReadbackMode", 0, 2},
+        {L"SurfaceCachePolicy", 0, 2}, {L"DirtyRects", 0, 1}, {L"D3D12Debug", 0, 1},
+        {L"RealtimeGpuPriority", 0, 1}, {L"MmcssDisplayPostProcessing", 0, 1},
+        {L"MpoDemoPlaneCount", 1, 7}, {L"MpoDemoSpeedPercent", 25, 200},
+    };
+    for (const auto& field : fields)
+        for (const ULONG value : {field.minimum, field.maximum, field.maximum + 1})
+        {
+            const auto query = [&](PCWSTR name, ULONG* output) noexcept {
+                if (std::wcscmp(name, field.name) != 0) return STATUS_OBJECT_NAME_NOT_FOUND;
+                *output = value;
+                return STATUS_SUCCESS;
+            };
+            SwapChainConfig candidate;
+            candidate.generation = 42;
+            const bool valid = value <= field.maximum;
+            Require(nv::iddcx::ReadSwapChainConfig(&candidate, query) ==
+                (valid ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER));
+            if (!valid) Require(candidate.generation == 42);
+        }
+    for (ULONG mode = 0; mode <= 7; ++mode)
+        for (const ULONG connector : {0UL, 15UL, 16UL, nv::iddcx::MaximumDword})
+        {
+            const auto query = [&](PCWSTR name, ULONG* output) noexcept {
+                if (std::wcscmp(name, L"MpoDemoMode") == 0) *output = mode;
+                else if (std::wcscmp(name, L"MpoDemoConnectorIndex") == 0) *output = connector;
+                else return STATUS_OBJECT_NAME_NOT_FOUND;
+                return STATUS_SUCCESS;
+            };
+            SwapChainConfig candidate;
+            Require(nv::iddcx::ReadSwapChainConfig(&candidate, query) ==
+                (mode <= 6 && (mode == 0 || connector < 16) ?
+                    STATUS_SUCCESS : STATUS_INVALID_PARAMETER));
+        }
+    for (const ULONG cadence : {15UL, 30UL, 60UL, 20UL, 0UL})
+    {
+        const auto query = [&](PCWSTR name, ULONG* output) noexcept {
+            if (std::wcscmp(name, L"MpoDemoCadenceHz") != 0) return STATUS_OBJECT_NAME_NOT_FOUND;
+            *output = cadence;
+            return STATUS_SUCCESS;
+        };
+        SwapChainConfig candidate;
+        Require(nv::iddcx::ReadSwapChainConfig(&candidate, query) ==
+            (cadence == 15 || cadence == 30 || cadence == 60 ?
+                STATUS_SUCCESS : STATUS_INVALID_PARAMETER));
+    }
+    for (const bool odd : {false, true})
+    {
+        unsigned reads = 0;
+        const auto changing = [&](PCWSTR name, ULONG* output) noexcept {
+            if (std::wcscmp(name, L"ConfigRevision") != 0) return STATUS_OBJECT_NAME_NOT_FOUND;
+            *output = odd ? 1 : ++reads * 2;
+            return STATUS_SUCCESS;
+        };
+        SwapChainConfig candidate;
+        Require(nv::iddcx::ReadSwapChainConfig(&candidate, changing) == STATUS_DEVICE_BUSY);
+    }
+    SwapChainConfig equivalent = configuration;
+    equivalent.revision = 200; equivalent.generation = 99;
+    equivalent.connector = 3; equivalent.speed = 200; equivalent.demoPlanes = 5;
+    equivalent.readback = 2;
+    Require(configuration.Equivalent(equivalent));
+    equivalent.presentation.buffers = 4;
+    Require(!configuration.Equivalent(equivalent));
+    std::puts("PASS: full live configuration, strict demo/cadence/connector bounds, revisions and normalized no-ops");
     for (const NTSTATUS absent : {STATUS_OBJECT_NAME_NOT_FOUND,
         STATUS_OBJECT_PATH_NOT_FOUND, STATUS_NO_SUCH_FILE})
     {

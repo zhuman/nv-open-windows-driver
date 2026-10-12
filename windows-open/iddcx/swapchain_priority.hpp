@@ -7,7 +7,7 @@
 
 namespace nv::iddcx {
 
-HRESULT ReadRealtimeGpuPriority(bool* enabled) noexcept;
+HRESULT ReadRealtimeGpuPriority(bool* enabled, bool requested) noexcept;
 
 void TrySetRealtimeGpuPriority(
     IDDCX_SWAPCHAIN swapChain, IUnknown* device, PCSTR api) noexcept;
@@ -18,7 +18,7 @@ HRESULT CreateSourceCopyQueue(
 class SwapChainThreadScheduling final
 {
 public:
-    explicit SwapChainThreadScheduling(PCSTR api) noexcept;
+    SwapChainThreadScheduling(PCSTR api, bool enabled) noexcept;
     ~SwapChainThreadScheduling() noexcept;
     SwapChainThreadScheduling(const SwapChainThreadScheduling&) = delete;
     SwapChainThreadScheduling& operator=(const SwapChainThreadScheduling&) = delete;

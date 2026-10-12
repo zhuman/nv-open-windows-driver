@@ -76,9 +76,11 @@
     <ClCompile Include="device.cpp" />
     <ClCompile Include="display_modes.cpp" />
     <ClCompile Include="driver.cpp" />
+    <ClCompile Include="driver_parameters.cpp" />
     <ClCompile Include="dirty_regions.cpp" />
     <ClCompile Include="hardware_services.cpp" />
     <ClCompile Include="hwcursor.cpp" />
+    <ClCompile Include="mpo_scene.cpp" />
     <ClCompile Include="output.cpp" />
     <ClCompile Include="pci_bars.cpp" />
     <ClCompile Include="swapchain_d3d11.cpp" />
@@ -99,6 +101,8 @@
     <ClInclude Include="hardware_services.hpp" />
     <ClInclude Include="..\platform\kernel\nvplatform_memory_resource.hpp" />
     <ClInclude Include="hwcursor.h" />
+    <ClInclude Include="mpo_scene.hpp" />
+    <ClInclude Include="mpo_patterns.hpp" />
     <ClInclude Include="output.hpp" />
     <ClInclude Include="pci_bars.hpp" />
     <ClInclude Include="swapchain_d3d11.hpp" />

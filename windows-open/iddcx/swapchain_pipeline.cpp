@@ -1,6 +1,7 @@
 #include "swapchain_pipeline.hpp"
 #include "output.hpp"
 #include "display_modes.hpp"
+#include "mpo_scene.hpp"
 #include "swapchain_priority.hpp"
 #include "trace.h"
 
@@ -26,6 +27,8 @@ HRESULT SwapChainUploadPipeline::Start(Output& output, HANDLE stopEvent, NvU32 s
     output_ = &output;
     stopEvent_ = stopEvent;
     sourceApi_ = sourceApi;
+    scene_ = output.DemoScene();
+    if (scene_) scene_->Restart();
     enabled_ = output.PresentPolicy().pipeline != 0;
     if (output.RequiresScanoutReset())
     {
@@ -68,7 +71,19 @@ HRESULT SwapChainUploadPipeline::Start(Output& output, HANDLE stopEvent, NvU32 s
     available_.reset(CreateEventW(nullptr, FALSE, FALSE, nullptr));
     if (!wake_ || !available_)
         return HRESULT_FROM_WIN32(GetLastError());
-    if (enabled_)
+    if (scene_)
+    {
+        animationTimer_.reset(CreateWaitableTimerExW(nullptr, nullptr,
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE));
+        if (!animationTimer_)
+        {
+            const DWORD error = GetLastError();
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "MPO high-resolution timer creation failed: %u", error);
+            return HRESULT_FROM_WIN32(error);
+        }
+    }
+    if (enabled_ || scene_)
     {
         thread_.reset(CreateThread(nullptr, 0, ThreadEntry, this, 0, nullptr));
         if (!thread_)
@@ -87,6 +102,7 @@ HRESULT SwapChainUploadPipeline::Start(Output& output, HANDLE stopEvent, NvU32 s
 void SwapChainUploadPipeline::Fail(HRESULT result) noexcept
 {
     result_.store(result);
+    Parameters().Reject("Presentation failed; inspect the driver trace before retrying");
     TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "Copy pipeline failed: result=0x%08X", result);
     SetEvent(stopEvent_);
     SetEvent(available_.get());
@@ -107,9 +123,28 @@ HRESULT SwapChainUploadPipeline::Refresh() noexcept
     if (status != NV_OK)
         return E_FAIL;
     if (pending && GetTickCount64() - lastSubmissionMs_ > 2000)
+    {
+        TraceLayerRetirement();
         return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+    }
     if (!pending)
     {
+        if (scene_)
+            for (ULONG index = 1; index <= scene_->PlaneCount(); ++index)
+            {
+                NvBool overlayPending = NV_FALSE;
+                if (NvKmsWindowsGetLayerFlipPending(
+                    output_->AssignedHead(), index, &overlayPending) != NV_OK) return E_FAIL;
+                if (overlayPending)
+                {
+                    if (GetTickCount64() - lastSubmissionMs_ > 2000)
+                    {
+                        TraceLayerRetirement();
+                        return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+                    }
+                    return S_OK;
+                }
+            }
         NvU64 timestamp = 0;
         if (NvKmsWindowsGetFlipTimestamp(output_->AssignedHead(), &timestamp) != NV_OK)
             return E_FAIL;
@@ -118,6 +153,8 @@ HRESULT SwapChainUploadPipeline::Refresh() noexcept
         if (FAILED(result))
             return result;
         output_->SetFrontBuffer(latest);
+        output_->RetirePreviousPool();
+        output_->PresentationApplied();
         TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
             "Pipeline latch observed: slot=%u frame=%llu qpc=%llu timestamp=%llu",
             latest, queuedFrames_[latest], Counter(), timestamp);
@@ -218,6 +255,8 @@ HRESULT SwapChainUploadPipeline::AddDamage(const Job& job) noexcept
 
 HRESULT SwapChainUploadPipeline::Consume(Job& job) noexcept
 {
+    wil::rwlock_release_exclusive_scope_exit presentation;
+    if (scene_) presentation = presentLock_.lock_exclusive();
     auto unmap = wil::scope_exit([&]() noexcept { Unmap(job); });
     HRESULT result = AddDamage(job);
     if (FAILED(result))
@@ -291,6 +330,16 @@ HRESULT SwapChainUploadPipeline::Consume(Job& job) noexcept
         SetEvent(available_.get());
     }
     job.layer.skipUpload = NV_TRUE;
+    NV_KMS_WINDOWS_LAYER layers[8] = {};
+    NvU32 layerCount = 1;
+    layers[0] = job.layer;
+    if (scene_)
+    {
+        result = WaitForLayers();
+        if (FAILED(result)) return result;
+        result = scene_->Prepare(job.layer, layers, &layerCount);
+        if (FAILED(result)) return result;
+    }
     const ULONGLONG deadline = GetTickCount64() + 2000;
     for (;;)
     {
@@ -313,12 +362,23 @@ HRESULT SwapChainUploadPipeline::Consume(Job& job) noexcept
             NV_KMS_WINDOWS_PRESENT_TIMING submitTiming = {};
             const NV_STATUS status = NvKmsWindowsPresentLayersTimed(
                 output_->AssignedHead(), output_->DisplayState().displayHandle,
-                &job.layer, 1, NV_FALSE, &submitTiming);
+                layers, layerCount, NV_FALSE, &submitTiming);
             if (status == NV_OK)
             {
                 submitted_ = true;
                 lastSubmissionMs_ = GetTickCount64();
                 output_->SetSubmittedBuffer(destination);
+                if (scene_)
+                {
+                    const HRESULT planeQueued = scene_->Submitted();
+                    if (FAILED(planeQueued)) return planeQueued;
+                    demoSubmitted_ = true;
+                    desktop_ = job.layer;
+                    desktop_.uploadSource = nullptr;
+                    desktop_.reuseSurface = NV_TRUE;
+                    desktopTransform_ = job.transform;
+                    desktop_.colorTransform = &desktopTransform_;
+                }
                 auto guard = lock_.lock_exclusive();
                 result = slots_.Queue(destination);
                 if (FAILED(result))
@@ -349,9 +409,118 @@ HRESULT SwapChainUploadPipeline::Consume(Job& job) noexcept
     }
 }
 
+void SwapChainUploadPipeline::TraceLayerRetirement() noexcept
+{
+    const NV_STATUS channelStatus = NvKmsWindowsTraceFlipChannels(output_->AssignedHead());
+    TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+        "MPO retirement channel query: head=%u status=0x%08X",
+        output_->AssignedHead(), channelStatus);
+    const NvU32 planeCount = scene_ ? scene_->PlaneCount() : 0;
+    for (NvU32 index = 0; index <= planeCount; ++index)
+    {
+        NvBool busy = NV_FALSE;
+        NvU64 timestamp = 0;
+        const NV_STATUS pendingStatus = NvKmsWindowsGetLayerFlipPending(
+            output_->AssignedHead(), index, &busy);
+        const NV_STATUS timestampStatus = NvKmsWindowsGetLayerFlipTimestamp(
+            output_->AssignedHead(), index, &timestamp);
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "MPO retirement timeout: head=%u layer=%u pending=%u timestamp=%llu query=0x%08X timeQuery=0x%08X",
+            output_->AssignedHead(), index, busy, timestamp, pendingStatus, timestampStatus);
+    }
+}
+
+HRESULT SwapChainUploadPipeline::WaitForLayers() noexcept
+{
+    const auto deadline = GetTickCount64() + 2000;
+    for (;;)
+    {
+        bool overlayPending = false;
+        HRESULT result = scene_->Retire(&overlayPending);
+        if (FAILED(result)) return result;
+        NvBool primaryPending = NV_FALSE;
+        if (NvKmsWindowsGetFlipPending(output_->AssignedHead(), &primaryPending) != NV_OK)
+            return E_FAIL;
+        result = Refresh();
+        if (FAILED(result)) return result;
+        if (!primaryPending && !overlayPending) return S_OK;
+        if (WaitForSingleObject(stopEvent_, 1) == WAIT_OBJECT_0)
+            return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+        if (GetTickCount64() > deadline)
+        {
+            TraceLayerRetirement();
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        }
+    }
+}
+
+HRESULT SwapChainUploadPipeline::Animate() noexcept
+{
+    auto state = output_->LockFrameStateShared();
+    auto presentation = presentLock_.lock_exclusive();
+    if (!demoSubmitted_ || !scene_->Due()) return S_OK;
+    const HRESULT retired = WaitForLayers();
+    if (FAILED(retired)) return retired;
+    NV_KMS_WINDOWS_LAYER layers[8] = {};
+    NvU32 count = 0;
+    desktop_.surface = output_->ScanoutSurface();
+    desktopTransform_ = output_->ColorTransform();
+    const HRESULT prepared = scene_->Prepare(desktop_, layers, &count);
+    if (FAILED(prepared)) return prepared;
+    const NV_STATUS presented = NvKmsWindowsPresentLayersTimed(output_->AssignedHead(),
+        output_->DisplayState().displayHandle, layers, count, NV_FALSE, nullptr);
+    if (presented != NV_OK)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "MPO overlay-only flip failed: status=0x%08X", presented);
+        return E_FAIL;
+    }
+    const HRESULT queued = scene_->Submitted();
+    if (FAILED(queued)) return queued;
+    lastSubmissionMs_ = GetTickCount64();
+    TraceEvents(TRACE_LEVEL_VERBOSE, TRACE_DRIVER,
+        "MPO overlay-only frame: connector=%u mode=%u count=%u",
+        output_->DisplayState().connectorIndex, output_->Config().demo, count);
+    return S_OK;
+}
+
+HRESULT SwapChainUploadPipeline::DisableDemo() noexcept
+{
+    if (!scene_ || !demoSubmitted_) return S_OK;
+    // Source and animation threads are stopped; cancellation cannot free a live plane.
+    const auto deadline = GetTickCount64() + 2000;
+    for (unsigned phase = 0; phase < 2; ++phase)
+    {
+        for (;;)
+        {
+            bool overlays = false;
+            NvBool primary = NV_FALSE;
+            const HRESULT retired = scene_->Retire(&overlays);
+            if (FAILED(retired) ||
+                NvKmsWindowsGetFlipPending(output_->AssignedHead(), &primary) != NV_OK)
+                return E_FAIL;
+            if (!overlays && !primary) break;
+            if (GetTickCount64() > deadline) return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+            Sleep(1);
+        }
+        if (phase == 0)
+        {
+            const HRESULT refreshed = Refresh();
+            if (FAILED(refreshed)) return refreshed;
+            desktop_.surface = output_->ScanoutSurface();
+            if (NvKmsWindowsPresentLayersTimed(output_->AssignedHead(),
+                output_->DisplayState().displayHandle, &desktop_, 1, NV_FALSE, nullptr) != NV_OK)
+                return E_FAIL;
+        }
+    }
+    demoSubmitted_ = false;
+    return S_OK;
+}
+
 DWORD WINAPI SwapChainUploadPipeline::ThreadEntry(void* context) noexcept
 {
-    SwapChainThreadScheduling scheduling("CE");
+    auto* pipeline = static_cast<SwapChainUploadPipeline*>(context);
+    SwapChainThreadScheduling scheduling("CE", pipeline->output_->Config().mmcss != 0);
     static_cast<SwapChainUploadPipeline*>(context)->Process();
     return 0;
 }
@@ -406,19 +575,41 @@ void SwapChainUploadPipeline::Process() noexcept
         if (index != FrameSlots::Invalid)
         {
             if (SUCCEEDED(result))
+            {
+                auto state = output_->LockFrameStateShared();
                 result = Consume(job);
+            }
         }
         else
         {
             result = Refresh();
+            if (SUCCEEDED(result) && scene_) result = Animate();
             bool pending;
             {
                 auto guard = lock_.lock_exclusive();
                 pending = slots_.Latest() != FrameSlots::Invalid;
             }
-            const HANDLE waits[] = {stopEvent_, wake_.get()};
-            if (WaitForMultipleObjects(2, waits, FALSE, pending ? 1 : INFINITE) == WAIT_FAILED)
-                result = HRESULT_FROM_WIN32(GetLastError());
+            if (SUCCEEDED(result) && scene_)
+            {
+                LARGE_INTEGER due = {};
+                due.QuadPart = -static_cast<LONGLONG>(scene_->Wait100ns());
+                if (!SetWaitableTimer(animationTimer_.get(), &due, 0, nullptr, nullptr, FALSE))
+                    result = HRESULT_FROM_WIN32(GetLastError());
+                else
+                {
+                    const HANDLE waits[] = {stopEvent_, wake_.get(), animationTimer_.get()};
+                    if (WaitForMultipleObjects(ARRAYSIZE(waits), waits, FALSE,
+                        pending ? 1 : INFINITE) == WAIT_FAILED)
+                        result = HRESULT_FROM_WIN32(GetLastError());
+                }
+            }
+            else if (SUCCEEDED(result))
+            {
+                const HANDLE waits[] = {stopEvent_, wake_.get()};
+                if (WaitForMultipleObjects(ARRAYSIZE(waits), waits, FALSE,
+                    pending ? 1 : INFINITE) == WAIT_FAILED)
+                    result = HRESULT_FROM_WIN32(GetLastError());
+            }
         }
         if (FAILED(result) && result != HRESULT_FROM_WIN32(ERROR_CANCELLED))
         {
@@ -446,6 +637,12 @@ HRESULT SwapChainUploadPipeline::Stop() noexcept
             job.mapped->Unmap(0, &written);
             job.mapped = nullptr;
         }
+    const HRESULT disabled = DisableDemo();
+    if (FAILED(disabled))
+    {
+        output_->RequireScanoutReset();
+        Fail(disabled);
+    }
     if (output_ != nullptr && submitted_)
     {
         const NvU64 deadline = GetTickCount64() + 2000;
@@ -473,6 +670,7 @@ HRESULT SwapChainUploadPipeline::Stop() noexcept
         }
     }
     output_ = nullptr;
+    animationTimer_.reset();
     return result_.load();
 }
 

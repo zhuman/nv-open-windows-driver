@@ -8,16 +8,8 @@
 
 namespace nv::iddcx {
 
-HRESULT SwapChainDamage::Initialize(IDDCX_SWAPCHAIN handle, UINT bufferCount) noexcept
+HRESULT SwapChainDamage::Initialize(IDDCX_SWAPCHAIN handle, UINT bufferCount, bool enabled) noexcept
 {
-    ULONG enabled = 0;
-    const NTSTATUS status = QueryDirtyRectsEnabled(&enabled);
-    if (!NT_SUCCESS(status))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid DirtyRects setting: status=%!STATUS! value=%u", status, enabled);
-        return NT_SUCCESS(status) ? E_INVALIDARG : HRESULT_FROM_NT(status);
-    }
     if (enabled != 0 && !IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainGetDirtyRects))
     {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "IddCx dirty-rectangle API unavailable");
@@ -25,7 +17,7 @@ HRESULT SwapChainDamage::Initialize(IDDCX_SWAPCHAIN handle, UINT bufferCount) no
     }
     handle_ = handle;
     bufferCount_ = bufferCount;
-    enabled_ = enabled != 0;
+    enabled_ = enabled;
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
         "Swapchain damage: enabled=%u buffers=%u maximumBands=2", enabled_, bufferCount_);
     return S_OK;

@@ -3,6 +3,128 @@
 This directory is the sidecar build and platform root for the experimental
 Windows port. It does not replace or modify the NVIDIA source build system.
 
+## Live IddCx parameters and hardware-plane experiments
+
+**Validation status (updated October 12, 2026):** implemented and locally
+tested; Release x64 build/signing, ARM64 compile checks, and NativeAOT app
+smoke checks passed. Coordinated October 12 hardware tests applied all six
+scenes and Off on both D3D11 and native D3D12, with repeated live transitions
+in one unchanged driver host. ShadowCast 2 Pro recordings verified animated
+Geometry Compass and complete supported Showcase cycles. High-resolution
+deadline scheduling reached measured layer-retirement rates of approximately
+15.0/30.0/58.8 Hz for requests of 15/30/60 Hz. Long-run resource,
+hotplug/power recovery, and interactive UAC acceptance remain open.
+The monitor-departure double deletion and elevated GUI request-ownership issue
+have production regressions and target validation.
+
+The IddCx driver watches DWORD values under its UMDF framework key:
+
+```text
+HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\WUDF\Services\nv-iddcx\Parameters
+```
+
+This is **not** the PnP `WUDFRd` service key. Missing values retain their
+documented defaults. Malformed, incomplete, or unsupported candidates do not
+replace the last running configuration. Accepted changes retire the source
+swapchain through IddCx and recreate it without restarting the device. Buffer
+count or cache-policy changes also stage a replacement scanout pool. The old
+front allocation stays owned until its replacement is latched.
+
+For grouped writes, set `ConfigRevision` to an odd DWORD, write the complete
+candidate, then commit with the next even revision. Odd or changing revisions
+are never applied. Unversioned edits are accepted only after two matching
+reads separated by a short settling interval. Normalized equivalent settings
+and settings belonging to an inactive source API do not recreate a swapchain.
+An explicitly committed new even revision can retry a latched native-source
+failure once; healthy equivalent configurations remain no-ops.
+The legacy D3D11 `ReadbackMode` key is watched as a fallback only when the
+framework `D3D11ReadbackMode` value is absent.
+
+The new demonstration controls are:
+
+| DWORD | Values | Default |
+| --- | --- | --- |
+| `MpoDemoMode` | 0 Off; 1 Alpha Orbit; 2 Geometry Compass; 3 CSC Color Lab; 4 Luminance Elevator; 5 LUT Gallery; 6 Live Showcase | 0 |
+| `MpoDemoConnectorIndex` | Physical connector index 0-15; required while enabled | Absent |
+| `MpoDemoPlaneCount` | 1-7 additional planes, subject to the active head's layer budget | 1 |
+| `MpoDemoCadenceHz` | 15, 30, or 60, not above the active refresh rate | 30 |
+| `MpoDemoSpeedPercent` | 25-200 | 100 |
+
+The software renderer produces animated source cards; NVKMS performs the
+actual plane composition, supported rotation/reflection, CSC/color gain,
+and independent input LUT. No software composition or head-wide gamma is
+substituted for an unsupported plane feature. The desktop counts as one
+hardware layer. Each additional layer retains separate buffer and LUT
+ownership and is retired using that layer's own pending/timestamp queries.
+Disabling a layer uses a null surface and resubmits the active primary in
+the same atomic non-tearing update. Its actual primary completion witnesses
+disabled-layer retirement; old leases remain held until that completion.
+Overlay-only animation explicitly reuses unchanged desktop content and does
+not invent an IddCx frame completion.
+
+Live Showcase includes only capability-supported chapters and a supported
+combination. Skipped chapters are reported explicitly; selecting an
+unsupported standalone mode still rejects the candidate.
+Geometry Compass is an approved exception: it cycles only supported
+transformations and scales that pass finite test-only validation, with
+omissions reported in the trace and an adaptation warning in status.
+On the tested RTX 4070, mask `0x55` supports 0/180-degree rotations and
+their reflected-X variants, not 90/270 degrees. Only unity scale passed;
+0.5x and 1.5x were explicitly omitted. `rotation=false` means full
+quarter-turn support is unavailable, not that every rotation is unavailable.
+Cropping reduces source extents from the origin: the overlay KAPI does not
+translate source offsets, and nonzero offsets are rejected. The combined
+Showcase chapter keeps native size when CSC/gain uses the scaling pipeline;
+validated geometric scaling is demonstrated separately where available.
+
+`VrrPreference` remains best effort, not proof that VRR is active. Live changes
+use a same-head modeset and verify the actual NVKMS reply. An unavailable
+enable preference leaves VRR off and reports a warning while other valid
+settings can apply. Failed rollback blocks further presentation and retains
+scanout leases for recovery. The control app displays effective VRR separately
+from the requested preference.
+
+Both D3D11 and D3D12 use the shared presentation coordinator. Mode 0 retains
+normal presentation; demonstrations are experimental and require actual
+capability and test-only NVKMS validation on the selected active output.
+**Current experimental hardware status (October 12, 2026): all six modes
+activate and retire live on the tested two-layer RTX 4070 head.** The desktop
+uses one layer, leaving one demo plane; requesting two demo planes rejects
+the candidate without disturbing the current scene. Invalid types, odd
+revisions, and equivalent valid commits also passed retention/no-op checks.
+The earlier coarse-clock/full-interval scheduling under-delivered requested
+cadences. QPC-based absolute deadlines and a high-resolution waitable timer
+now exclude rendering time from the next frame budget, skip missed slots
+instead of bursting, and preserve immediate stop/source wakeups. Three
+36-second Showcase windows measured unique layer retirements at
+15.000/29.9997/58.804 Hz for requests of 15/30/60 Hz, with median intervals
+67/33/17 ms. These are observed rates, not a guarantee of exact 60 Hz.
+Private memory returned near the native baseline, but handle-class audits
+identified three additional `DxgkSharedSyncObject` handles per source
+recreation: 3 to 45 across 14 changes. Read-only status polls did not explain
+the growth. No borrowed/opaque GPU handles are closed speculatively; allocation
+ownership and long-run behavior remain open before claiming reliability.
+Packed layers now use an explicit neutral input LUT unless a custom LUT is
+requested. This prevents the earlier default-LUT activation stall on this
+target without claiming the underlying upstream allocation defect is proven.
+The six-mode trace decoded 643,930 events with zero losses, format errors,
+or unknowns; its 36 software flip rejections matched intentional unsupported
+scale probes. The later deadline trace decoded 446,120 events with the same
+zero-loss/error result. Neither showed Xid, retirement timeout, assertion,
+fail-fast, or the guarded nested-RPC warning. That is not runtime acceptance
+of the unexercised GSP timeout guard. The final deployed deadline candidate
+was OEM45/DLL `D6B437A94DD3D29D3AE36FD46327E60ED123A1CB88B101A63D7D000BF5E43211`.
+Defaults and native D3D12/Off were restored at October 12 05:25:36 PDT before
+the verified AMD coordination release; demos remain opt-in. This is a
+timestamped result, not a claim about later runtime state.
+See [the approved experiment plan](../PLAN-WINDOWS.md#11a-live-parameters-internal-mpo-demos-and-a-control-app)
+for the visual designs and validation requirements.
+
+The compact [IddCx Control application](tools/iddcx-control/README.md) exposes
+these settings and reads driver-reported accepted/applied generations from
+the local `NvIddCx.Status` pipe. A registry write is not proof of application.
+Publish and copy the complete NativeAOT output folder, not just its executable.
+
 ## Projects
 
 - `common/kernel/nvcommon-kernel.vcxproj` builds the initial NVIDIA common-code
@@ -417,6 +539,20 @@ Run the presentation regressions with:
 The runner includes 24,054 production-header checks for cursor/copy overlap,
 cursor/flip exclusion, CE/presenter serialization, lifecycle teardown, moved
 guard ownership, and 12,000 concurrent copy/program operations.
+
+Additional production backend and platform diagnostic checks are available:
+
+```powershell
+& .\windows-open\modeset\tests\run_mpo_request_tests.ps1
+& .\windows-open\platform\tests\run_debug_log_tests.ps1
+```
+
+The IDDCX WPP provider mirrors RM platform debugger output, including Xid
+messages, assertion frame addresses, and fail-fast bug codes. Enable the
+`TRACE_DRIVER` flag at informational level or higher to capture these messages;
+their original platform level is included in the payload. Resolve stack
+addresses with the exact deployed DLL's PDB. These diagnostics do not bypass
+hardware completion, interlocks, or recovery checks.
 
 **RTX 4070 assessment (2026-10-08):** signed x64 package `oem200.inf`, loaded DLL
 SHA-256 `8BA7FC24C991FCF2C526AE0742A098BDD6FD04EC11513C4FF2EB16B0A112333C`,

@@ -11,6 +11,8 @@ extern "C" {
 #include "nvidia-modeset-os-interface.h"
 #include "nvkms-kapi.h"
 #include "nvkms-kapi-internal.h"
+#include "nvkms-kapi-notifiers.h"
+#include "nvkms-sync.h"
 #include "nvrm_gpu_attach.h"
 }
 
@@ -19,6 +21,11 @@ extern "C" {
 #include <class/cl402c.h>
 #include <ctrl/ctrl0073/ctrl0073dp.h>
 #include <ctrl/ctrl0073/ctrl0073specific.h>
+#include <class/clc67b.h>
+#include <class/clc67e.h>
+#include <class/clc77d.h>
+#include <disp/v03_00/dev_disp.h>
+#include "nvplatform_mmio_rm.h"
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -73,9 +80,15 @@ struct NV_KMS_WINDOWS_SURFACE
     NvU32 pitch;
     NV_KMS_WINDOWS_SCANOUT_FORMAT format;
     NvBool presented;
+    NvBool immutableInputLut;
+    NvKmsLUTCaps inputLutCaps;
 };
 
 extern "C" void NvKmsWindowsTraceMessage(const char* message);
+#ifndef NVKMS_WINDOWS_REQUEST_TEST
+struct NvKmsPerOpen;
+extern "C" NvBool nvKmsTraceDisplayChannels(const NvKmsPerOpen*, NvU32, NvU32);
+#endif
 extern "C" NvBool nvEvoGetPqOutputLutC5(
     void* data, NvU32 size, NvU32* lutEntries, NvU32* vssSegments);
 
@@ -99,6 +112,8 @@ std::atomic<void*> displayChangeContext{nullptr};
 constexpr NvU32 LutHeaderEntries = 4;
 constexpr NvU32 LutEntries = 1025;
 constexpr NvU32 LutSurfaceAlignment = 0x100;
+static_assert(NV_KMS_WINDOWS_GAMMA_ENTRIES + 1 == LutEntries,
+    "The linear input LUT needs one interpolation sentinel.");
 NvU32 pqLutEntries = 0;
 NvU32 pqLutSegments = 0;
 
@@ -113,6 +128,81 @@ struct HeadGammaCache
 HeadGammaCache gammaCache[NVKMS_KAPI_MAX_HEADS] = {};
 NvKmsKapiLayerConfig
     layerCache[NVKMS_KAPI_MAX_HEADS][NVKMS_KAPI_LAYER_MAX] = {};
+NvKmsKapiSurface*
+    retiringSurfaces[NVKMS_KAPI_MAX_HEADS][NVKMS_KAPI_LAYER_MAX] = {};
+NvBool layerDisablePending[NVKMS_KAPI_MAX_HEADS][NVKMS_KAPI_LAYER_MAX] = {};
+NvKmsKapiHeadModeSetConfig modeSetCache[NVKMS_KAPI_MAX_HEADS] = {};
+NvBool modeSetCacheValid[NVKMS_KAPI_MAX_HEADS] = {};
+NvKmsKapiCursorRequestedConfig cursorCache[NVKMS_KAPI_MAX_HEADS] = {};
+
+struct VrrModeSetPolicy
+{
+    NvBool overridePolicy;
+    NvKmsDeviceHandle device;
+    NvU32 disp;
+    NvU32 headsMask;
+    NvBool preference;
+    NvBool replyValid;
+    NvU32 replyHeadsMask;
+    NvBool enabled[NVKMS_KAPI_MAX_HEADS];
+};
+
+thread_local VrrModeSetPolicy vrrModeSetPolicy = {};
+
+class VrrModeSetPolicyGuard
+{
+public:
+    VrrModeSetPolicyGuard(NvU32 head, NvBool preference) : saved_(vrrModeSetPolicy)
+    {
+        vrrModeSetPolicy = {};
+        vrrModeSetPolicy.overridePolicy = NV_TRUE;
+        vrrModeSetPolicy.device = kmsDevice->hKmsDevice;
+        vrrModeSetPolicy.disp = kmsDevice->dispIdx;
+        vrrModeSetPolicy.headsMask = 1U << head;
+        vrrModeSetPolicy.preference = preference;
+    }
+    ~VrrModeSetPolicyGuard() { vrrModeSetPolicy = saved_; }
+    VrrModeSetPolicyGuard(const VrrModeSetPolicyGuard&) = delete;
+    VrrModeSetPolicyGuard& operator=(const VrrModeSetPolicyGuard&) = delete;
+
+private:
+    VrrModeSetPolicy saved_;
+};
+
+void OverrideVrrModeSetPolicy(NvKmsSetModeParams* params)
+{
+    const auto& policy = vrrModeSetPolicy;
+    if (!policy.overridePolicy || policy.device != params->request.deviceHandle ||
+        policy.disp >= ARRAY_LEN(params->request.disp) ||
+        (params->request.requestedDispsBitMask & (1U << policy.disp)) == 0)
+        return;
+    auto& disp = params->request.disp[policy.disp];
+    for (NvU32 head = 0; head < NVKMS_KAPI_MAX_HEADS; ++head)
+    {
+        if ((disp.requestedHeadsBitMask & policy.headsMask & (1U << head)) == 0)
+            continue;
+        // KAPI otherwise hardcodes both permissions on, irrespective of its
+        // vrrEnabled field (which only sets flip.allowVrr).
+        disp.head[head].allowGsync = policy.preference;
+        disp.head[head].allowAdaptiveSync = policy.preference ?
+            NVKMS_ALLOW_ADAPTIVE_SYNC_ALL : NVKMS_ALLOW_ADAPTIVE_SYNC_DISABLED;
+        disp.head[head].flip.allowVrr = policy.preference;
+    }
+}
+
+void CaptureVrrModeSetReply(const NvKmsSetModeParams* params, NvU32 disp, NvBool success)
+{
+    if (!params->request.commit)
+        return;
+    vrrModeSetPolicy.replyValid = NV_FALSE;
+    if (!success || params->reply.status != NVKMS_SET_MODE_STATUS_SUCCESS ||
+        disp >= ARRAY_LEN(params->reply.disp))
+        return;
+    vrrModeSetPolicy.replyHeadsMask = params->request.disp[disp].requestedHeadsBitMask;
+    for (NvU32 head = 0; head < NVKMS_KAPI_MAX_HEADS; ++head)
+        vrrModeSetPolicy.enabled[head] = params->reply.disp[disp].head[head].vrrEnabled;
+    vrrModeSetPolicy.replyValid = NV_TRUE;
+}
 
 struct LutEntry
 {
@@ -143,6 +233,16 @@ NvU16 FloatToFp16(float value)
 
     NvU32 exponent = (bits >> 23) & 0xFF;
     NvU32 mantissa = bits & 0x7FFFFF;
+    if (exponent <= 112)
+    {
+        if (exponent < 101)
+            return 0;
+        mantissa |= 0x800000;
+        const NvU32 shift = 126 - exponent;
+        const NvU32 rounded = mantissa +
+            ((1U << (shift - 1)) - 1) + ((mantissa >> shift) & 1);
+        return static_cast<NvU16>(rounded >> shift);
+    }
     mantissa += 0xFFF + ((mantissa >> 13) & 1);
     if ((mantissa & 0x800000) != 0)
     {
@@ -285,7 +385,8 @@ NvU16 SampleGamma(const NvU16* ramp, NvU16 value)
 
 NV_STATUS CreateLutSurface(
     const NV_KMS_WINDOWS_COLOR_TRANSFORM* transform,
-    NV_KMS_WINDOWS_SURFACE** result)
+    NV_KMS_WINDOWS_SURFACE** result,
+    const NvKmsLUTCaps* inputCaps = nullptr)
 {
     const NvU64 size =
         (sizeof(LutData) + LutSurfaceAlignment - 1) &
@@ -346,14 +447,31 @@ NV_STATUS CreateLutSurface(
         data->base[LutHeaderEntries + 1023];
     data->output[LutHeaderEntries + 1024] =
         data->output[LutHeaderEntries + 1023];
-    if (!nvEvoGetPqOutputLutC5(
+    if (inputCaps != nullptr)
+    {
+        // Match EVO3's 1024 linear samples plus the interpolation sentinel.
+        for (NvU32 index = 0; index < 1024; ++index)
+        {
+            auto& entry = data->base[LutHeaderEntries + index];
+            entry.Red = FloatToFp16(
+                static_cast<float>(transform->gammaRed[index]) / 65535.0F);
+            entry.Green = FloatToFp16(
+                static_cast<float>(transform->gammaGreen[index]) / 65535.0F);
+            entry.Blue = FloatToFp16(
+                static_cast<float>(transform->gammaBlue[index]) / 65535.0F);
+        }
+        data->base[LutHeaderEntries + 1024] = data->base[LutHeaderEntries + 1023];
+        lut->immutableInputLut = NV_TRUE;
+        lut->inputLutCaps = *inputCaps;
+    }
+    else if (!nvEvoGetPqOutputLutC5(
             data->pqOutput, sizeof(data->pqOutput),
             &pqLutEntries, &pqLutSegments))
     {
         DestroySurface(lut);
         return NV_ERR_GENERIC;
     }
-    if (transform != nullptr && transform->gammaEnabled)
+    if (inputCaps == nullptr && transform != nullptr && transform->gammaEnabled)
     {
         for (NvU32 index = LutHeaderEntries;
              index < LutHeaderEntries + LutEntries;
@@ -397,6 +515,12 @@ NV_STATUS CreateLutSurface(
     return NV_OK;
 }
 
+bool SupportedInputLut(const NvKmsLUTCaps& caps)
+{
+    return caps.supported && caps.entryFormat == NVKMS_LUT_FORMAT_FP16 &&
+        caps.lutEntries == LutEntries;
+}
+
 NV_STATUS EnsureDefaultLutSurface()
 {
     return kmsDefaultLutSurface != nullptr ? NV_OK :
@@ -419,6 +543,7 @@ void SetOutputLut(NvKmsKapiHeadRequestedConfig* headConfig,
     headConfig->flags.olutFpNormScaleChanged = NV_TRUE;
 }
 
+#ifndef NVKMS_WINDOWS_REQUEST_TEST
 BOOL CALLBACK NvKmsInitializeLock(PINIT_ONCE, void*, void**)
 {
     InitializeCriticalSection(&kmsLock);
@@ -563,9 +688,11 @@ nvkms_timer_t* NvKmsAllocateTimer(
     SetThreadpoolTimer(timer->timer, &dueTime, 0, 0);
     return timer;
 }
+#endif
 
 }
 
+#ifndef NVKMS_WINDOWS_REQUEST_TEST
 extern "C" {
 void Nv01FreeKernel(NVOS00_PARAMETERS*);
 void Nv01AllocMemoryKernel(NVOS02_PARAMETERS*);
@@ -864,7 +991,15 @@ extern "C" NvBool nvkms_ioctl_from_kapi_try_pmlock(
     void* parameters,
     size_t parameterSize)
 {
-    return nvkms_ioctl_from_kapi(perOpen, command, parameters, parameterSize);
+    auto* const modeSet = command == NVKMS_IOCTL_SET_MODE &&
+        parameters != nullptr && parameterSize == sizeof(NvKmsSetModeParams) ?
+        static_cast<NvKmsSetModeParams*>(parameters) : nullptr;
+    if (modeSet != nullptr)
+        OverrideVrrModeSetPolicy(modeSet);
+    const NvBool result = nvkms_ioctl_from_kapi(perOpen, command, parameters, parameterSize);
+    if (modeSet != nullptr && perOpen != nullptr && perOpen->device != nullptr)
+        CaptureVrrModeSetReply(modeSet, perOpen->device->dispIdx, result);
+    return result;
 }
 
 extern "C" nvkms_sema_handle_t* nvkms_sema_alloc(void)
@@ -935,6 +1070,119 @@ extern "C" nvkms_backlight_device* nvkms_register_backlight(
     return nullptr;
 }
 extern "C" void nvkms_unregister_backlight(nvkms_backlight_device*) {}
+
+#endif
+
+extern "C" void NvKmsWindowsTraceDisplayChannelRegisters(NvU32 hwclass, NvU32 instance)
+{
+    NvU32 controlOffset = 0, stateOffset = 0;
+    if (hwclass == NVC77D_CORE_CHANNEL_DMA && instance == 0)
+    {
+        controlOffset = NV_PDISP_FE_CHNCTL_CORE;
+        stateOffset = NV_PDISP_FE_CHNSTATUS_CORE;
+    }
+    else if (hwclass == NVC67E_WINDOW_CHANNEL_DMA &&
+             instance < NV_PDISP_FE_CHNSTATUS_WIN__SIZE_1)
+    {
+        controlOffset = NV_PDISP_FE_CHNCTL_WIN(instance);
+        stateOffset = NV_PDISP_FE_CHNSTATUS_WIN(instance);
+    }
+    else if (hwclass == NVC67B_WINDOW_IMM_CHANNEL_DMA &&
+             instance < NV_PDISP_FE_CHNSTATUS_WINIM__SIZE_1)
+    {
+        controlOffset = NV_PDISP_FE_CHNCTL_WINIM(instance);
+        stateOffset = NV_PDISP_FE_CHNSTATUS_WINIM(instance);
+    }
+    else
+    {
+        NvKmsWindowsTraceMessage("NVKMS channel register snapshot unsupported on this class");
+        return;
+    }
+    NV_PLATFORM_RM_GPU_ATTACH_INFO info = {};
+    AcquireSRWLockShared(&gpuRegistryLock);
+    const NV_STATUS status = gpuRegistered ?
+        NvPlatformRmGpuGetAttachInfo(
+            static_cast<const NV_PLATFORM_RM_GPU_CONTEXT*>(registeredGpu.os_device_ptr),
+            &info) : NV_ERR_INVALID_STATE;
+    ReleaseSRWLockShared(&gpuRegistryLock);
+    if (status != NV_OK || info.apertureCount == 0 ||
+        info.apertures[0].kernelAddress == nullptr ||
+        info.apertures[0].length < static_cast<NvU64>(stateOffset) + sizeof(NvU32))
+    {
+        NvKmsWindowsTraceMessage("NVKMS channel register snapshot lacks a valid aperture");
+        return;
+    }
+    const auto* base = static_cast<const volatile NvU8*>(info.apertures[0].kernelAddress);
+    const NvU32 control = NvPlatformRmReadRegister32(base + controlOffset);
+    const NvU32 state = NvPlatformRmReadRegister32(base + stateOffset);
+    char message[192] = {};
+    if (hwclass == NVC67E_WINDOW_CHANNEL_DMA)
+        nvkms_snprintf(message, sizeof(message),
+            "NVKMS stalled frontend: class=0x%X instance=%u control=0x%08X status=0x%08X update=%u",
+            hwclass, instance, control, state,
+            DRF_VAL(_PDISP, _FE_CHNSTATUS_WIN, _UPD_STATE, state));
+    else
+        nvkms_snprintf(message, sizeof(message),
+            "NVKMS stalled frontend: class=0x%X instance=%u control=0x%08X status=0x%08X",
+            hwclass, instance, control, state);
+    NvKmsWindowsTraceMessage(message);
+    if (hwclass == NVC67E_WINDOW_CHANNEL_DMA)
+    {
+        const NvU32 methods[] = {
+            NVC67E_SET_CONTEXT_DMA_ISO(0), NVC67E_SET_OFFSET(0),
+            NVC67E_SET_CONTEXT_DMA_NOTIFIER, NVC67E_SET_NOTIFIER_CONTROL,
+            NVC67E_SET_SIZE, NVC67E_SET_PRESENT_CONTROL,
+            NVC67E_SET_COMPOSITION_CONTROL, NVC67E_SET_INTERLOCK_FLAGS,
+            NVC67E_SET_WINDOW_INTERLOCK_FLAGS,
+            NVC67E_SET_SIZE_IN, NVC67E_SET_SIZE_OUT,
+            NVC67E_SET_STORAGE, NVC67E_SET_PLANAR_STORAGE(0),
+            NVC67E_SET_PARAMS, NVC67E_SET_CONTROL_INPUT_SCALER,
+            NVC67E_SET_ILUT_CONTROL, NVC67E_SET_CONTEXT_DMA_ILUT,
+            NVC67E_SET_OFFSET_ILUT, NVC67E_SET_SCAN_DIRECTION,
+        };
+        const NvU32 assembly = NV_UDISP_FE_CHN_ASSY_BASEADR_WIN(instance);
+        // Satellite channel state caches have 2 KiB assembly and armed halves.
+        const NvU32 armed = assembly + 2048;
+        if (info.apertures[0].length < static_cast<NvU64>(armed) + 2048)
+        {
+            NvKmsWindowsTraceMessage("NVKMS channel state cache exceeds registered aperture");
+            return;
+        }
+        for (NvU32 method : methods)
+        {
+            const NvU32 assemblyValue = NvPlatformRmReadRegister32(base + assembly + method);
+            const NvU32 armedValue = NvPlatformRmReadRegister32(base + armed + method);
+            nvkms_snprintf(message, sizeof(message),
+                "NVKMS stalled window cache: instance=%u method=0x%X assembly=0x%08X armed=0x%08X",
+                instance, method, assemblyValue, armedValue);
+            NvKmsWindowsTraceMessage(message);
+        }
+        const NvU32 coreMethods[] = {
+            NVC77D_WINDOW_SET_CONTROL(instance),
+            NVC77D_WINDOW_SET_WINDOW_FORMAT_USAGE_BOUNDS(instance),
+            NVC77D_WINDOW_SET_MAX_INPUT_SCALE_FACTOR(instance),
+            NVC77D_WINDOW_SET_WINDOW_USAGE_BOUNDS(instance),
+        };
+        const NvU32 coreAssembly = NV_UDISP_FE_CHN_ASSY_BASEADR_CORE;
+        const NvU32 coreArmed = coreAssembly + 32768;
+        if (info.apertures[0].length < static_cast<NvU64>(coreArmed) + 32768)
+        {
+            NvKmsWindowsTraceMessage("NVKMS core state cache exceeds registered aperture");
+            return;
+        }
+        for (NvU32 method : coreMethods)
+        {
+            const NvU32 assemblyValue = NvPlatformRmReadRegister32(base + coreAssembly + method);
+            const NvU32 armedValue = NvPlatformRmReadRegister32(base + coreArmed + method);
+            nvkms_snprintf(message, sizeof(message),
+                "NVKMS stalled core window cache: instance=%u method=0x%X assembly=0x%08X armed=0x%08X",
+                instance, method, assemblyValue, armedValue);
+            NvKmsWindowsTraceMessage(message);
+        }
+    }
+}
+
+#ifndef NVKMS_WINDOWS_REQUEST_TEST
 
 extern "C" void nvkms_call_rm(void* operations)
 {
@@ -1197,6 +1445,13 @@ extern "C" void NvKmsWindowsShutdown(void)
         kmsDevice = nullptr;
     }
     nvKmsModuleUnload();
+    std::memset(layerCache, 0, sizeof(layerCache));
+    std::memset(retiringSurfaces, 0, sizeof(retiringSurfaces));
+    std::memset(layerDisablePending, 0, sizeof(layerDisablePending));
+    std::memset(gammaCache, 0, sizeof(gammaCache));
+    std::memset(modeSetCache, 0, sizeof(modeSetCache));
+    std::memset(modeSetCacheValid, 0, sizeof(modeSetCacheValid));
+    std::memset(cursorCache, 0, sizeof(cursorCache));
 }
 
 extern "C" NV_STATUS NvKmsWindowsProbeDisplays(
@@ -1776,6 +2031,9 @@ extern "C" NV_STATUS NvKmsWindowsGetPrimaryDisplay(
 {
     return NvKmsWindowsGetDisplay(0, displayState);
 }
+#else
+extern "C" {
+#endif
 
 extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
     NvU32 width,
@@ -1818,13 +2076,16 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
             : format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8
                 ? NvKmsSurfaceMemoryFormatA8R8G8B8
                 : NvKmsSurfaceMemoryFormatX8R8G8B8;
-    const NvU64 supportedFormats =
-        format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8 ?
-            resources.caps.supportedCursorSurfaceMemoryFormats :
-            resources.supportedSurfaceMemoryFormats[0];
-    if ((supportedFormats & NVBIT64(kmsFormat)) == 0 ||
-        (format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8 &&
-         (width != height || width > resources.caps.maxCursorSizeInPixels)))
+    NvU64 supportedFormats = resources.supportedSurfaceMemoryFormats[0];
+    if (format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8)
+    {
+        for (NvU32 head = 0; head < resources.numHeads; ++head)
+            for (NvU32 layer = 0; layer < resources.numLayers[head]; ++layer)
+                supportedFormats |= resources.supportedSurfaceMemoryFormats[layer];
+        if (width == height && width <= resources.caps.maxCursorSizeInPixels)
+            supportedFormats |= resources.caps.supportedCursorSurfaceMemoryFormats;
+    }
+    if ((supportedFormats & NVBIT64(kmsFormat)) == 0)
     {
         return NV_ERR_NOT_SUPPORTED;
     }
@@ -1948,7 +2209,8 @@ extern "C" NV_STATUS NvKmsWindowsCreateScanoutSurface(
 extern "C" NV_STATUS NvKmsWindowsGetScanoutBuffer(
     NV_KMS_WINDOWS_SURFACE* surface, void** pixels, NvU64* allocationSize)
 {
-    if (surface == nullptr || pixels == nullptr || allocationSize == nullptr)
+    if (surface == nullptr || surface->immutableInputLut ||
+        pixels == nullptr || allocationSize == nullptr)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
@@ -1961,6 +2223,29 @@ extern "C" NV_STATUS NvKmsWindowsGetScanoutBuffer(
     *pixels = surface->pixels;
     *allocationSize = surface->stagingSize;
     return NV_OK;
+}
+
+extern "C" NV_STATUS NvKmsWindowsCreateInputLut(
+    const NV_KMS_WINDOWS_COLOR_TRANSFORM* transform,
+    NV_KMS_WINDOWS_SURFACE** surface)
+{
+    if (surface == nullptr)
+        return NV_ERR_INVALID_ARGUMENT;
+    *surface = nullptr;
+    if (transform == nullptr || !transform->gammaEnabled)
+        return NV_ERR_INVALID_ARGUMENT;
+    KmsDeviceLockGuard lock;
+    if (kmsDevice == nullptr)
+        return NV_ERR_INVALID_STATE;
+    NvKmsKapiDeviceResourcesInfo resources = {};
+    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources))
+        return NV_ERR_GENERIC;
+    for (NvU32 head = 0; head < resources.numHeads; ++head)
+        for (NvU32 layer = 0; layer < resources.numLayers[head]; ++layer)
+            if (SupportedInputLut(resources.lutCaps.layer[layer].ilut))
+                return CreateLutSurface(
+                    transform, surface, &resources.lutCaps.layer[layer].ilut);
+    return NV_ERR_NOT_SUPPORTED;
 }
 
 extern "C" void NvKmsWindowsDestroyScanoutSurface(
@@ -2309,6 +2594,7 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
 
         FlushProcessWriteBuffers();
         reply = {};
+        vrrModeSetPolicy.replyValid = NV_FALSE;
         if (!kmsFunctions.applyModeSetConfig(
                 kmsDevice, &requested, &reply, NV_TRUE))
         {
@@ -2318,16 +2604,36 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
 
         for (NvU32 index = 0; index < outputCount; ++index)
         {
+            if (vrrModeSetPolicy.replyValid &&
+                (vrrModeSetPolicy.replyHeadsMask & (1U << assignedHeads[index])) != 0 &&
+                !vrrModeSetPolicy.enabled[assignedHeads[index]])
+            {
+                if (outputs[index].vrrEnabled)
+                    NvKmsWindowsTraceMessage(
+                        "NVKMS modeset accepted without enabling VRR; reporting fixed refresh");
+                outputs[index].vrrEnabled = NV_FALSE;
+                requested.headRequestedConfig[assignedHeads[index]].modeSetConfig.vrrEnabled = NV_FALSE;
+            }
             outputs[index].assignedHead = assignedHeads[index];
             outputs[index].surface->presented = NV_TRUE;
+            modeSetCache[assignedHeads[index]] =
+                requested.headRequestedConfig[assignedHeads[index]].modeSetConfig;
+            modeSetCacheValid[assignedHeads[index]] = NV_TRUE;
+            cursorCache[assignedHeads[index]] = {};
             gammaCache[assignedHeads[index]].valid = NV_FALSE;
             for (NvU32 layerIndex = 0;
                  layerIndex < resources.numLayers[assignedHeads[index]];
                  ++layerIndex)
             {
+                retiringSurfaces[assignedHeads[index]][layerIndex] =
+                    layerCache[assignedHeads[index]][layerIndex].surface;
                 layerCache[assignedHeads[index]][layerIndex] =
                     requested.headRequestedConfig[assignedHeads[index]].
                         layerRequestedConfig[layerIndex].config;
+                layerDisablePending[assignedHeads[index]][layerIndex] =
+                    layerIndex != NVKMS_KAPI_LAYER_PRIMARY_IDX &&
+                    retiringSurfaces[assignedHeads[index]][layerIndex] != nullptr &&
+                    layerCache[assignedHeads[index]][layerIndex].surface == nullptr;
             }
 
             char assignmentMessage[128] = {};
@@ -2344,6 +2650,120 @@ extern "C" NV_STATUS NvKmsWindowsSetDisplayModes(
     }
 
     return NV_ERR_NOT_SUPPORTED;
+}
+
+static NvBool QueryLayerPending(NvU32 head, NvU32 layer, NvBool* pending)
+{
+    // Disabled planes cannot carry a notifier. The primary is re-submitted in
+    // the same non-tearing atomic update and gates every subsequent submission.
+    const NvU32 notifierLayer = layerDisablePending[head][layer] ?
+        NVKMS_KAPI_LAYER_PRIMARY_IDX : layer;
+    if (!kmsFunctions.getFlipPendingStatus(kmsDevice, head, notifierLayer, pending))
+        return NV_FALSE;
+    if (!*pending && layerDisablePending[head][layer])
+    {
+        layerDisablePending[head][layer] = NV_FALSE;
+        retiringSurfaces[head][layer] = nullptr;
+    }
+    return NV_TRUE;
+}
+
+static NV_STATUS ReconfigureVrrPreference(
+    NvU32 head, NvU32 displayHandle, NvBool vrrPreference,
+    NvBool commit, NvBool* vrrEnabled)
+{
+    if (displayHandle == 0 || (commit && vrrEnabled == nullptr))
+        return NV_ERR_INVALID_ARGUMENT;
+    auto deviceLock = presentationLocks.DeviceShared();
+    auto presentLock = presentationLocks.Present();
+    auto programmingLock = presentationLocks.Programming();
+    if (kmsDevice == nullptr)
+        return NV_ERR_INVALID_STATE;
+    if (head >= kmsDevice->numHeads)
+        return NV_ERR_INVALID_ARGUMENT;
+    if (!modeSetCacheValid[head] || !modeSetCache[head].bActive ||
+        modeSetCache[head].numDisplays != 1 ||
+        modeSetCache[head].displays[0] != displayHandle)
+        return NV_ERR_INVALID_STATE;
+
+    NvKmsKapiDynamicDisplayParams dynamic = {};
+    dynamic.handle = displayHandle;
+    if (!kmsFunctions.getDynamicDisplayInfo(kmsDevice, &dynamic) || !dynamic.connected)
+        return NV_ERR_OBJECT_NOT_FOUND;
+    if (vrrPreference && !dynamic.vrrSupported)
+        return NV_ERR_NOT_SUPPORTED;
+    vrrPreference = vrrPreference ? NV_TRUE : NV_FALSE;
+    VrrModeSetPolicyGuard policyGuard(head, vrrPreference);
+
+    NvKmsKapiRequestedModeSetConfig requested = {};
+    requested.headsMask = 1U << head;
+    requested.bypassComposition = NV_KMS_WINDOWS_BYPASS_COMPOSITION ? NV_TRUE : NV_FALSE;
+    auto& config = requested.headRequestedConfig[head];
+    config.modeSetConfig = modeSetCache[head];
+    config.modeSetConfig.vrrEnabled = vrrPreference;
+    config.flags.modeChanged = NV_TRUE;
+    config.cursorRequestedConfig = cursorCache[head];
+    for (NvU32 layer = 0; layer < kmsDevice->numLayers[head]; ++layer)
+    {
+        if (commit && (layerCache[head][layer].surface != nullptr ||
+                       retiringSurfaces[head][layer] != nullptr))
+        {
+            NvBool pending = NV_FALSE;
+            if (!QueryLayerPending(head, layer, &pending))
+                return NV_ERR_INVALID_STATE;
+            if (pending)
+                return NV_ERR_IN_USE;
+        }
+        auto& requestedLayer = config.layerRequestedConfig[layer];
+        requestedLayer.config = layerCache[head][layer];
+        requestedLayer.flags.surfaceChanged = NV_TRUE;
+    }
+    NvKmsKapiModeSetReplyConfig reply = {};
+    if (!kmsFunctions.applyModeSetConfig(kmsDevice, &requested, &reply, NV_FALSE))
+        return reply.flipResult == NV_KMS_FLIP_RESULT_IN_PROGRESS ?
+            NV_ERR_IN_USE : NV_ERR_NOT_SUPPORTED;
+    if (!commit)
+        return NV_OK;
+    reply = {};
+    if (!kmsFunctions.applyModeSetConfig(kmsDevice, &requested, &reply, NV_TRUE))
+        return reply.flipResult == NV_KMS_FLIP_RESULT_IN_PROGRESS ?
+            NV_ERR_IN_USE : NV_ERR_INVALID_STATE;
+    if (!vrrModeSetPolicy.replyValid ||
+        (vrrModeSetPolicy.replyHeadsMask & (1U << head)) == 0 ||
+        vrrModeSetPolicy.enabled[head] != vrrPreference)
+    {
+        // A modeset can succeed while VRR is omitted. KAPI drops that result.
+        // Restore the last-good policy rather than accepting a silent fallback.
+        NvKmsWindowsTraceMessage("NVKMS VRR reconfigure did not honor the requested policy; restoring last-good mode");
+        config.modeSetConfig.vrrEnabled = modeSetCache[head].vrrEnabled;
+        vrrModeSetPolicy.preference = modeSetCache[head].vrrEnabled;
+        vrrModeSetPolicy.replyValid = NV_FALSE;
+        reply = {};
+        if (!kmsFunctions.applyModeSetConfig(kmsDevice, &requested, &reply, NV_FALSE))
+            return NV_ERR_INVALID_STATE;
+        reply = {};
+        if (!kmsFunctions.applyModeSetConfig(kmsDevice, &requested, &reply, NV_TRUE) ||
+            !vrrModeSetPolicy.replyValid ||
+            (vrrModeSetPolicy.replyHeadsMask & (1U << head)) == 0 ||
+            vrrModeSetPolicy.enabled[head] != modeSetCache[head].vrrEnabled)
+            return NV_ERR_INVALID_STATE;
+        return NV_ERR_NOT_SUPPORTED;
+    }
+    modeSetCache[head].vrrEnabled = vrrPreference;
+    *vrrEnabled = vrrPreference;
+    return NV_OK;
+}
+
+extern "C" NV_STATUS NvKmsWindowsValidateVrrPreference(
+    NvU32 head, NvU32 displayHandle, NvBool vrrPreference)
+{
+    return ReconfigureVrrPreference(head, displayHandle, vrrPreference, NV_FALSE, nullptr);
+}
+
+extern "C" NV_STATUS NvKmsWindowsSetVrrPreference(
+    NvU32 head, NvU32 displayHandle, NvBool vrrPreference, NvBool* vrrEnabled)
+{
+    return ReconfigureVrrPreference(head, displayHandle, vrrPreference, NV_TRUE, vrrEnabled);
 }
 
 extern "C" NV_STATUS NvKmsWindowsUpdateCursor(
@@ -2431,8 +2851,17 @@ extern "C" NV_STATUS NvKmsWindowsUpdateCursorTimed(
     cursor.dstY = static_cast<NvS16>(y);
     cursor.flags.surfaceChanged = surfaceChanged;
     cursor.flags.dstXYChanged = NV_TRUE;
+    NvU32 overlayNotifierIndices[NVKMS_KAPI_LAYER_MAX] = {};
+    for (NvU32 layer = 1; layer < kmsDevice->numLayers[head]; ++layer)
+        overlayNotifierIndices[layer] =
+            kmsDevice->layerState[head][layer].currFlipNotifierIndex;
     const NvBool committed = kmsFunctions.applyModeSetConfig(
         kmsDevice, &requested, &reply, NV_TRUE);
+    // Cursor-only KAPI calls also advance inactive overlay configurations.
+    // They must not replace the last scanout/disable completion notifier.
+    for (NvU32 layer = 1; layer < kmsDevice->numLayers[head]; ++layer)
+        kmsDevice->layerState[head][layer].currFlipNotifierIndex =
+            overlayNotifierIndices[layer];
     timing->programEnd = PerformanceCounter();
     if (!committed)
     {
@@ -2444,6 +2873,13 @@ extern "C" NV_STATUS NvKmsWindowsUpdateCursorTimed(
         return reply.flipResult == NV_KMS_FLIP_RESULT_IN_PROGRESS ?
             NV_ERR_IN_USE : NV_ERR_INVALID_STATE;
     }
+    if (surfaceChanged)
+    {
+        cursorCache[head].surface = cursor.surface;
+        cursorCache[head].compParams = cursor.compParams;
+    }
+    cursorCache[head].dstX = cursor.dstX;
+    cursorCache[head].dstY = cursor.dstY;
     return NV_OK;
 }
 
@@ -2459,7 +2895,9 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayers(
 
 static bool IsValidLayerGeometry(const NV_KMS_WINDOWS_LAYER& layer)
 {
-    return layer.surface != nullptr && layer.sourceWidth != 0 &&
+    return layer.surface != nullptr && layer.surface->surface != nullptr &&
+        !layer.surface->immutableInputLut &&
+        layer.sourceWidth != 0 &&
         layer.sourceHeight != 0 && layer.destinationWidth != 0 &&
         layer.destinationHeight != 0 && layer.sourceX <= 0xffffU &&
         layer.sourceY <= 0xffffU && layer.sourceWidth <= 0xffffU &&
@@ -2471,10 +2909,138 @@ static bool IsValidLayerGeometry(const NV_KMS_WINDOWS_LAYER& layer)
         layer.sourceY + layer.sourceHeight <= layer.surface->height;
 }
 
+static NvKmsSurfaceMemoryFormat LayerFormat(NV_KMS_WINDOWS_SCANOUT_FORMAT format)
+{
+    return format == NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16 ?
+        NvKmsSurfaceMemoryFormatRF16GF16BF16AF16 :
+        format == NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8 ?
+            NvKmsSurfaceMemoryFormatA8R8G8B8 : NvKmsSurfaceMemoryFormatX8R8G8B8;
+}
+
+static void GetLayerCaps(
+    const NvKmsKapiDeviceResourcesInfo& resources, NvU32 layer,
+    NV_KMS_WINDOWS_LAYER_CAPS* caps)
+{
+    *caps = {};
+    const NvU32 transforms = resources.caps.layer[layer].validRRTransforms;
+    caps->rotationMask = transforms & 0xfU;
+    caps->transformMask = transforms & 0xffU;
+    caps->reflectionSupported = (transforms & 0xf0U) != 0;
+    const NvU32 modes = resources.caps.layer[layer].validCompositionModes;
+    caps->pixelAlphaSupported =
+        (modes & (NVBIT(NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_ALPHA) |
+                  NVBIT(NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_SURFACE_ALPHA))) != 0;
+    caps->pixelAlphaWithOpacitySupported =
+        (modes & NVBIT(NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_SURFACE_ALPHA)) != 0;
+    caps->inputLutSupported = resources.lutCaps.layer[layer].ilut.supported;
+    caps->cscSupported = NV_TRUE;
+    caps->gainOverrideSupported = NV_TRUE;
+    caps->minWidth = resources.caps.minWidthInPixels;
+    caps->maxWidth = resources.caps.maxWidthInPixels;
+    caps->minHeight = resources.caps.minHeightInPixels;
+    caps->maxHeight = resources.caps.maxHeightInPixels;
+    for (NvU32 format = 0; format <= NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8; ++format)
+        if ((resources.supportedSurfaceMemoryFormats[layer] &
+             NVBIT64(LayerFormat(static_cast<NV_KMS_WINDOWS_SCANOUT_FORMAT>(format)))) != 0)
+            caps->formatMask |= 1U << format;
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetLayerCaps(
+    NvU32 head, NvU32 layer, NV_KMS_WINDOWS_LAYER_CAPS* caps)
+{
+    if (caps == nullptr)
+        return NV_ERR_INVALID_ARGUMENT;
+    *caps = {};
+    auto deviceLock = presentationLocks.DeviceShared();
+    auto programmingLock = presentationLocks.Programming();
+    if (kmsDevice == nullptr)
+        return NV_ERR_INVALID_STATE;
+    NvKmsKapiDeviceResourcesInfo resources = {};
+    if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources))
+        return NV_ERR_GENERIC;
+    if (head >= resources.numHeads || layer >= resources.numLayers[head])
+        return NV_ERR_INVALID_ARGUMENT;
+    GetLayerCaps(resources, layer, caps);
+    return NV_OK;
+}
+
+static NvKmsCompositionBlendingMode LayerBlendMode(const NV_KMS_WINDOWS_LAYER& layer)
+{
+    if (layer.pixelAlpha)
+        return layer.opacity == 255 ? NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_ALPHA :
+            NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_SURFACE_ALPHA;
+    return layer.opacity == 255 ? NVKMS_COMPOSITION_BLENDING_MODE_OPAQUE :
+        NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_SURFACE_ALPHA;
+}
+
+static NV_STATUS ValidateLayerProperties(
+    const NvKmsKapiDeviceResourcesInfo& resources, NvU32 head, NvU32 index,
+    const NV_KMS_WINDOWS_LAYER& layer)
+{
+    if (!IsValidLayerGeometry(layer) || layer.rotationDegrees > 270 ||
+        layer.rotationDegrees % 90 != 0 ||
+        (layer.reuseSurface && (!layer.skipUpload || layer.uploadSource != nullptr ||
+         layerCache[head][index].surface != layer.surface->surface)))
+        return NV_ERR_INVALID_ARGUMENT;
+    if (index != NVKMS_KAPI_LAYER_PRIMARY_IDX && (layer.sourceX != 0 || layer.sourceY != 0))
+    {
+        NvKmsWindowsTraceMessage("NVKMS KAPI window layers do not expose source fetch offsets");
+        return NV_ERR_NOT_SUPPORTED;
+    }
+    NvKmsRRParams rr = {};
+    rr.rotation = static_cast<NvKmsRotation>(layer.rotationDegrees / 90);
+    rr.reflectionX = layer.reflectX;
+    if ((resources.caps.layer[index].validRRTransforms &
+         NVBIT(NvKmsRRParamsToCapBit(&rr))) == 0 ||
+        (resources.caps.layer[index].validCompositionModes &
+         NVBIT(LayerBlendMode(layer))) == 0 ||
+        (resources.supportedSurfaceMemoryFormats[index] &
+         NVBIT64(LayerFormat(layer.surface->format))) == 0 ||
+        (layer.pixelAlpha && layer.surface->format != NV_KMS_WINDOWS_SCANOUT_FORMAT_ARGB8 &&
+         layer.surface->format != NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16))
+        return NV_ERR_NOT_SUPPORTED;
+    if (layer.inputLut != nullptr)
+    {
+        const auto& caps = resources.lutCaps.layer[index].ilut;
+        if (!layer.inputLut->immutableInputLut || !SupportedInputLut(caps) ||
+            layer.inputLut->inputLutCaps.entryFormat != caps.entryFormat ||
+            layer.inputLut->inputLutCaps.lutEntries != caps.lutEntries)
+            return NV_ERR_NOT_SUPPORTED;
+    }
+    // Legacy gamma is a head OLUT, not a per-overlay color transform.
+    if (index != NVKMS_KAPI_LAYER_PRIMARY_IDX && layer.colorTransform != nullptr &&
+        layer.colorTransform->gammaEnabled && layer.inputLut == nullptr)
+        return NV_ERR_NOT_SUPPORTED;
+    return NV_OK;
+}
+
+static NV_STATUS CheckSurfaceWritable(NvKmsKapiSurface* surface)
+{
+    for (NvU32 head = 0; head < kmsDevice->numHeads; ++head)
+    {
+        for (NvU32 layer = 0; layer < kmsDevice->numLayers[head]; ++layer)
+        {
+            if (layerCache[head][layer].surface == surface)
+                return NV_ERR_IN_USE;
+            if (retiringSurfaces[head][layer] == surface)
+            {
+                NvBool pending = NV_FALSE;
+                if (!QueryLayerPending(head, layer, &pending))
+                    return NV_ERR_INVALID_STATE;
+                if (pending)
+                    return NV_ERR_IN_USE;
+            }
+        }
+    }
+    return NV_OK;
+}
+
 static NV_STATUS UploadLayerPixels(
     const NV_KMS_WINDOWS_LAYER* layer, NV_KMS_WINDOWS_PRESENT_TIMING* timing)
 {
-    if (layer == nullptr || layer->surface == nullptr)
+    if (layer == nullptr || layer->surface == nullptr || layer->surface->immutableInputLut ||
+        layer->reuseSurface ||
+        (layer->uploadSource != nullptr && layer->uploadSource->immutableInputLut))
         return NV_ERR_INVALID_ARGUMENT;
     const auto* source = layer->uploadSource != nullptr ? layer->uploadSource : layer->surface;
     if (source->width != layer->surface->width || source->height != layer->surface->height ||
@@ -2529,13 +3095,28 @@ extern "C" NV_STATUS NvKmsWindowsUploadLayer(
     *timing = {};
     const NvU64 start = PerformanceCounter();
     auto lock = presentationLocks.DeviceShared();
+    auto presentLock = presentationLocks.Present();
     timing->lockTicks = PerformanceCounter() - start;
     if (kmsDevice == nullptr)
         return NV_ERR_INVALID_STATE;
+    if (layer == nullptr || layer->surface == nullptr)
+        return NV_ERR_INVALID_ARGUMENT;
+    {
+        auto programmingLock = presentationLocks.Programming();
+        const NV_STATUS status = CheckSurfaceWritable(layer->surface->surface);
+        if (status != NV_OK)
+            return status;
+    }
     return UploadLayerPixels(layer, timing);
 }
 
 extern "C" NV_STATUS NvKmsWindowsGetFlipPending(NvU32 head, NvBool* pending)
+{
+    return NvKmsWindowsGetLayerFlipPending(head, NVKMS_KAPI_LAYER_PRIMARY_IDX, pending);
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetLayerFlipPending(
+    NvU32 head, NvU32 layer, NvBool* pending)
 {
     if (pending == nullptr)
         return NV_ERR_INVALID_ARGUMENT;
@@ -2543,12 +3124,19 @@ extern "C" NV_STATUS NvKmsWindowsGetFlipPending(NvU32 head, NvBool* pending)
     auto programmingLock = presentationLocks.Programming();
     if (kmsDevice == nullptr)
         return NV_ERR_INVALID_STATE;
-    return kmsFunctions.getFlipPendingStatus(
-        kmsDevice, head, NVKMS_KAPI_LAYER_PRIMARY_IDX, pending) ?
+    if (head >= kmsDevice->numHeads || layer >= kmsDevice->numLayers[head])
+        return NV_ERR_INVALID_ARGUMENT;
+    return QueryLayerPending(head, layer, pending) ?
         NV_OK : NV_ERR_INVALID_STATE;
 }
 
 extern "C" NV_STATUS NvKmsWindowsGetFlipTimestamp(NvU32 head, NvU64* timestamp)
+{
+    return NvKmsWindowsGetLayerFlipTimestamp(head, NVKMS_KAPI_LAYER_PRIMARY_IDX, timestamp);
+}
+
+extern "C" NV_STATUS NvKmsWindowsGetLayerFlipTimestamp(
+    NvU32 head, NvU32 layer, NvU64* timestamp)
 {
     if (timestamp == nullptr)
         return NV_ERR_INVALID_ARGUMENT;
@@ -2556,18 +3144,54 @@ extern "C" NV_STATUS NvKmsWindowsGetFlipTimestamp(NvU32 head, NvU64* timestamp)
     auto programmingLock = presentationLocks.Programming();
     if (kmsDevice == nullptr)
         return NV_ERR_INVALID_STATE;
+    if (head >= kmsDevice->numHeads || layer >= kmsDevice->numLayers[head])
+        return NV_ERR_INVALID_ARGUMENT;
     return kmsFunctions.getFlipTimestamp(
-        kmsDevice, head, NVKMS_KAPI_LAYER_PRIMARY_IDX, timestamp) ?
+        kmsDevice, head, layer, timestamp) ?
         NV_OK : NV_ERR_INVALID_STATE;
 }
 
-extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
+extern "C" NV_STATUS NvKmsWindowsTraceFlipChannels(NvU32 head)
+{
+    auto deviceLock = presentationLocks.DeviceShared();
+    auto programmingLock = presentationLocks.Programming();
+    if (kmsDevice == nullptr || head >= kmsDevice->numHeads)
+        return NV_ERR_INVALID_STATE;
+#ifndef NVKMS_WINDOWS_REQUEST_TEST
+    NvKmsLock();
+    const NvBool result = nvKmsTraceDisplayChannels(
+        static_cast<const NvKmsPerOpen*>(kmsDevice->pKmsOpen->data),
+        kmsDevice->hKmsDevice, head);
+    for (NvU32 layer = 0; layer < kmsDevice->numLayers[head]; ++layer)
+        for (NvU32 index = 0; index < NVKMS_KAPI_MAX_NOTIFERS_PER_LAYER; ++index)
+        {
+            nvKmsParsedNotifier notifier = {};
+            nvKmsParseNotifier(NVKMS_KAPI_NOTIFIER_INDEX(head, layer, index),
+                kmsDevice->notifier.pLinearAddress, &notifier);
+            char message[192] = {};
+            nvkms_snprintf(message, sizeof(message),
+                "NVKMS stalled notifier: head=%u layer=%u index=%u current=%u state=%u valid=%u timestamp=%llu count=%u",
+                head, layer, index,
+                kmsDevice->layerState[head][layer].currFlipNotifierIndex,
+                notifier.status, notifier.timeStampValid,
+                static_cast<unsigned long long>(notifier.timeStamp), notifier.presentCount);
+            NvKmsWindowsTraceMessage(message);
+        }
+    NvKmsUnlock();
+    return result ? NV_OK : NV_ERR_INVALID_STATE;
+#else
+    return NV_ERR_NOT_SUPPORTED;
+#endif
+}
+
+static NV_STATUS PresentLayersInternal(
     NvU32 head,
     NvU32 displayHandle,
     const NV_KMS_WINDOWS_LAYER* layers,
     NvU32 layerCount,
     NvBool preserveFrontBuffer,
-    NV_KMS_WINDOWS_PRESENT_TIMING* timing)
+    NV_KMS_WINDOWS_PRESENT_TIMING* timing,
+    NvBool testOnly)
 {
     NV_KMS_WINDOWS_PRESENT_TIMING localTiming = {};
     if (timing == nullptr)
@@ -2599,18 +3223,29 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
     {
         auto programmingLock = presentationLocks.Programming();
         timing->lockTicks = PerformanceCounter() - lockStart;
+        NvKmsKapiDeviceResourcesInfo resources = {};
+        if (!kmsFunctions.getDeviceResourcesInfo(kmsDevice, &resources))
+            return NV_ERR_GENERIC;
         for (NvU32 layerIndex = 0; layerIndex < layerCount; ++layerIndex)
         {
-            if (!IsValidLayerGeometry(layers[layerIndex]))
+            const NV_STATUS status =
+                ValidateLayerProperties(resources, head, layerIndex, layers[layerIndex]);
+            if (status != NV_OK)
+                return status;
+            if (!testOnly && !layers[layerIndex].reuseSurface)
             {
-                return NV_ERR_INVALID_ARGUMENT;
+                const NV_STATUS writable = CheckSurfaceWritable(layers[layerIndex].surface->surface);
+                if (writable != NV_OK)
+                    return preserveFrontBuffer &&
+                        layerCache[head][layerIndex].surface == layers[layerIndex].surface->surface ?
+                        NV_ERR_INVALID_STATE : writable;
             }
-            if (preserveFrontBuffer)
+            if (!testOnly && (layerCache[head][layerIndex].surface != nullptr ||
+                retiringSurfaces[head][layerIndex] != nullptr))
             {
                 const NvU64 pendingStart = PerformanceCounter();
                 NvBool pending = NV_FALSE;
-                if (layers[layerIndex].surface->presented &&
-                    !kmsFunctions.getFlipPendingStatus(kmsDevice, head, layerIndex, &pending))
+                if (!QueryLayerPending(head, layerIndex, &pending))
                 {
                     return NV_ERR_INVALID_STATE;
                 }
@@ -2619,14 +3254,27 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
                 {
                     return NV_ERR_IN_USE;
                 }
-                if (layerCache[head][layerIndex].surface == layers[layerIndex].surface->surface)
+                if (!layers[layerIndex].reuseSurface &&
+                    layerCache[head][layerIndex].surface == layers[layerIndex].surface->surface)
                 {
                     return NV_ERR_INVALID_STATE;
                 }
             }
         }
+        for (NvU32 layerIndex = layerCount; !testOnly && layerIndex < numLayers; ++layerIndex)
+        {
+            if (layerCache[head][layerIndex].surface != nullptr ||
+                retiringSurfaces[head][layerIndex] != nullptr)
+            {
+                NvBool pending = NV_FALSE;
+                if (!QueryLayerPending(head, layerIndex, &pending))
+                    return NV_ERR_INVALID_STATE;
+                if (pending)
+                    return NV_ERR_IN_USE;
+            }
+        }
     }
-    for (NvU32 layerIndex = 0; layerIndex < layerCount; ++layerIndex)
+    for (NvU32 layerIndex = 0; !testOnly && layerIndex < layerCount; ++layerIndex)
     {
         if (!layers[layerIndex].skipUpload)
         {
@@ -2653,9 +3301,11 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
         pendingGamma(nullptr, &DestroySurface);
     const NV_KMS_WINDOWS_COLOR_TRANSFORM* appliedGamma = nullptr;
     const auto* primaryTransform = layerCount != 0 ?
-        layers[NVKMS_KAPI_LAYER_PRIMARY_IDX].colorTransform : nullptr;
+        (layers[NVKMS_KAPI_LAYER_PRIMARY_IDX].inputLut == nullptr ?
+         layers[NVKMS_KAPI_LAYER_PRIMARY_IDX].colorTransform : nullptr) : nullptr;
     const NvBool resetGamma = layerCount != 0 && gammaCache[head].valid &&
         (primaryTransform == nullptr || !primaryTransform->gammaEnabled);
+    NvBool disablingLayers = NV_FALSE;
     if (resetGamma)
     {
         SetOutputLut(headConfig, kmsDefaultLutSurface,
@@ -2677,12 +3327,14 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
             {
                 requestedLayer->config.surface = nullptr;
                 requestedLayer->flags.surfaceChanged = NV_TRUE;
+                requestedLayer->config.ilut = {};
+                requestedLayer->flags.ilutChanged = previous.ilut.enabled;
+                disablingLayers = NV_TRUE;
             }
             continue;
         }
-        requestedLayer->flags.surfaceChanged = NV_TRUE;
-
         const NV_KMS_WINDOWS_LAYER* const layer = &layers[layerIndex];
+        requestedLayer->flags.surfaceChanged = !layer->reuseSurface;
         auto* const config = &requestedLayer->config;
         config->surface = layer->surface->surface;
         config->srcX = static_cast<NvU16>(layer->sourceX);
@@ -2693,10 +3345,12 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
         config->dstY = static_cast<NvS16>(layer->destinationY);
         config->dstWidth = static_cast<NvU16>(layer->destinationWidth);
         config->dstHeight = static_cast<NvU16>(layer->destinationHeight);
-        config->compParams.compMode = layer->opacity == 255 ?
-            NVKMS_COMPOSITION_BLENDING_MODE_OPAQUE :
-            NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_SURFACE_ALPHA;
-        config->compParams.surfaceAlpha = layer->opacity;
+        config->rrParams = {};
+        config->rrParams.rotation = static_cast<NvKmsRotation>(layer->rotationDegrees / 90);
+        config->rrParams.reflectionX = layer->reflectX;
+        config->compParams.compMode = LayerBlendMode(*layer);
+        config->compParams.surfaceAlpha =
+            layer->pixelAlpha && layer->opacity == 255 ? 0 : layer->opacity;
         config->minPresentInterval =
             layer->presentationPolicySpecified && layer->immediateNonTearing ? 0 : 1;
         if (layer->presentationPolicySpecified)
@@ -2722,6 +3376,31 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
             break;
         }
         config->inputColorRange = NVKMS_INPUT_COLOR_RANGE_FULL;
+        if (layer->inputLut != nullptr)
+        {
+            config->ilut = {};
+            config->ilut.enabled = NV_TRUE;
+            config->ilut.lutSurface = layer->inputLut->surface;
+            config->ilut.offset = offsetof(LutData, base);
+            config->ilut.lutEntries = layer->inputLut->inputLutCaps.lutEntries;
+        }
+        else
+        {
+            config->ilut = {};
+            if (layer->surface->format != NV_KMS_WINDOWS_SCANOUT_FORMAT_FP16)
+            {
+                if (kmsDefaultLutSurface == nullptr)
+                {
+                    NvKmsWindowsTraceMessage(
+                        "NVKMS packed layer requires the uploaded identity input LUT");
+                    return NV_ERR_INVALID_STATE;
+                }
+                config->ilut.enabled = NV_TRUE;
+                config->ilut.lutSurface = kmsDefaultLutSurface->surface;
+                config->ilut.offset = offsetof(LutData, base);
+                config->ilut.lutEntries = LutEntries;
+            }
+        }
 
         config->hdrMetadata.enabled = layer->hdrMetadataEnabled;
         if (layer->hdrMetadataEnabled)
@@ -2749,6 +3428,7 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
                 }
             }
             if (layerIndex == NVKMS_KAPI_LAYER_PRIMARY_IDX &&
+                layer->inputLut == nullptr &&
                 layer->colorTransform->gammaEnabled)
             {
                 const HeadGammaCache& cached = gammaCache[head];
@@ -2766,6 +3446,8 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
                         layer->colorTransform->gammaBlue,
                         sizeof(cached.blue)) != 0)
                 {
+                    if (testOnly)
+                        return NV_ERR_NOT_SUPPORTED;
                     NV_KMS_WINDOWS_SURFACE* surface = nullptr;
                     const NV_STATUS status =
                         CreateLutSurface(layer->colorTransform, &surface);
@@ -2805,21 +3487,90 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
             config->inputColorSpace != previous.inputColorSpace;
         requestedLayer->flags.inputColorRangeChanged =
             config->inputColorRange != previous.inputColorRange;
+        requestedLayer->flags.ilutChanged =
+            config->ilut.enabled != previous.ilut.enabled ||
+            config->ilut.lutSurface != previous.ilut.lutSurface ||
+            config->ilut.offset != previous.ilut.offset ||
+            config->ilut.lutEntries != previous.ilut.lutEntries ||
+            config->ilut.vssSegments != previous.ilut.vssSegments;
         requestedLayer->flags.hdrMetadataChanged =
             config->hdrMetadata.enabled != previous.hdrMetadata.enabled ||
             (config->hdrMetadata.enabled &&
              std::memcmp(&config->hdrMetadata.val, &previous.hdrMetadata.val,
                          sizeof(config->hdrMetadata.val)) != 0);
+        // KAPI has no RR/composition flags, and only surface flips specify a
+        // completion notifier. Metadata edits re-submit the immutable surface;
+        // completely unchanged reuse keeps surfaceChanged clear.
+        if (layer->reuseSurface)
+        {
+            requestedLayer->flags.surfaceChanged =
+                requestedLayer->flags.srcXYChanged || requestedLayer->flags.srcWHChanged ||
+                requestedLayer->flags.dstXYChanged || requestedLayer->flags.dstWHChanged ||
+                requestedLayer->flags.cscChanged || requestedLayer->flags.matrixOverridesChanged ||
+                requestedLayer->flags.inputTfChanged || requestedLayer->flags.outputTfChanged ||
+                requestedLayer->flags.inputColorSpaceChanged ||
+                requestedLayer->flags.inputColorRangeChanged ||
+                requestedLayer->flags.hdrMetadataChanged || requestedLayer->flags.ilutChanged ||
+                config->rrParams.rotation != previous.rrParams.rotation ||
+                config->rrParams.reflectionX != previous.rrParams.reflectionX ||
+                config->rrParams.reflectionY != previous.rrParams.reflectionY ||
+                config->compParams.compMode != previous.compParams.compMode ||
+                config->compParams.surfaceAlpha != previous.compParams.surfaceAlpha ||
+                config->minPresentInterval != previous.minPresentInterval ||
+                config->tearing != previous.tearing;
+        }
     }
 
+    if (disablingLayers)
+    {
+        if (layerCount == 0)
+        {
+            NvKmsWindowsTraceMessage(
+                "NVKMS layer disable requires an active primary completion witness");
+            return NV_ERR_NOT_SUPPORTED;
+        }
+        headConfig->layerRequestedConfig[NVKMS_KAPI_LAYER_PRIMARY_IDX].
+            flags.surfaceChanged = NV_TRUE;
+        headConfig->layerRequestedConfig[NVKMS_KAPI_LAYER_PRIMARY_IDX].
+            config.tearing = NV_FALSE;
+    }
     timing->prepareTicks = PerformanceCounter() - prepareStart;
     const NvU64 submitStart = PerformanceCounter();
+    NvU32 previousNotifierIndices[NVKMS_KAPI_LAYER_MAX] = {};
+    for (NvU32 index = 0; index < numLayers; ++index)
+        previousNotifierIndices[index] =
+            kmsDevice->layerState[head][index].currFlipNotifierIndex;
+#ifndef NVKMS_WINDOWS_REQUEST_TEST
+    if (!testOnly && layerCount > 1 && layerCache[head][1].surface == nullptr)
+    {
+        NvKmsWindowsTraceMessage("NVKMS multi-layer before activation channel snapshot");
+        NvKmsLock();
+        nvKmsTraceDisplayChannels(
+            static_cast<const NvKmsPerOpen*>(kmsDevice->pKmsOpen->data),
+            kmsDevice->hKmsDevice, head);
+        NvKmsUnlock();
+    }
+#endif
     const NvBool committed = kmsFunctions.applyModeSetConfig(
-        kmsDevice, &requested, &reply, NV_TRUE);
+        kmsDevice, &requested, &reply, testOnly ? NV_FALSE : NV_TRUE);
     timing->submitTicks = PerformanceCounter() - submitStart;
     timing->vrrFlip = reply.vrrFlip;
+    if (!testOnly && layerCount > 1 && layerCache[head][1].surface == nullptr)
+    {
+        char message[160] = {};
+        nvkms_snprintf(message, sizeof(message),
+            "NVKMS multi-layer activation: head=%u count=%u accepted=%u flipResult=%u primaryNotifier=%u overlayNotifier=%u",
+            head, layerCount, committed, reply.flipResult,
+            kmsDevice->layerState[head][0].currFlipNotifierIndex,
+            kmsDevice->layerState[head][1].currFlipNotifierIndex);
+        NvKmsWindowsTraceMessage(message);
+    }
     if (!committed)
     {
+        if (!testOnly)
+            for (NvU32 index = 0; index < numLayers; ++index)
+                kmsDevice->layerState[head][index].currFlipNotifierIndex =
+                    previousNotifierIndices[index];
         char failureMessage[128] = {};
         nvkms_snprintf(
             failureMessage,
@@ -2831,10 +3582,34 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
         return reply.flipResult == NV_KMS_FLIP_RESULT_IN_PROGRESS ?
             NV_ERR_IN_USE : NV_ERR_INVALID_STATE;
     }
+    if (testOnly)
+        return NV_OK;
+    if (modeSetCacheValid[head] && headConfig->flags.olutChanged)
+    {
+        modeSetCache[head].olut = headConfig->modeSetConfig.olut;
+        modeSetCache[head].olutFpNormScale = headConfig->modeSetConfig.olutFpNormScale;
+    }
+    for (NvU32 index = 1; index < numLayers; ++index)
+    {
+        // KAPI advances overlay notifier indices even for a no-op config,
+        // without scheduling that notifier. Retain the last real completion.
+        if (headConfig->layerRequestedConfig[index].config.surface == nullptr ||
+            (!headConfig->layerRequestedConfig[index].flags.surfaceChanged &&
+             layers[index].reuseSurface))
+            kmsDevice->layerState[head][index].currFlipNotifierIndex =
+                previousNotifierIndices[index];
+    }
     for (NvU32 layerIndex = 0;
          layerIndex < numLayers;
          ++layerIndex)
     {
+        if (layerIndex >= layerCount)
+            headConfig->layerRequestedConfig[layerIndex].config.surface = nullptr;
+        const auto* const next = headConfig->layerRequestedConfig[layerIndex].config.surface;
+        if (next != layerCache[head][layerIndex].surface)
+            retiringSurfaces[head][layerIndex] = layerCache[head][layerIndex].surface;
+        layerDisablePending[head][layerIndex] = next == nullptr &&
+            layerCache[head][layerIndex].surface != nullptr;
         layerCache[head][layerIndex] =
             headConfig->layerRequestedConfig[layerIndex].config;
         if (layerIndex < layerCount)
@@ -2868,6 +3643,23 @@ extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
         kmsGammaSurfaces[head] = nullptr;
     }
     return NV_OK;
+}
+
+extern "C" NV_STATUS NvKmsWindowsPresentLayersTimed(
+    NvU32 head, NvU32 displayHandle,
+    const NV_KMS_WINDOWS_LAYER* layers, NvU32 layerCount,
+    NvBool preserveFrontBuffer, NV_KMS_WINDOWS_PRESENT_TIMING* timing)
+{
+    return PresentLayersInternal(
+        head, displayHandle, layers, layerCount, preserveFrontBuffer, timing, NV_FALSE);
+}
+
+extern "C" NV_STATUS NvKmsWindowsValidateLayers(
+    NvU32 head, NvU32 displayHandle,
+    const NV_KMS_WINDOWS_LAYER* layers, NvU32 layerCount)
+{
+    return PresentLayersInternal(
+        head, displayHandle, layers, layerCount, NV_FALSE, nullptr, NV_TRUE);
 }
 
 extern "C" NV_STATUS NvKmsWindowsRegisterGpu(

@@ -1,4 +1,5 @@
 #include "output.hpp"
+#include "mpo_scene.hpp"
 #include "adapter.hpp"
 #include "display_modes.hpp"
 #include "swapchain_d3d11.hpp"
@@ -30,29 +31,6 @@ constexpr NV_KMS_WINDOWS_COLOR_TRANSFORM IdentityColorTransform = {
     },
     {}, {}, {}, NV_FALSE, NV_FALSE,
 };
-
-NTSTATUS QueryPixelCachePolicy(NvBool* honorRequested) noexcept
-{
-    ULONG policy = 0;
-    NTSTATUS status = QueryDriverParameterDword(L"SurfaceCachePolicy", &policy);
-    if ((!NT_SUCCESS(status) && !DriverParameterAbsent(status)) || policy > 2)
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid SurfaceCachePolicy: status=%!STATUS! value=%u", status, policy);
-        return NT_SUCCESS(status) ? STATUS_INVALID_PARAMETER : status;
-    }
-    ULONG d3d12Mode = 0;
-    status = QuerySwapChainMode(&d3d12Mode);
-    if (!NT_SUCCESS(status))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid swapchain settings for surface allocation: status=%!STATUS! mode=%u",
-            status, d3d12Mode);
-        return NT_SUCCESS(status) ? STATUS_INVALID_PARAMETER : status;
-    }
-    *honorRequested = policy == 2 || (policy == 0 && d3d12Mode != 0);
-    return STATUS_SUCCESS;
-}
 
 NvS32 FloatToCsc(float value) noexcept
 {
@@ -152,11 +130,14 @@ Output::Output(
 
 Output::~Output() noexcept
 {
+    Parameters().UnregisterOutput(*this);
     StopMonitorControl();
     cursor_.reset();
     // The monitor outlives its swapchain context and scanout allocation.
     QuiesceSwapChain();
     DestroyScanout();
+    Parameters().Report(displayState_.connectorIndex, false, appliedGeneration_.load(),
+        0, 0, 0, false, false, false);
     if (owner_ != nullptr)
     {
         owner_->OnOutputDestroyed(this);
@@ -231,6 +212,7 @@ NTSTATUS Output::Create(
         return status;
     }
     *output = instance;
+    Parameters().RegisterOutput(*instance);
     return STATUS_SUCCESS;
 }
 
@@ -242,12 +224,7 @@ NTSTATUS Output::PrepareScanout(
     void** pixels,
     NvU32* pitch) noexcept
 {
-    NvBool honorPixelCachePolicy = NV_FALSE;
-    const NTSTATUS cacheStatus = QueryPixelCachePolicy(&honorPixelCachePolicy);
-    if (!NT_SUCCESS(cacheStatus))
-    {
-        return cacheStatus;
-    }
+    const NvBool honorPixelCachePolicy = Parameters().Snapshot().HonorCache();
     const NV_STATUS status = NvKmsWindowsCreateScanoutSurface(
         mode.hVisible, mode.vVisible, format, surface, pixels, pitch, honorPixelCachePolicy);
     if (status != NV_OK)
@@ -274,12 +251,7 @@ NTSTATUS Output::PrepareBackBuffer() noexcept
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
-    NvBool honorPixelCachePolicy = NV_FALSE;
-    const NTSTATUS cacheStatus = QueryPixelCachePolicy(&honorPixelCachePolicy);
-    if (!NT_SUCCESS(cacheStatus))
-    {
-        return cacheStatus;
-    }
+    const NvBool honorPixelCachePolicy = config_.HonorCache();
     for (NvU32 index = 1; index < presentationPolicy_.buffers; ++index)
     {
         if (Surface(index) != nullptr)
@@ -315,19 +287,261 @@ NTSTATUS Output::PrepareBackBuffer() noexcept
 
 NTSTATUS Output::ConfigurePresentationPolicy() noexcept
 {
-    PresentationPolicy policy;
-    const NTSTATUS status = QueryPresentationPolicy(&policy);
-    if (!NT_SUCCESS(status))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid presentation policy: status=%!STATUS!", status);
-        return status;
-    }
+    config_ = Parameters().Snapshot();
+    if (config_.connector != displayState_.connectorIndex) config_.demo = 0;
+    requestedGeneration_.store(config_.generation);
+    const PresentationPolicy policy = config_.presentation;
     presentationPolicy_ = policy;
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
         "Presentation policy: vrr=%u flip=%u pipeline=%u buffers=%u",
         policy.vrr, policy.flip, policy.pipeline, policy.buffers);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS Output::StageConfiguration(const SwapChainConfig& candidate) noexcept
+{
+    if (RequiresScanoutReset()) return STATUS_INVALID_DEVICE_STATE;
+    const NTSTATUS vrr = ValidateVrr(candidate);
+    if (!NT_SUCCESS(vrr)) return vrr;
+    pendingScene_.reset();
+    if (candidate.demo != 0 && candidate.connector == displayState_.connectorIndex)
+    {
+        const HRESULT result = MpoScene::Create(*this, candidate, &pendingScene_);
+        if (FAILED(result))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "MPO scene staging failed: connector=%u mode=%u result=0x%08X",
+                candidate.connector, candidate.demo, result);
+            return STATUS_NOT_SUPPORTED;
+        }
+    }
+    if (candidate.HonorCache() == config_.HonorCache() &&
+        candidate.presentation.buffers == config_.presentation.buffers)
+        return STATUS_SUCCESS;
+    if (retiredFrontPending_.load()) return STATUS_DEVICE_BUSY;
+    const auto* mode = display_modes::FindDisplayMode(displayState_, activeModeIndex_);
+    if (!mode || !active_) return STATUS_INVALID_DEVICE_STATE;
+    std::unique_ptr<ScanoutPool> pool(new (std::nothrow) ScanoutPool);
+    if (!pool) return STATUS_INSUFFICIENT_RESOURCES;
+    for (ULONG index = 0; index < candidate.presentation.buffers; ++index)
+    {
+        NV_KMS_WINDOWS_SURFACE* surface = nullptr;
+        NvU32 pitch = 0;
+        const NV_STATUS status = NvKmsWindowsCreateScanoutSurface(mode->hVisible,
+            mode->vVisible, scanoutFormat_, &surface, &pool->pixels[index], &pitch,
+            candidate.HonorCache());
+        if (status != NV_OK)
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "Replacement scanout allocation failed: connector=%u slot=%u cache=%u status=0x%08X",
+                displayState_.connectorIndex, index, candidate.HonorCache(), status);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        pool->surfaces[index].reset(surface);
+        if (index != 0 && pitch != pool->pitch) return STATUS_INVALID_DEVICE_STATE;
+        pool->pitch = pitch;
+    }
+    pendingPool_ = std::move(pool);
+    return STATUS_SUCCESS;
+}
+
+HRESULT Output::ValidateConfiguration(const SwapChainConfig& config) noexcept
+{
+    auto guard = stateLock_.lock_shared();
+    if (!active_)
+        return config.demo != 0 && config.connector == displayState_.connectorIndex ?
+            E_UNEXPECTED : S_OK;
+    if (RequiresScanoutReset()) return E_UNEXPECTED;
+    const NTSTATUS vrr = ValidateVrr(config);
+    if (!NT_SUCCESS(vrr)) return HRESULT_FROM_NT(vrr);
+    if (config.demo == 0 || config.connector != displayState_.connectorIndex) return S_OK;
+    std::unique_ptr<MpoScene> candidate;
+    return MpoScene::Create(*this, config, &candidate);
+}
+
+HRESULT Output::CheckConfiguration() noexcept
+{
+    auto guard = stateLock_.lock_shared();
+    const auto candidate = Parameters().Snapshot();
+    if (candidate.generation == checkedGeneration_) return S_OK;
+    SwapChainConfig local = candidate;
+    if (local.demo != 0 && local.connector != displayState_.connectorIndex)
+    {
+        local.demo = 0;
+        if (config_.demo == 0)
+        {
+            local.demoPlanes = config_.demoPlanes;
+            local.connector = config_.connector;
+            local.cadence = config_.cadence;
+            local.speed = config_.speed;
+        }
+    }
+    const bool retryNative = d3d12Failed_ && local.Mode() != 0 &&
+        local.revision != config_.revision;
+    if (config_.Equivalent(local) && !retryNative)
+    {
+        checkedGeneration_ = candidate.generation;
+        requestedGeneration_.store(candidate.generation);
+        if (presentationVisible_.load() && appliedGeneration_.load() >= config_.generation)
+            PresentationApplied();
+        return S_OK;
+    }
+    const NTSTATUS staged = StageConfiguration(local);
+    if (staged == STATUS_DEVICE_BUSY) return S_OK;
+    checkedGeneration_ = candidate.generation;
+    if (!NT_SUCCESS(staged))
+    {
+        Parameters().Reject("Cannot stage replacement scanout resources; previous configuration retained");
+        return S_OK;
+    }
+    pendingConfig_ = local;
+    havePendingConfig_ = true;
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+        "Swapchain reconfiguration requested: connector=%u generation=%u",
+        displayState_.connectorIndex, candidate.generation);
+    return DXGI_ERROR_ACCESS_LOST;
+}
+
+NTSTATUS Output::ValidateVrr(const SwapChainConfig& config) noexcept
+{
+    const bool requested = config.presentation.vrr != 0;
+    if (requested == vrrEnabled_) return STATUS_SUCCESS;
+    const NV_STATUS status = NvKmsWindowsValidateVrrPreference(
+        assignedHead_, displayState_.displayHandle, requested);
+    if (status == NV_OK) return STATUS_SUCCESS;
+    if (status == NV_ERR_NOT_SUPPORTED && requested && !vrrEnabled_)
+    {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER,
+            "VRR preference unavailable: connector=%u requested=1 effective=0",
+            displayState_.connectorIndex);
+        return STATUS_SUCCESS;
+    }
+    TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+        "VRR preflight failed: connector=%u requested=%u effective=%u status=0x%08X",
+        displayState_.connectorIndex, requested, vrrEnabled_, status);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS Output::DrainPresentation() noexcept
+{
+    const NvU32 count = scene_ ? scene_->PlaneCount() + 1 : 1;
+    const auto deadline = GetTickCount64() + 2000;
+    for (;;)
+    {
+        bool busy = false;
+        for (NvU32 index = 0; index < count; ++index)
+        {
+            NvBool pending = NV_FALSE;
+            const NV_STATUS status = NvKmsWindowsGetLayerFlipPending(assignedHead_, index, &pending);
+            if (status != NV_OK)
+            {
+                TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                    "Presentation drain query failed: connector=%u layer=%u status=0x%08X",
+                    displayState_.connectorIndex, index, status);
+                RequireScanoutReset();
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+            busy = busy || pending != NV_FALSE;
+        }
+        if (!busy) return STATUS_SUCCESS;
+        if (GetTickCount64() > deadline)
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "Presentation drain timed out: connector=%u layers=%u",
+                displayState_.connectorIndex, count);
+            RequireScanoutReset();
+            return STATUS_IO_TIMEOUT;
+        }
+        Sleep(1);
+    }
+}
+
+NTSTATUS Output::ApplyConfiguration() noexcept
+{
+    if (RequiresScanoutReset()) return STATUS_INVALID_DEVICE_STATE;
+    if (!havePendingConfig_) return STATUS_SUCCESS;
+    auto lock = stateLock_.lock_exclusive();
+    const bool requestedVrr = pendingConfig_.presentation.vrr != 0;
+    if (requestedVrr != vrrEnabled_)
+    {
+        const NV_STATUS validation = NvKmsWindowsValidateVrrPreference(
+            assignedHead_, displayState_.displayHandle, requestedVrr);
+        NV_STATUS status = validation;
+        if (validation == NV_OK)
+        {
+            const NTSTATUS drained = DrainPresentation();
+            if (!NT_SUCCESS(drained)) return drained;
+            NvBool enabled = NV_FALSE;
+            status = NvKmsWindowsSetVrrPreference(
+                assignedHead_, displayState_.displayHandle, requestedVrr, &enabled);
+            if (status == NV_OK) vrrEnabled_ = enabled != NV_FALSE;
+            const NTSTATUS retired = DrainPresentation();
+            if (!NT_SUCCESS(retired)) return retired;
+        }
+        if (status == NV_ERR_INVALID_STATE)
+        {
+            RequireScanoutReset();
+            Parameters().Reject("VRR rollback failed; scanout leases retained for recovery");
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+        if (status != NV_OK && !(status == NV_ERR_NOT_SUPPORTED && requestedVrr && !vrrEnabled_))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+                "VRR application failed: connector=%u status=0x%08X; previous configuration retained",
+                displayState_.connectorIndex, status);
+            Parameters().Reject("Cannot apply VRR policy; previous configuration retained");
+            pendingScene_.reset();
+            pendingPool_.reset();
+            havePendingConfig_ = false;
+            return STATUS_SUCCESS;
+        }
+        if (status != NV_OK)
+            TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER,
+                "VRR preference remains unavailable: connector=%u effective=0",
+                displayState_.connectorIndex);
+    }
+    if (pendingPool_)
+    {
+        const ULONG front = frontBufferIndex_.load();
+        retiredFront_ = front == 0 ? std::move(scanoutSurface_) : front == 1 ?
+            std::move(backSurface_) : std::move(extraSurfaces_[front - 2]);
+        retiredFrontPending_.store(true);
+        scanoutSurface_ = std::move(pendingPool_->surfaces[0]);
+        backSurface_ = std::move(pendingPool_->surfaces[1]);
+        for (UINT index = 0; index < 2; ++index)
+        {
+            extraSurfaces_[index] = std::move(pendingPool_->surfaces[index + 2]);
+            extraPixels_[index] = pendingPool_->pixels[index + 2];
+        }
+        scanoutPixels_ = pendingPool_->pixels[0];
+        backPixels_ = pendingPool_->pixels[1];
+        scanoutPitch_ = pendingPool_->pitch;
+        frontBufferIndex_.store(0);
+        submittedBufferIndex_.store(0);
+        copyBufferIndex_.store(1);
+        pendingPool_.reset();
+    }
+    config_ = pendingConfig_;
+    requestedGeneration_.store(config_.generation);
+    presentationPolicy_ = config_.presentation;
+    scene_ = std::move(pendingScene_);
+    havePendingConfig_ = false;
+    d3d12Failed_ = false;
+    return STATUS_SUCCESS;
+}
+
+void Output::RetirePreviousPool() noexcept
+{
+    retiredFront_.reset();
+    retiredFrontPending_.store(false);
+}
+
+void Output::PresentationApplied() noexcept
+{
+    presentationVisible_.store(true);
+    const ULONG generation = requestedGeneration_.load();
+    if (appliedGeneration_.exchange(generation) != generation)
+        Parameters().Applied(displayState_.connectorIndex, generation);
 }
 
 void Output::CommitMode(
@@ -363,6 +577,9 @@ void Output::CommitMode(
     scanoutFormat_ = format;
     colorBpc_ = colorBpc;
     colorSpace_ = colorSpace;
+    if (!active)
+        Parameters().Report(displayState_.connectorIndex, false, appliedGeneration_.load(),
+            0, 0, displayState_.maxLayersPerHead, false, false, false);
 }
 
 void Output::SetAssignedHead(NvU32 head) noexcept
@@ -497,15 +714,23 @@ NTSTATUS Output::AssignSwapChain(
         return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
     }
     QuiesceSwapChain();
-    ULONG d3d12Mode = 0;
-    const NTSTATUS settingStatus = QuerySwapChainMode(&d3d12Mode);
-    if (!NT_SUCCESS(settingStatus))
+    presentationVisible_.store(false);
+    const NTSTATUS appliedConfig = ApplyConfiguration();
+    if (!NT_SUCCESS(appliedConfig))
     {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid swapchain settings: status=%!STATUS! mode=%u; using D3D11 baseline",
-            settingStatus, d3d12Mode);
-        d3d12Mode = 0;
+        Parameters().Reject("Cannot retire presentation safely; scanout recovery required");
+        return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
     }
+    if (config_.demo != 0 && config_.connector == displayState_.connectorIndex && !scene_)
+    {
+        const HRESULT created = MpoScene::Create(*this, config_, &scene_);
+        if (FAILED(created))
+        {
+            Parameters().Reject("Requested MPO mode unsupported on this active output");
+            return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
+        }
+    }
+    const ULONG d3d12Mode = config_.Mode();
     if (d3d12Mode == 0)
     {
         d3d12Failed_ = false;
@@ -544,6 +769,20 @@ NTSTATUS Output::AssignSwapChain(
         QuiesceSwapChain();
         return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
     }
+    NV_KMS_WINDOWS_LAYER_CAPS caps = {};
+    const NV_STATUS capsStatus = NvKmsWindowsGetLayerCaps(assignedHead_, 1, &caps);
+    if (capsStatus != NV_OK)
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER,
+            "MPO capability query unavailable: connector=%u status=0x%08X",
+            displayState_.connectorIndex, capsStatus);
+    const auto* mode = display_modes::FindDisplayMode(displayState_, activeModeIndex_);
+    const ULONG applied = appliedGeneration_.load();
+    Parameters().Report(displayState_.connectorIndex, true, applied,
+        swapChain12 != nullptr ? 12 : 11,
+        config_.connector == displayState_.connectorIndex ? config_.demo : 0,
+        displayState_.maxLayersPerHead, caps.rotationMask == 15 && caps.reflectionSupported,
+        caps.inputLutSupported != 0, caps.gainOverrideSupported != 0, caps.pixelAlphaSupported != 0,
+        mode ? mode->refreshRateMillihertz : 0, caps.cscSupported != 0, vrrEnabled_);
     if (displayState_.maxCursorSize != 0)
     {
         if (!cursor_)
@@ -632,6 +871,12 @@ void Output::ResumeCursor() noexcept
 
 void Output::DestroyScanout() noexcept
 {
+    pendingScene_.reset();
+    scene_.reset();
+    pendingPool_.reset();
+    retiredFront_.reset();
+    retiredFrontPending_.store(false);
+    havePendingConfig_ = false;
     for (auto& surface : extraSurfaces_)
         surface.reset();
     for (auto& pixels : extraPixels_)

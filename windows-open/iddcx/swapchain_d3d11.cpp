@@ -120,7 +120,8 @@ NTSTATUS SwapChainD3D11::Create(
 HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
 {
     QueryPerformanceFrequency(&counterFrequency_);
-    const HRESULT damageResult = damage_.Initialize(handle_, output_->PresentPolicy().buffers);
+    const HRESULT damageResult = damage_.Initialize(
+        handle_, output_->PresentPolicy().buffers, output_->Config().dirty != 0);
     if (FAILED(damageResult))
     {
         return damageResult;
@@ -128,7 +129,7 @@ HRESULT SwapChainD3D11::Initialize(LUID adapterLuid) noexcept
     useBuffer2_ = IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2);
 #if !NV_IDDCX_DROP_SWAPCHAIN_FRAMES
     bool realtimePriority = false;
-    HRESULT result = ReadRealtimeGpuPriority(&realtimePriority);
+    HRESULT result = ReadRealtimeGpuPriority(&realtimePriority, output_->Config().priority != 0);
     if (FAILED(result))
     {
         return result;
@@ -269,30 +270,7 @@ HRESULT SwapChainD3D11::CreateDevice(LUID luid) noexcept
     readFromSubresourceSupported_ = SUCCEEDED(device->CheckFeatureSupport(
         D3D11_FEATURE_D3D11_OPTIONS2, &options, sizeof(options))) &&
         options.MapOnDefaultTextures;
-    DWORD mode = 0;
-    const NTSTATUS modeStatus = QueryDriverParameterDword(L"D3D11ReadbackMode", &mode);
-    if ((!NT_SUCCESS(modeStatus) && !DriverParameterAbsent(modeStatus)) || mode > 2)
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid D3D11ReadbackMode: status=%!STATUS! value=%u", modeStatus, mode);
-        return NT_SUCCESS(modeStatus) ? E_INVALIDARG : HRESULT_FROM_NT(modeStatus);
-    }
-    DWORD modeSize = sizeof(mode);
-    if (DriverParameterAbsent(modeStatus) && RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            L"SOFTWARE\\NVIDIA Corporation\\nv-iddcx",
-            L"ReadbackMode",
-            RRF_RT_REG_DWORD,
-            nullptr,
-            &mode,
-            &modeSize) == ERROR_SUCCESS && mode <= 2)
-    {
-        readbackMode_ = mode;
-    }
-    else if (NT_SUCCESS(modeStatus))
-    {
-        readbackMode_ = mode;
-    }
+    readbackMode_ = output_->Config().readback;
     TraceEvents(
         TRACE_LEVEL_INFORMATION,
         TRACE_DRIVER,
@@ -372,7 +350,8 @@ void SwapChainD3D11::Stop() noexcept
 
 DWORD WINAPI SwapChainD3D11::ThreadEntry(void* context) noexcept
 {
-    SwapChainThreadScheduling scheduling("D3D11");
+    auto* chain = static_cast<SwapChainD3D11*>(context);
+    SwapChainThreadScheduling scheduling("D3D11", chain->output_->Config().mmcss != 0);
     static_cast<SwapChainD3D11*>(context)->Process();
     return 0;
 }
@@ -413,6 +392,8 @@ void SwapChainD3D11::Process() noexcept
     {
         if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
             break;
+        result = output_->CheckConfiguration();
+        if (FAILED(result)) break;
         copyTiming_ = {};
         NvU64 stateWaitTicks = 0;
         UINT bufferIndex = 0;
@@ -436,6 +417,8 @@ void SwapChainD3D11::Process() noexcept
         const NvU64 acquireTicks = PerformanceCounter() - frameStart;
         if (result == E_PENDING)
         {
+            const HRESULT polled = pipeline_.Poll();
+            if (FAILED(polled)) { result = polled; failed = true; break; }
             const NvU64 idleStart = PerformanceCounter();
             const DWORD waitResult = WaitForMultipleObjects(
                 ARRAYSIZE(waitHandles),
@@ -618,7 +601,7 @@ void SwapChainD3D11::Process() noexcept
         "Swap-chain processor stopped: result=0x%08X frames=%u",
         result,
         frameCount);
-    if (failed && failureWorkItem_ != nullptr)
+    if ((failed || result == DXGI_ERROR_ACCESS_LOST) && failureWorkItem_ != nullptr)
     {
         // Keep the swapchain context alive until device-parented cleanup runs.
         WdfObjectReference(handle_);

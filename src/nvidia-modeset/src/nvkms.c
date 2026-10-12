@@ -52,6 +52,11 @@
 
 #include "nvUnixVersion.h" /* NV_VERSION_STRING */
 #include <class/cl0000.h> /* NV01_NULL_OBJECT/NV01_ROOT */
+#if defined(NV_WINDOWS_IDDCX)
+#include <class/clc57d.h>
+#include <class/clc37d.h>
+#include <ctrl/ctrlc370/ctrlc370chnc.h>
+#endif
 
 #include "nv_list.h"
 #include "nv_smg.h"
@@ -273,6 +278,81 @@ static struct NvKmsPerOpenDev *GetPerOpenDev(
 
     return nvEvoGetPointerFromApiHandle(&pOpen->ioctl.devHandles, deviceHandle);
 }
+
+#if defined(NV_WINDOWS_IDDCX)
+extern void NvKmsWindowsTraceMessage(const char *message);
+extern void NvKmsWindowsTraceDisplayChannelRegisters(NvU32 hwclass, NvU32 instance);
+
+NvBool nvKmsTraceDisplayChannels(const struct NvKmsPerOpen *pOpen,
+                                NvKmsDeviceHandle deviceHandle, NvU32 head)
+{
+    struct NvKmsPerOpenDev *pOpenDev = GetPerOpenDev(pOpen, deviceHandle);
+    NVDevEvoPtr pDevEvo;
+    NvU32 index;
+    if (pOpenDev == NULL || head >= pOpenDev->pDevEvo->numHeads) {
+        return NV_FALSE;
+    }
+    pDevEvo = pOpenDev->pDevEvo;
+    for (index = 0; index <= 2 * pDevEvo->head[head].numLayers; index++) {
+        NVEvoChannelPtr channel = index == 0 ? pDevEvo->core :
+            pDevEvo->head[head].layer[(index - 1) / 2];
+        NVDmaBufferEvoPtr pb;
+        NvU32 get, word, start;
+        NVC370_CTRL_CMD_GET_CHANNEL_INFO_PARAMS info = { 0 };
+        NvU32 infoStatus;
+        char message[192];
+        if (channel != NULL && index != 0 && (index % 2) == 0) {
+            channel = channel->imm.dma;
+        }
+        if (channel == NULL || channel->pb.control == NULL ||
+            channel->pb.base == NULL) {
+            return NV_FALSE;
+        }
+        pb = &channel->pb;
+        get = nvDmaLoadPioMethod(pb->control, NVC57D_GET);
+        info.channelClass = channel->hwclass;
+        info.channelInstance = channel->instance;
+        infoStatus = nvRmApiControl(nvEvoGlobal.clientHandle,
+            pDevEvo->displayHandle, NVC370_CTRL_CMD_GET_CHANNEL_INFO,
+            &info, sizeof(info));
+        nvkms_snprintf(message, sizeof(message),
+            "NVKMS stalled channel: head=%u core=%u class=0x%X instance=%u mask=0x%llX get=0x%X put=0x%X end=0x%X",
+            head, index == 0, channel->hwclass, channel->instance,
+            (unsigned long long)channel->channelMask, get, pb->put_offset,
+            pb->offset_max);
+        NvKmsWindowsTraceMessage(message);
+        NvKmsWindowsTraceDisplayChannelRegisters(channel->hwclass, channel->instance);
+        if (index != 0 && (index % 2) != 0 &&
+            pDevEvo->pSubDevices[0]->pCoreDma != NULL) {
+            NvU32 owner = nvDmaLoadPioMethod(
+                pDevEvo->pSubDevices[0]->pCoreDma,
+                NVC37D_WINDOW_SET_CONTROL(channel->instance));
+            nvkms_snprintf(message, sizeof(message),
+                "NVKMS stalled window owner: window=%u expected=%u control=0x%X owner=%u",
+                channel->instance, pDevEvo->headForWindow[channel->instance],
+                owner, DRF_VAL(C37D, _WINDOW_SET_CONTROL, _OWNER, owner));
+            NvKmsWindowsTraceMessage(message);
+        }
+        nvkms_snprintf(message, sizeof(message),
+            "NVKMS stalled channel state: class=0x%X instance=%u state=0x%X debug=%u query=0x%X",
+            channel->hwclass, channel->instance, info.channelState,
+            info.IsChannelInDebugMode, infoStatus);
+        NvKmsWindowsTraceMessage(message);
+        if ((pb->put_offset & 3) != 0 || pb->put_offset > pb->offset_max) {
+            continue;
+        }
+        start = pb->put_offset >= 512 ? pb->put_offset - 512 : 0;
+        for (word = 0; start + word * sizeof(NvU32) < pb->put_offset; word++) {
+            nvkms_snprintf(message, sizeof(message),
+                "NVKMS stalled method: class=0x%X instance=%u offset=0x%X value=0x%08X",
+                channel->hwclass, channel->instance, start + word * 4,
+                pb->base[start / 4 + word]);
+            NvKmsWindowsTraceMessage(message);
+        }
+    }
+    return NV_TRUE;
+}
+#endif
 
 
 /*!

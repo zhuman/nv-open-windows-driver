@@ -1,4 +1,5 @@
 #include "common_services.hpp"
+#include "nvplatform_common.h"
 
 #include <windows.h>
 
@@ -53,8 +54,7 @@ NvBool IsAllocationSafe(void* providerContext, NvBool nonPaged)
 void Log(void* providerContext, NvU32 level, const char* message)
 {
     UNREFERENCED_PARAMETER(providerContext);
-    UNREFERENCED_PARAMETER(level);
-    OutputDebugStringA(message);
+    NvPlatformDebugPrintf(level, "%s", message);
 }
 
 const NV_COMMON_HOST_SERVICES Services = {

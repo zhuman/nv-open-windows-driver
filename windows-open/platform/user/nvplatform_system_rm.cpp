@@ -1,4 +1,5 @@
 #include "nvplatform_system_rm.h"
+#include "nvplatform_common.h"
 
 #include <windows.h>
 #include <winternl.h>
@@ -390,18 +391,24 @@ extern "C" void NvPlatformRmLogErrorV(
         sizeof(message) - static_cast<size_t>(prefixLength),
         format,
         arguments);
-    OutputDebugStringA(message);
+    NvPlatformDebugPrintf(0, "%s", message);
 }
 
 extern "C" void NvPlatformRmCaptureAssertion(void)
 {
     void* frames[16]{};
-    CaptureStackBackTrace(0, ARRAYSIZE(frames), frames, nullptr);
-    OutputDebugStringA("NVRM: assertion captured\n");
+    const USHORT count = CaptureStackBackTrace(0, ARRAYSIZE(frames), frames, nullptr);
+    NvPlatformDebugPrintf(0, "NVRM: assertion captured (%u frames)\n", count);
+    for (USHORT index = 0; index < count; ++index)
+    {
+        NvPlatformDebugPrintf(0, "NVRM: assertion frame %u: %p\n", index, frames[index]);
+    }
 }
 
-extern "C" __declspec(noreturn) void NvPlatformRmBugCheck(NvU32)
+extern "C" __declspec(noreturn) void NvPlatformRmBugCheck(NvU32 bugCode)
 {
+    NvPlatformDebugPrintf(0, "NVRM: fail-fast bugCode=0x%08x\n", bugCode);
+    NvPlatformRmCaptureAssertion();
     RaiseFailFastException(nullptr, nullptr, FAIL_FAST_GENERATE_EXCEPTION_ADDRESS);
     __assume(false);
 }

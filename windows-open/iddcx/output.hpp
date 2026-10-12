@@ -16,6 +16,7 @@ class Adapter;
 class SwapChainD3D11;
 class SwapChainD3D12;
 class HwCursor;
+class MpoScene;
 
 using unique_nvkms_surface = wil::unique_any<
     NV_KMS_WINDOWS_SURFACE*,
@@ -69,6 +70,12 @@ public:
     bool RequiresScanoutReset() const noexcept { return scanoutRequiresReset_.load(); }
     void RequireScanoutReset() noexcept { scanoutRequiresReset_.store(true); }
     const PresentationPolicy& PresentPolicy() const noexcept { return presentationPolicy_; }
+    const SwapChainConfig& Config() const noexcept { return config_; }
+    MpoScene* DemoScene() const noexcept { return scene_.get(); }
+    HRESULT CheckConfiguration() noexcept;
+    HRESULT ValidateConfiguration(const SwapChainConfig& config) noexcept;
+    void RetirePreviousPool() noexcept;
+    void PresentationApplied() noexcept;
     bool VrrEnabled() const noexcept { return vrrEnabled_; }
     void SetVrrEnabled(bool enabled) noexcept { vrrEnabled_ = enabled; }
     NTSTATUS ConfigurePresentationPolicy() noexcept;
@@ -139,6 +146,10 @@ private:
         const NV_KMS_WINDOWS_DISPLAY_STATE& state) noexcept;
     static EVT_WDF_OBJECT_CONTEXT_CLEANUP Cleanup;
     void DestroyScanout() noexcept;
+    NTSTATUS StageConfiguration(const SwapChainConfig& config) noexcept;
+    NTSTATUS ApplyConfiguration() noexcept;
+    NTSTATUS ValidateVrr(const SwapChainConfig& config) noexcept;
+    NTSTATUS DrainPresentation() noexcept;
     void* operator new(size_t) = delete;
     void operator delete(void*) = delete;
 
@@ -155,6 +166,24 @@ private:
     unique_nvkms_surface extraSurfaces_[2];
     void* extraPixels_[2] = {};
     PresentationPolicy presentationPolicy_;
+    SwapChainConfig config_;
+    SwapChainConfig pendingConfig_;
+    bool havePendingConfig_ = false;
+    ULONG checkedGeneration_ = 0;
+    std::atomic<ULONG> appliedGeneration_{0};
+    std::atomic<ULONG> requestedGeneration_{0};
+    std::atomic<bool> presentationVisible_{false};
+    struct ScanoutPool
+    {
+        unique_nvkms_surface surfaces[4];
+        void* pixels[4] = {};
+        NvU32 pitch = 0;
+    };
+    std::unique_ptr<ScanoutPool> pendingPool_;
+    unique_nvkms_surface retiredFront_;
+    std::atomic<bool> retiredFrontPending_{false};
+    std::unique_ptr<MpoScene> scene_;
+    std::unique_ptr<MpoScene> pendingScene_;
     bool vrrEnabled_ = false;
     void* scanoutPixels_;
     NvU32 scanoutPitch_;

@@ -136,10 +136,39 @@ typedef struct NV_KMS_WINDOWS_LAYER
 	} dirtyBands[2];
 	NvBool presentationPolicySpecified;
 	NvBool immediateNonTearing;
+	/* Per-flip permission; enabling VRR support itself requires a modeset. */
 	NvBool vrrEnabled;
 	NvBool skipUpload;
 	NV_KMS_WINDOWS_SURFACE* uploadSource;
+	NvU32 rotationDegrees;
+	NvBool reflectX;
+	NvBool pixelAlpha;
+	NV_KMS_WINDOWS_SURFACE* inputLut;
+	/* Requires skipUpload, no uploadSource, and the identical current surface.
+	 * Unchanged configs do not flip; metadata edits re-submit it because KAPI
+	 * gates RR/composition and completion notifiers on surfaceChanged. */
+	NvBool reuseSurface;
 } NV_KMS_WINDOWS_LAYER;
+
+typedef struct NV_KMS_WINDOWS_LAYER_CAPS
+{
+	NvU32 rotationMask;
+	NvBool reflectionSupported;
+	NvBool pixelAlphaSupported;
+	NvBool inputLutSupported;
+	NvU32 minWidth;
+	NvU32 maxWidth;
+	NvU32 minHeight;
+	NvU32 maxHeight;
+	/* Format bits use NV_KMS_WINDOWS_SCANOUT_FORMAT values. */
+	NvU32 formatMask;
+	/* Exact joint rotation/reflection support; bit = rotation/90 + reflectX*4. */
+	NvU32 transformMask;
+	NvBool pixelAlphaWithOpacitySupported;
+	/* KAPI CSC/gain plumbing; ValidateLayers checks the actual candidate. */
+	NvBool cscSupported;
+	NvBool gainOverrideSupported;
+} NV_KMS_WINDOWS_LAYER_CAPS;
 
 typedef struct NV_KMS_WINDOWS_MODESET_OUTPUT
 {
@@ -220,11 +249,26 @@ NV_STATUS NvKmsWindowsGetScanoutBuffer(
 NV_STATUS NvKmsWindowsSetDisplayModes(
 	NV_KMS_WINDOWS_MODESET_OUTPUT* outputs,
 	NvU32 outputCount);
+/* Validate the current cached mode/layers with a different VRR preference.
+ * Set validates again then applies a same-head modeset without uploads,
+ * preserving current surfaces/LUTs/cursor. Unsupported enable requests reject;
+ * callers update their actual VrrEnabled only after successful Set, and drain
+ * every previously enabled layer before reclaiming any lease. Set checks the
+ * actual NVKMS reply and restores the last-good mode on a policy mismatch;
+ * drain layers even after this rejection. INVALID_STATE on rollback failure
+ * requires stopping submissions and retaining leases until recovery. */
+NV_STATUS NvKmsWindowsValidateVrrPreference(
+	NvU32 head, NvU32 displayHandle, NvBool vrrPreference);
+NV_STATUS NvKmsWindowsSetVrrPreference(
+	NvU32 head, NvU32 displayHandle, NvBool vrrPreference,
+	NvBool* vrrEnabled);
 NV_STATUS NvKmsWindowsPresentLayers(
 	NvU32 head,
 	NvU32 displayHandle,
 	const NV_KMS_WINDOWS_LAYER* layers,
 	NvU32 layerCount);
+/* All head layers participate atomically: omitted layers are disabled and
+ * retain their own pending/timestamp notifier for independent retirement. */
 NV_STATUS NvKmsWindowsPresentLayersTimed(
 	NvU32 head,
 	NvU32 displayHandle,
@@ -232,11 +276,31 @@ NV_STATUS NvKmsWindowsPresentLayersTimed(
 	NvU32 layerCount,
 	NvBool preserveFrontBuffer,
 	NV_KMS_WINDOWS_PRESENT_TIMING* timing);
+NV_STATUS NvKmsWindowsGetLayerCaps(
+	NvU32 head, NvU32 layer, NV_KMS_WINDOWS_LAYER_CAPS* caps);
+/* Test-only NVKMS validation: no uploads, allocations or presentation-cache changes.
+ * Matching, already-cached legacy head gamma is accepted. New/changed legacy
+ * head gamma returns NOT_SUPPORTED because its OLUT has not been prepared;
+ * an inputLut is a separate per-layer stage, not an equivalent head-gamma fix. */
+NV_STATUS NvKmsWindowsValidateLayers(
+	NvU32 head, NvU32 displayHandle,
+	const NV_KMS_WINDOWS_LAYER* layers, NvU32 layerCount);
+/* Immutable, caller-owned lease. Destroy with DestroyScanoutSurface only after
+ * every layer using it has switched away AND drained. CSC/gain is supplied
+ * through colorTransform.csc: signed S3.16, diagonal 0x10000 is unit gain. */
+NV_STATUS NvKmsWindowsCreateInputLut(
+	const NV_KMS_WINDOWS_COLOR_TRANSFORM* transform,
+	NV_KMS_WINDOWS_SURFACE** surface);
 NV_STATUS NvKmsWindowsUploadLayer(
 	const NV_KMS_WINDOWS_LAYER* layer,
 	NV_KMS_WINDOWS_PRESENT_TIMING* timing);
 NV_STATUS NvKmsWindowsGetFlipPending(NvU32 head, NvBool* pending);
 NV_STATUS NvKmsWindowsGetFlipTimestamp(NvU32 head, NvU64* timestamp);
+NV_STATUS NvKmsWindowsGetLayerFlipPending(
+	NvU32 head, NvU32 layer, NvBool* pending);
+NV_STATUS NvKmsWindowsGetLayerFlipTimestamp(
+	NvU32 head, NvU32 layer, NvU64* timestamp);
+NV_STATUS NvKmsWindowsTraceFlipChannels(NvU32 head);
 NV_STATUS NvKmsWindowsUpdateCursor(
 	NvU32 head,
 	NvU32 displayHandle,

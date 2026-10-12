@@ -10,17 +10,9 @@
 
 namespace nv::iddcx {
 
-HRESULT ReadRealtimeGpuPriority(bool* enabled) noexcept
+HRESULT ReadRealtimeGpuPriority(bool* enabled, bool requested) noexcept
 {
-    ULONG value = 0;
-    const NTSTATUS status = QueryRealtimeGpuPriorityEnabled(&value);
-    if (!NT_SUCCESS(status))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid RealtimeGpuPriority: status=%!STATUS! value=%u", status, value);
-        return HRESULT_FROM_NT(status);
-    }
-    *enabled = value != 0;
+    *enabled = requested;
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
         "Realtime GPU priority requested=%u", *enabled);
     return S_OK;
@@ -102,18 +94,9 @@ HRESULT CreateSourceCopyQueue(
     return result;
 }
 
-SwapChainThreadScheduling::SwapChainThreadScheduling(PCSTR api) noexcept
+SwapChainThreadScheduling::SwapChainThreadScheduling(PCSTR api, bool enabled) noexcept
     : api_(api)
 {
-    ULONG enabled = 0;
-    const NTSTATUS status = QueryDisplayPostProcessingEnabled(&enabled);
-    if (!NT_SUCCESS(status))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
-            "Invalid MmcssDisplayPostProcessing: status=%!STATUS! value=%u; normal scheduling retained",
-            status, enabled);
-        return;
-    }
     if (enabled == 0)
     {
         TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,

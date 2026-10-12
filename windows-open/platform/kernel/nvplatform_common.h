@@ -9,6 +9,9 @@ extern "C" {
 const NV_COMMON_HOST_SERVICES* NvPlatformGetCommonHostServices(void);
 NvU64 NvPlatformGetPageSize(void);
 
+typedef void (*NV_PLATFORM_DEBUG_LOG)(NvU32 level, const char* message);
+void NvPlatformSetDebugLog(NV_PLATFORM_DEBUG_LOG log);
+
 void NvPlatformDebugPrintf(
 	NvU32 level,
 	const char* format,

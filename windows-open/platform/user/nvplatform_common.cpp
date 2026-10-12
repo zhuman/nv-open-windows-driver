@@ -3,8 +3,11 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <windows.h>
+#include <atomic>
 
 namespace {
+
+std::atomic<NV_PLATFORM_DEBUG_LOG> DebugLog{nullptr};
 
 void* Allocate(void*, NvU64 length, NvBool)
 {
@@ -46,11 +49,15 @@ NvBool IsAllocationSafe(void*, NvBool)
     return NV_TRUE;
 }
 
-void Log(void*, NvU32, const char* message)
+void Log(void*, NvU32 level, const char* message)
 {
     if (message != nullptr)
     {
         OutputDebugStringA(message);
+        if (const auto log = DebugLog.load(std::memory_order_acquire))
+        {
+            log(level, message);
+        }
     }
 }
 
@@ -80,12 +87,17 @@ extern "C" NvU64 NvPlatformGetPageSize(void)
     return systemInfo.dwPageSize;
 }
 
+extern "C" void NvPlatformSetDebugLog(NV_PLATFORM_DEBUG_LOG log)
+{
+    DebugLog.store(log, std::memory_order_release);
+}
+
 extern "C" void NvPlatformDebugPrintf(
     NvU32 level,
     const char* format,
     ...)
 {
-    char buffer[512];
+    char buffer[1024];
     va_list arguments;
 
     if (format == nullptr)

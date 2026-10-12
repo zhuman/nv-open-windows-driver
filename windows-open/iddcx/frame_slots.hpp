@@ -75,6 +75,44 @@ private:
     UINT latest_ = Invalid;
 };
 
+class PlaneBufferSlots final
+{
+public:
+    UINT Acquire(bool reuse = false) noexcept
+    {
+        if (queued_ != FrameSlots::Invalid || prepared_ != FrameSlots::Invalid)
+            return FrameSlots::Invalid;
+        if (reuse)
+            return prepared_ = front_;
+        for (UINT index = 0; index < 3; ++index)
+            if (index != front_)
+                return prepared_ = index;
+        return FrameSlots::Invalid;
+    }
+    HRESULT Queue() noexcept
+    {
+        if (prepared_ == FrameSlots::Invalid || queued_ != FrameSlots::Invalid)
+            return E_UNEXPECTED;
+        queued_ = prepared_;
+        prepared_ = FrameSlots::Invalid;
+        return S_OK;
+    }
+    HRESULT Latch() noexcept
+    {
+        if (queued_ == FrameSlots::Invalid) return E_UNEXPECTED;
+        front_ = queued_;
+        queued_ = FrameSlots::Invalid;
+        return S_OK;
+    }
+    UINT Front() const noexcept { return front_; }
+    UINT Queued() const noexcept { return queued_; }
+
+private:
+    UINT front_ = FrameSlots::Invalid;
+    UINT queued_ = FrameSlots::Invalid;
+    UINT prepared_ = FrameSlots::Invalid;
+};
+
 } // namespace nv::iddcx
 
 namespace nv::iddcx {

@@ -10,7 +10,7 @@ namespace nv::iddcx {
 class SwapChainDamage final
 {
 public:
-    HRESULT Initialize(IDDCX_SWAPCHAIN handle, UINT bufferCount) noexcept;
+    HRESULT Initialize(IDDCX_SWAPCHAIN handle, UINT bufferCount, bool enabled) noexcept;
     HRESULT Prepare(UINT width, UINT height, UINT frameNumber, UINT dirtyCount,
         UINT moveCount, UINT bufferIndex) noexcept;
     HRESULT Commit(UINT bufferIndex) noexcept;

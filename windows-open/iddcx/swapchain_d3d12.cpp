@@ -157,7 +157,8 @@ NTSTATUS SwapChainD3D12::Create(
 HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
 {
     QueryPerformanceFrequency(&counterFrequency_);
-    const HRESULT damageResult = damage_.Initialize(handle_, output_->PresentPolicy().buffers);
+    const HRESULT damageResult = damage_.Initialize(
+        handle_, output_->PresentPolicy().buffers, output_->Config().dirty != 0);
     if (FAILED(damageResult))
     {
         return damageResult;
@@ -168,12 +169,7 @@ HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
     {
         return E_NOTIMPL;
     }
-    ULONG debugEnabled = 0;
-    const NTSTATUS debugStatus = QueryDriverParameterDword(L"D3D12Debug", &debugEnabled);
-    if (!NT_SUCCESS(debugStatus) && !DriverParameterAbsent(debugStatus))
-    {
-        return HRESULT_FROM_NT(debugStatus);
-    }
+    const ULONG debugEnabled = output_->Config().debug;
     if (debugEnabled != 0)
     {
         wil::com_ptr_nothrow<ID3D12Debug> debug;
@@ -226,7 +222,7 @@ HRESULT SwapChainD3D12::Initialize(LUID adapterLuid) noexcept
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
     queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
     bool realtimePriority = false;
-    result = ReadRealtimeGpuPriority(&realtimePriority);
+    result = ReadRealtimeGpuPriority(&realtimePriority, output_->Config().priority != 0);
     if (FAILED(result))
     {
         return result;
@@ -459,7 +455,8 @@ void SwapChainD3D12::Stop() noexcept
 
 DWORD WINAPI SwapChainD3D12::ThreadEntry(void* context) noexcept
 {
-    SwapChainThreadScheduling scheduling("D3D12");
+    auto* chain = static_cast<SwapChainD3D12*>(context);
+    SwapChainThreadScheduling scheduling("D3D12", chain->output_->Config().mmcss != 0);
     static_cast<SwapChainD3D12*>(context)->Process();
     return 0;
 }
@@ -881,6 +878,8 @@ void SwapChainD3D12::Process() noexcept
         {
             break;
         }
+        result = output_->CheckConfiguration();
+        if (FAILED(result)) break;
         timing_ = {};
         const NvU64 start = PerformanceCounter();
         IDARG_IN_RELEASEANDACQUIREBUFFER2 input = {};
@@ -891,6 +890,8 @@ void SwapChainD3D12::Process() noexcept
         result = IddCxSwapChainReleaseAndAcquireBuffer2(handle_, &input, &buffer);
         if (result == E_PENDING)
         {
+            const HRESULT polled = pipeline_.Poll();
+            if (FAILED(polled)) { result = polled; break; }
             const DWORD wait = WaitForMultipleObjects(ARRAYSIZE(waits), waits, FALSE, 16);
             if (wait == WAIT_OBJECT_0 || wait == WAIT_TIMEOUT)
             {

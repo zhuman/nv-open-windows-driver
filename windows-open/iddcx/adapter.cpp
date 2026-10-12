@@ -326,7 +326,9 @@ NTSTATUS Adapter::RefreshDisplays() noexcept
             continue;
         }
         Output* const output = outputs_[index];
-        const NTSTATUS departureStatus = IddCxMonitorDeparture(output->Monitor());
+        const IDDCX_MONITOR monitor = output->Monitor();
+        const NvU32 displayHandle = output->DisplayState().displayHandle;
+        const NTSTATUS departureStatus = IddCxMonitorDeparture(monitor);
         TraceEvents(
             NT_SUCCESS(departureStatus)
                 ? TRACE_LEVEL_INFORMATION
@@ -334,15 +336,14 @@ NTSTATUS Adapter::RefreshDisplays() noexcept
             TRACE_DRIVER,
             "IddCxMonitorDeparture: %!STATUS! display=0x%08X",
             departureStatus,
-            output->DisplayState().displayHandle);
+            displayHandle);
         if (!NT_SUCCESS(departureStatus))
         {
             status = departureStatus;
             continue;
         }
-        output->StopMonitorControl();
+        // Departure destroys the monitor; only compare its saved output pointer.
         OnOutputDestroyed(output);
-        WdfObjectDelete(output->Monitor());
     }
     return status;
 }

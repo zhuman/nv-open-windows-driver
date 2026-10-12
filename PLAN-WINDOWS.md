@@ -1771,6 +1771,632 @@ DMA or using an uncertified experimental KMDF transport companion. Microsoft
 describes IDD as a user-mode model without kernel-mode components, so a helper
 changes the product and certification story.
 
+### 11a. Live Parameters, Internal MPO Demos, and a Control App
+
+**Status: implemented; demo-Off live switching verified, atomic MPO activation
+still failing, October 11, 2026.** Release x64 build/signing, ARM64 compile
+checks, and local configuration, presentation-ownership, pattern, and backend
+request tests passed. The NativeAOT control app passed local tests and launch checks from
+the synchronized Desktop folder. Target testing now verifies normal desktop
+presentation and live source-API switching, but not visible MPO effects.
+Normal desktop presentation remains the default; do not enable demos on the
+tested RTX 4070 until the atomic activation failure is resolved.
+
+The goal is to demonstrate display-engine features that the current IddCx
+frame contract does not expose, using driver-generated surfaces alongside
+the OS desktop. This is **internal NVKMS multi-layer composition**, not Windows
+DWM MPO support: do not advertise new IddCx capabilities or describe generated
+planes as OS-supplied windows.
+
+#### Pre-Implementation Building Blocks and Capability Gates
+
+- [Driver parameters](windows-open/iddcx/driver_parameters.hpp) already
+  validate several DWORDs, but readers are spread across output, damage, and
+  source-API initialization. D3D11 also retains a legacy `ReadbackMode` key.
+  Settings do not currently share an immutable, watched configuration.
+- Both source APIs feed
+  [SwapChainUploadPipeline](windows-open/iddcx/swapchain_pipeline.hpp), which
+  also supports serialized processing. It currently submits exactly one
+  layer and retires desktop buffers using primary-layer flip observations.
+- [The Windows NVKMS interface](windows-open/modeset/nvkms_windows.h) already
+  accepts an array of layers, crop/destination rectangles, opacity, and CSC.
+  Its current gamma handling is a **head output LUT**, not an independent
+  overlay LUT. Rotation, explicit blending modes, and per-layer LUTs need
+  additional wrapper plumbing and validation.
+- Recorded RTX 4070 resources reported **two layers on the selected head**:
+  the desktop plus **one** overlay. This is historical capability evidence,
+  not a fresh HDMI/head check. Query the actual assigned head, layer formats,
+  rotation/reflection mask, composition modes, and LUT caps at runtime.
+  KAPI's maximum array size is not the number of available hardware planes.
+- Unsupported modes or parameter combinations must be reported as such.
+  Never silently pre-compose into the desktop, pre-rotate pixels, or apply a
+  head-wide LUT and call that successful independent-plane hardware support.
+
+#### Uniform Driver Parameters and Valid-Configuration Reconfiguration
+
+Introduce one driver-owned `DriverParameters` class with typed configuration
+snapshots and small per-output subscriptions. Reuse the existing strict
+readers/tests; source implementations consume a snapshot instead of querying
+the registry independently during initialization or frame processing.
+
+1. Own the framework Parameters key, notification event, stop event, and
+   watcher lifetime with RAII. Use `WdfDriverOpenParametersRegistryKey` with
+   `KEY_READ` and obtain its borrowed UMDF `HKEY` through
+   `WdfRegistryWdmGetHandle`; the native handle must not be separately closed.
+   Arm asynchronous `RegNotifyChangeKeyValue` for value changes, rearm before
+   rereading, and reconcile changes arriving during snapshot construction.
+   Handle missing/deleted/recreated keys and notification errors explicitly;
+   stop/join callbacks before closing the key or destroying subscribers.
+2. Centralize existing names, defaults, ranges, and precedence:
+   `SwapChainApi`, `D3D12Mode`, `D3D11ReadbackMode`, `SurfaceCachePolicy`,
+   `DirtyRects`, `D3D12Debug`, `RealtimeGpuPriority`,
+   `MmcssDisplayPostProcessing`, `VrrPreference`, `FlipMode`,
+   `FramePipeline`, and `ScanoutBufferCount`. Preserve current defaults and
+   the legacy D3D11-key precedence while it remains supported; watch that key
+   too, but do not introduce another configuration store.
+3. Validate the **whole candidate**: types, ranges, cross-field requirements,
+   target output, current mode/format, and requested demo capabilities.
+   Missing ordinary values retain their documented defaults; invalid values
+   and access errors are not absence. An invalid runtime candidate leaves the
+   last valid configuration and running swapchains untouched, with a precise
+   rejection reason. Report requested, accepted, and effective settings
+   separately, including existing reason-coded source-API fallbacks.
+4. Add an optional `ConfigRevision` DWORD for grouped edits. The GUI writes
+   an odd in-progress revision, all values, then the next even revision last.
+   Accept only a stable even revision read before and after the snapshot.
+   A crashed writer leaving an odd revision must not interrupt the running
+   configuration; expose it as an incomplete update, not success. Serialize
+   GUI writers, reject revision exhaustion, and provide an explicit recovery
+   action. With no marker, debounced/stable RegEdit changes remain supported
+   as individual edits; these are not advertised as atomic multi-value edits.
+5. Compare normalized effective configuration, not raw registry events.
+   Duplicate notifications, inactive-API-only edits, and equivalent defaults
+   must not recreate anything. Coalesce rapid changes into the newest valid
+   generation, and do not repeatedly retry a rejected generation.
+6. For an affected output, queue normal-lifecycle work that asks its worker to
+   stop, drains source GPU/CE/presentation work, and deletes the IddCx
+   swapchain through the existing framework lifecycle. Never delete or join
+   from the source worker or under a lock that the worker needs. Hold proper
+   WDF references while work is pending and cancel it on removal/cleanup.
+   IddCx's next assignment consumes the accepted snapshot; record both the
+   requested generation and successful application generation.
+7. Distinguish `Reconfigured`, `RuntimeFailure`, and `Removed` teardown.
+   Intentional deletion must not set the D3D12-failed latch or accidentally
+   force D3D11. A new valid native configuration can request a bounded fresh
+   attempt; actual native failure keeps its existing explicit fallback.
+   Reconfiguration must also rebuild configuration-dependent scanout pools
+   and imported heaps: merely deleting a worker is insufficient for cache
+   policy or buffer-count changes. Preserve current cursor/copy concurrency.
+8. Stage replacement resources before publishing applied state. Allocation,
+   import, or test-commit failure reports rejection and restores the previous
+   working generation without an unbounded recreate loop. Monitor hotplug,
+   modeset, power transitions, and a newer generation invalidate stale work.
+   At cold start, retain an explicit, logged safe-baseline/error policy rather
+   than inventing a previously accepted configuration.
+
+An initial target is one reconfiguration per committed effective generation,
+without device disable/enable, driver reinstall, or a monitor
+departure/arrival. Log the request-to-reassignment interval and verify that
+IddCx actually recreates the swapchain; do not assume a restart is invisible
+or guarantee no brief frozen frame.
+
+#### Shared Presentation and Demo-Surface Ownership
+
+Extract a small common present coordinator around the existing upload
+pipeline. D3D11 and D3D12 remain source-frame producers; neither owns a demo
+implementation or calls a separate experimental flip path. Demo mode `Off`
+uses the same single-plane path and must preserve current behavior/performance.
+
+- A present transaction contains the latest desktop plane plus zero or more
+  demo planes, their immutable property/LUT states, configuration/mode
+  generation, and surface leases. Upload all changed pixels before one atomic
+  head commit; property-only updates retain the previous completed content.
+- Software-render small, deterministic animated patterns into CPU-accessible
+  NVKMS scanout allocations, then use the existing CE upload path. Start with
+  approximately 384x256 or 512x320 sources and two buffers per demo plane.
+  Bound bytes and cadence; a demo timer defaults to 30 Hz and supports 15/60
+  Hz only within the selected display's limits. No per-tick allocations.
+- Give each plane independent free/uploading/queued/scanning ownership.
+  Primary-only flip completion cannot retire an overlay surface or LUT.
+  Extend completion tracking to every changed layer, including superseded
+  presents and disabled planes, before reuse/free. Keep all resource leases
+  alive until retirement; a successful submit is not a retirement fence.
+- Continue animation while the desktop is static: the coordinator waits on
+  desktop jobs, a waitable demo timer, completion, and stop events. Reuse the
+  current desktop surface without reuploading it; allow this explicitly in
+  NVKMS's front-surface checks only for unchanged, correctly leased content.
+  Do not falsify IddCx acquired-buffer completion or busy-spin for animation.
+- Add rotation/reflection, explicit composition modes, and per-layer
+  input-LUT state to the Windows plane descriptor as needed, respecting KAPI
+  capabilities and property-change semantics. Alpha convention must be
+  explicit; avoid treating opacity 255 as opaque when pixels have alpha.
+  Preserve OS-owned primary CSC/gamma/HDR and cursor state.
+- Keep LUT resources per plane and generation, allocate outside the hot path,
+  cache preset curves, and retire them with the referencing transactions.
+  Do not reuse the current head-gamma shortcut for overlay-only LUT effects.
+- For luminance gain, use a documented layer color-matrix multiplier if no
+  separate hardware scalar is exposed. Keep this distinct from spatial
+  scaling and global opacity; preserve alpha and label the actual carrier.
+- Capability/commit validation precedes activation. A failing demo is
+  explicitly disabled/rejected while ordinary desktop presentation remains
+  recoverable. No silent CPU-composition substitute and no changes to
+  upstream NVKMS merely to make an unsupported experiment look successful.
+
+#### Proposed Demo Modes for Review
+
+`MpoDemoMode=0` is **Off**. Propose six nonzero modes, all usable with one
+overlay on a two-layer head. Every pattern includes a moving marker/frame
+counter so it visibly remains live. The desktop stays visible beneath it.
+The effects below are intended **hardware plane** effects; CPU drawing only
+generates source content.
+
+| ID | Mode | Pattern and demonstration |
+| --- | --- | --- |
+| 1 | Alpha Orbit | A translucent checker/radial-gradient card with a moving ring sweeps a figure-eight over the desktop. Global opacity breathes between 64 and 224; transparent holes and colored edges distinguish pixel alpha from constant plane alpha. |
+| 2 | Geometry Compass | An asymmetric arrow, numbered corners, and scrolling grid move within the screen. Cycle only the supported 0/90/180/270-degree rotations and reflections; try 0.5x/1x/1.5x destination scales through finite test-only preflight and omit rejected scales explicitly. Source crops reduce extents from the origin, not unsupported fetch offsets. The user approved this capability-adaptive behavior on October 12. |
+| 3 | CSC Color Lab | Animated RGB/gray bars and a moving color wheel cycle identity, grayscale, sepia, channel permutation, and bounded saturation matrices. The primary remains unchanged, showing that color transforms belong to the overlay. |
+| 4 | Luminance Elevator | A neutral/rainbow ramp with a traveling highlight breathes through 0.25x/0.5x/1x/1.5x luminance gain. Hold geometry and alpha constant to distinguish color gain from opacity or spatial scaling; use FP16 only where supported and cap output to a conservative brightness. |
+| 5 | LUT Gallery | A scrolling grayscale ramp and color bands cycle identity, gamma 0.7/1.4, smooth S-curve, and posterization input-LUT presets. Include identity intervals; demonstrate that the desktop is not recolored by an overlay LUT. |
+| 6 | Live Showcase | A compact glass-like instrument card with orbiting dots combines slow movement, alpha breathing, supported rotations/reflections, mild CSC/gain, and supported LUT presets. A timed chapter sequence identifies each effect before the combined finale. Geometry uses validated scales; the combined CSC/gain chapter stays native-size because that pipeline cannot simultaneously scale. |
+
+Additional geometry/color details:
+
+- Keep cards within a safe screen margin initially. Test signed clipping and
+  partially off-screen destinations only after their validation passes.
+  Use asymmetric source dimensions and corner labels so rotation is not
+  confused with square-content animation or software prerotation.
+- Validate blend math against CPU reference images, including black/white
+  backgrounds, alpha endpoints, premultiplication, and SDR versus FP16.
+  Brightness/gain effects must not alter HDR metadata or the whole head.
+- On heads with more planes, the showcase can place independent cards in
+  separate regions and overlap them to demonstrate ordering. The user can
+  request a bounded plane count up to actual capacity minus the desktop.
+  On the RTX two-layer case, cycle effects on one card; drawing several tiles
+  inside that one surface does **not** demonstrate independent hardware planes.
+- Rotation, LUTs, and simultaneous combinations remain capability-gated.
+  Reject unsupported standalone requests without disturbing the running
+  scene. Geometry and Showcase may explicitly adapt to supported transforms
+  and test-only-validated scales; trace omissions and display the adaptation
+  warning rather than silently claiming all requested effects are available.
+
+Proposed new registry controls, alongside existing swapchain controls:
+
+| Parameter | Proposed semantics |
+| --- | --- |
+| `MpoDemoMode` | 0..6, default 0 (Off). |
+| `MpoDemoPlaneCount` | Requested overlays, default 1 when enabled; reject counts above the selected head's available non-primary layers. |
+| `MpoDemoConnectorIndex` | NVKMS connector index on this adapter; required when enabling a demo, validated against connected outputs. Never an ephemeral GDI display number. |
+| `MpoDemoCadenceHz` | 15, 30, or 60; default 30, constrained by the active timing. |
+| `MpoDemoSpeedPercent` | 25..200, default 100; bounded animation speed, not a display-clock setting. |
+| `ConfigRevision` | Optional odd/even multi-value update protocol described above. |
+
+Keep presets deterministic initially, rather than exposing dozens of raw
+matrix/LUT entries. The GUI can offer preset-relevant alpha, rotation, scale,
+gain, and curve overrides later through the same typed validation, without
+duplicating per-API control logic.
+
+#### Compact WinUI 3 Control Application
+
+Add an unpackaged C# WinUI 3 application under `windows-open\tools` after mode
+review. Use a pinned supported .NET/Windows App SDK/CsWinRT combination and
+`PublishAot=true`; Windows App SDK has supported NativeAOT since 1.6. Prove a
+minimal themed app publishes and launches before building the full editor.
+
+- Compact two-section layout: **Swapchain** and **MPO Demos**, with Fluent
+  cards, light/dark/system themes, Mica when available, and an accessible
+  solid-color fallback. No WebView, plugin system, or reflection-heavy UI
+  binding. Use typed/compiled bindings and AOT-compatible interop/serialization.
+- Swapchain selectors cover Auto/D3D11/D3D12 and existing reference/native
+  submodes; advanced controls cover cache, dirty regions, pipeline/buffer
+  count, priorities, flip/VRR preferences, and diagnostics. Demo cards show
+  mode descriptions, target connector, capacity, cadence, and speed.
+- Edit locally, validate before **Apply**, and commit one grouped revision.
+  Include **Reload**, **Restore Defaults**, and **Demo Off**. Sliders must not
+  issue a recreation per pointer movement. Preserve unrelated registry values
+  and exact absent-versus-present state in exported/restored presets.
+- Discover the correct installed UMDF driver Parameters location and registry
+  view; do not confuse the PnP `WUDFRd` service with the UMDF driver's key.
+  Default to local-machine operation: syncing the executable is distribution,
+  not a remote registry-control channel.
+- Show requested/accepted/applied generation, effective API/demo, per-output
+  capabilities, pending recreation, and precise rejection/failure reasons.
+  Provide a narrow read-only driver-status mechanism, isolated from watched
+  configuration values so status publication cannot trigger restart loops.
+  Registry write success alone must never be displayed as "applied."
+- Preserve existing ACLs. Start read-only without elevation; request UAC only
+  for Apply/restore, using a narrowly scoped elevated invocation of the same
+  signed executable if needed. Never grant broad write access to driver keys
+  or let the driver accept arbitrary paths/commands from GUI parameters.
+- Publish x64 first with NativeAOT and the required WinUI/App SDK assets in a
+  self-contained folder. NativeAOT does not by itself guarantee a lone EXE;
+  single-file distribution is a separate feasibility check, not a reason to
+  drop required DLLs/XAML resources or silently switch away from AOT.
+- Deploy the **complete publish output**, with its launchable EXE, to a named
+  folder under the user's actual Desktop known-folder path (including any
+  OneDrive redirection). Resolve rather than assume that path; use a
+  version/hash manifest to verify the synchronized copy. Keep publish output
+  out of git; check in source, pinned dependencies, build instructions, and
+  any necessary license notices. Test the copied release app on the target.
+
+Reference contracts: [UMDF registry handles][live-params-handle],
+[registry notification][live-params-notify],
+[WinUI NativeAOT support][mpo-winui-aot], and
+[unpackaged deployment][mpo-winui-deploy].
+
+[live-params-handle]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfregistry/nf-wdfregistry-wdfregistrywdmgethandle
+[live-params-notify]: https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regnotifychangekeyvalue
+[mpo-winui-aot]: https://blogs.windows.com/windowsdeveloper/2024/09/04/whats-new-in-windows-app-sdk-1-6/
+[mpo-winui-deploy]: https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/unpackage-winui-app
+
+#### Implementation Order and Acceptance Evidence
+
+1. **Live settings first:** pure snapshot/validation tests and watched
+   recreation, with demos Off. Cover invalid types/ranges/combinations,
+   missing keys, odd/partial revisions, bursts, deduplication, and changes
+   during assignment/failure/removal. Verify both APIs and unchanged defaults.
+2. **Common present/ownership:** move the single-plane path behind the common
+   coordinator, validate no behavior/performance regression, then add one
+   double-buffered overlay. Test primary-only, overlay-only, combined atomic
+   presents, stale completion, property-only changes, and failed commits.
+3. **Demos incrementally:** Alpha Orbit first, then Geometry/CSC/Gain, then
+   per-plane LUTs and Showcase as capabilities are proven. Extend production
+   plane/parameter tests with CPU references and injected allocation/drain
+   failures; build x64 and compile-check ARM64 without claiming ARM64 hardware.
+4. **GUI and desktop distribution:** verify NativeAOT publish, themes,
+   accessibility, invalid-input feedback, grouped Apply, defaults/restore, and
+   launch from the synchronized folder. No elevated background service.
+5. **Exclusive target round:** coordinate with the AMD session before each
+   NVIDIA deployment/capture round. Get explicit acknowledgment that no AMD
+   device operation, rollback, or retry is in flight; record both packages,
+   hashes, exact instances, problem codes, topology, settings, and recovery
+   path. No AMD device changes and no competing deployment/test rounds.
+6. **Physical proof:** once the user reconnects ShadowCast 2 Pro to the
+   NVIDIA HDMI output, verify capture-device identity, HDMI sink/EDID/head
+   capabilities, negotiated capture mode, and actual primary/overlay content.
+   Do not assume previous DisplayPort capabilities or silently use a webcam.
+   Capture each mode, desktop-static animation, overlapping cards where
+   supported, and mode changes/Off, with matching ETW generations, per-plane
+   uploads/latches, and property logs. Separate register/API acceptance from
+   visible hardware effects and avoid claiming capture as absolute color
+   calibration or proof of features the capture transport cannot represent.
+7. **Live-switch/recovery gate:** valid GUI/RegEdit changes take effect without
+   PnP restarts; invalid/unsupported/incomplete edits leave the last good scene
+   running. Defaults/Off return to baseline, with no surfaces/LUTs/events/
+   workers leaked and no stale demo after hotplug or power/mode transitions.
+   Preserve cursor-during-upload behavior. Record scene overhead and observed
+   cadence against the same demo-Off workload, not application paint counts.
+8. **Handoff:** stop owned captures/loggers/tasks, remove or disarm rollback
+   tasks after verification, restore the exact test-setting journal and
+   agreed output topology, verify both devices and the loaded NVIDIA hash,
+   and promptly send AMD an explicit reservation-release/baseline handoff.
+   If access is lost, report recorded state separately from current health;
+   do not leave a competing retry or an unannounced watchdog running.
+
+#### Recorded Implementation and Validation Outcome
+
+- The shared parameters watcher, source recreation, staged scanout pools,
+  per-layer buffer/LUT ownership, six demos, and common D3D11/D3D12
+  presentation path are implemented. Showcase skips unsupported chapters
+  explicitly; unsupported standalone modes reject. Live VRR reports the
+  actual effective state separately from the best-effort preference.
+- Local regression coverage includes 600,000 independent overlay lease
+  schedules, six animated source patterns, capability masks, five LUT
+  presets, and 130 backend MPO/VRR request checks. Release x64 built and
+  signed successfully; ARM64 compile coverage is not hardware validation.
+- Matching old driver/PDB crash analysis identified a hotplug lifetime
+  error in `Adapter::RefreshDisplays`: `IddCxMonitorDeparture` already
+  destroys the monitor, but the old code subsequently read its context and
+  deleted it again. The implementation now snapshots logging data before
+  departure and removes only the saved pointer from the adapter index.
+  The executable production-loop regression passed 178,766 checks with
+  guarded contexts, synchronous/deferred cleanup, and failed departures.
+  The exact historical loop fails that regression with an access violation.
+  Release x64 rebuild/signing and ARM64 compile checks passed after the fix.
+- The control app passed 404 local assertions and NativeAOT/UI smoke checks.
+  All 285 published files were copied and hash-verified in the synchronized
+  Desktop `NvIddCx-Control` folder; the copied app launched responsively.
+  Read-only SSH subsequently verified all 285 synchronized target files
+  against the local publication. An explicitly coordinated GUI-only smoke
+  then passed in the target's limited interactive console session: six tab
+  transitions, responsive window, accurate disconnected status, and graceful
+  exit in 8.1 seconds. Apply was disabled and never invoked; no settings were
+  edited. The owned app, task, and temporary helper files were cleaned up
+  before release. A separate explicitly coordinated, already-elevated Apply
+  helper roundtrip then passed in 550 ms: demo speed changed from absent to
+  101 and back to absent. Independent registry journals verified restoration
+  of all 17 known settings and the legacy fallback; `ConfigRevision` advanced
+  from absent to DWORD 4 by design. Both committed revisions were even.
+  Helpers, request files, and temporary staging files were cleaned up before
+  release. This earlier helper-only test did not exercise production GUI
+  request creation; interactive UAC consent remains untested.
+- During the exclusive NVIDIA window, preflight found the old driver host
+  already absent and the exact ShadowCast 2 Pro feed black. The old UMDF
+  crash dump is timestamped October 11 at 01:42:16 PDT, before any candidate
+  installation. One baseline-only NVIDIA restart stalled; its owned
+  `pnputil` process was terminated. This does not prove the underlying PnP
+  operation completed or was cancelled. The owned ETW logger was stopped
+  and no experiment tasks remained.
+- At the initial 02:30 PDT check, NVIDIA retained `oem4.inf` and baseline DLL
+  SHA256 `92730978FD154FE67FA2BA7BEF1348CF8D0DEA33886E3A9A87EAB9B20969F9C6`,
+  but had no loaded host despite PnP problem code 0. AMD retained `oem22.inf`
+  and its pre-existing problem code 43. That initial window included no
+  candidate deployment, registry edits, AMD operations, or reboot. Its
+  reservation was released with the unhealthy-runtime warning.
+- A subsequent user-authorized reboot, in a newly coordinated exclusive
+  NVIDIA window, restored both devices to problem code 0. NVIDIA candidates
+  were then installed and verified by the actual loaded DLL hash. AMD's
+  `oem22.inf` and service were preserved; no AMD device operations occurred.
+- Hardware testing exposed two corrected scene-integration bugs: retirement
+  queried a never-submitted overlay's invalid notifier, and overlay upload
+  passed a null required timing argument. The guarded production retirement
+  regression passed 122 checks. Neither fix bypasses completion checks for
+  submitted or disabled layers.
+- The remaining failure is the first actual atomic two-layer activation.
+  NVKMS accepts the commit with `flipResult=0`, but **both primary and overlay**
+  remain pending with timestamp 0 after two seconds; their pending/timestamp
+  queries succeed. CSC Color Lab and Alpha Orbit with `FlipMode=0` reproduce
+  the same failure. ShadowCast 2 Pro captured the preserved desktop without
+  an overlay, not a successful demo. Uncertain leases remain owned, and
+  further scene adoption explicitly requires scanout recovery. Scoped NVIDIA
+  restart with demos Off restores desktop presentation.
+- The fixed control app passes 442 local assertions. Its production request
+  writer now explicitly assigns the current user's SID and a protected
+  private ACL, rather than inheriting Administrators ownership from an
+  elevated token. The final actual GUI Apply/restore roundtrip passed in
+  4,691 ms: revisions 34 -> 36 -> 38, speed absent -> 101 -> absent, and
+  unchanged other settings. Both phases passed UI, registry-snapshot,
+  request-owner, ACL, and size checks. Earlier automation-only selection
+  failures remain separate evidence; the successful test uses a fresh owned
+  GUI for the restore. These already-elevated tests do not establish
+  interactive UAC consent.
+- The old user-owned GUI remained running and prevented EXE replacement.
+  The complete fixed publication was deployed beside it in synchronized
+  Desktop `NvIddCx-Control-Fixed`; all 287 published files hash-verified.
+  The old process was not closed or terminated.
+- With demos Off, live D3D11 adoption reached applied generation 2, then
+  default native D3D12 reached generation 3 without a device restart.
+  Invalid `SwapChainApi=99` and unsupported rotation mode 2 rejected while
+  retaining the running generation 3 desktop. Restoring normalized defaults
+  kept generation 3. An odd revision likewise retained the last good source;
+  completing an equivalent revision did not recreate it. Matching ETW
+  verifies real D3D11 and D3D12 latches, with no lost events, format errors,
+  or unknown events. The status pipe reports effective VRR unavailable rather
+  than claiming the requested preference is active.
+- First-window 03:30 PDT cleanup retained NVIDIA `oem21.inf`, loaded DLL SHA256
+  `6F0A3FD7AECF6D4542BC16C2F53F782DC21901FF23B7DE8E60AB47BB78D32481`,
+  and stable host PID 10044. NVIDIA and original AMD `oem22.inf` both reported
+  problem code 0. The exact original registry journal was restored: all
+  17 known settings and the legacy fallback absent, `ConfigRevision=DWORD4`.
+  ShadowCast 2 Pro freshly showed the normal desktop with demos Off.
+  Owned rollback, pulse, and GUI tasks were removed, the runtime logger was
+  stopped, and unused hash-verified task-owned packages were removed.
+  Original `oem4.inf` and its exported backup remain available. The shared
+  target was explicitly released to the AMD session with the new NVIDIA
+  baseline and the warning to keep demos Off.
+- The subsequent exclusively coordinated diagnostic window verified equal
+  DMA GET/PUT offsets for the core, both normal windows, and both immediate
+  windows. RM reported core and primary BUSY, overlay IDLE, and no debug
+  mode; immediate-channel state queries returned unsupported (`0x1F`), not
+  a verified idle state. Both windows' ARM ownership matched head 3.
+  Current primary and overlay notifier slots remained NOT_BEGUN with invalid
+  timestamps; an older primary slot still contained its valid timestamp.
+  Diagnostics now inspect a bounded submitted tail before PUT, not stale
+  words at an already-empty GET. This establishes DMA consumption, not a
+  completed display update or the root cause of the interlock failure.
+- A controlled CSC origin-position experiment still failed to latch.
+  Forcing a full modeset on first overlay activation instead produced a
+  lost display notification and a status timeout; subsequent SSH remained
+  responsive. Both experimental behavior changes were removed.
+- The 04:00:34 PDT diagnostic-window handoff retained NVIDIA `oem36.inf`,
+  actual loaded DLL SHA256
+  `7F1D3D6F31B8065BD9888137FF06BC531D5DA6F7EBC90C594A6391A4C1C84DA2`,
+  and stable host PID 6240 started at 03:59:15.6961095 PDT. Native D3D12
+  with demos Off reached applied generation 1/revision 4; exact ShadowCast
+  2 Pro capture showed the normal desktop. Both exact devices reported
+  problem code 0, and AMD's OEM package/service remained unchanged.
+  The original journal was again restored, all owned tasks/loggers were
+  cleared, and six unbound diagnostic packages were removed only after
+  verifying their exported DLL hashes. OEM numbers had been reused, so
+  their names alone were not treated as package ownership. Original
+  `oem4.inf` and healthy demo-Off fallback `oem21.inf` were retained.
+  Release x64 build/signing, ARM64 NVKMS compilation, the IDDCX regression
+  runner, and 130 production backend request checks passed. The shared
+  target was explicitly released with this superseding NVIDIA baseline.
+- The third exclusively coordinated window added class-gated, read-only
+  frontend register and window assembly/armed cache snapshots through the
+  registered UMDF aperture. All five channels were idle immediately before
+  activation. After the accepted commit, the primary window was stuck in
+  `WAIT_ILK_PH_2` (`0xAC050707`), core was BUSY (`0xA00C0007`), and the overlay
+  normal channel remained IDLE (`0x20040100`). Its new surface, size, notifier,
+  and composition methods were present in assembly, but armed still held
+  the disabled state. With position specified, the overlay immediate channel
+  was BUSY (`0xA0050005`); the primary immediate channel stayed idle.
+  All controls were `0x13`, with no trash/skip/ignore acceleration flags.
+  Only normal-window status has the decoded update-state field; core and
+  immediate status are logged raw, without applying that field layout.
+- Interval-one scheduling reproduced the same cache/phase state.
+  A stripped-down opaque origin overlay with optional transforms and LUT
+  removed still failed while **both immediate channels remained idle**.
+  Moving normal window submissions before the core submission, preserving
+  all atomic interlock masks, also failed. Both temporary source changes
+  were reverted; no interlock or completion bypass was retained. Matching
+  ETW/PDB pairs for the cache, interval-one, opaque, and core-last experiments
+  decoded with zero lost events, format errors, and unknowns. These results
+  narrow the failure to basic window activation/arming, but do not establish
+  a root cause or a hardware workaround.
+- The 04:32:24 PDT final third-window cleanup retained experiment-free NVIDIA
+  `oem28.inf`, actual loaded DLL SHA256
+  `D1A9E30D54D634C065A619B824A43B723FCEF4209E14814156BEC0AE38FB5A56`,
+  and stable host PID 10712 started at 04:31:11.6345158 PDT. Native D3D12
+  with demos Off reached applied generation 1/revision 4; exact ShadowCast
+  2 Pro capture showed the normal desktop. Both exact devices reported
+  problem code 0, with AMD's original OEM package/service unchanged.
+  The exact original journal was restored and owned tasks/loggers cleared.
+  Five unbound diagnostic packages were deleted only after export/hash
+  ownership checks; original `oem4.inf`, healthy demo-Off `oem21.inf`, and
+  the earlier released `oem36.inf` were retained. The shared target was
+  explicitly released to AMD with this superseding baseline and the warning
+  to keep demos Off. Release x64 build/signing, exact latest ARM64 NVKMS
+  compilation, and 217 production backend/channel-snapshot checks passed.
+  Snapshot checks cover class gates, register/cache offsets, read order,
+  aperture bounds, unavailable attach state, and meaningful field decoding.
+- Read-only WER inspection after release found six `nv-iddcx.dll`
+  `0xC0000602` fail-fast reports during the third window's recovery periods,
+  not access-violation reports. The exact core-last PDB places its reported
+  offset `0x387704` inside `NvPlatformRmBugCheck`. No WDF minidump from that
+  time window was available, so a caller stack is not established. Two HAL
+  IOMMU events also occurred around disable/recovery; neither correlation
+  proves the cause of the activation stall.
+  RM platform messages previously reached only debugger output. The local
+  diagnostic bridge now mirrors them to the existing IDDCX WPP provider,
+  preserving debugger output, and records Xid text, assertion frame
+  addresses, and fail-fast bug codes without changing recovery behavior.
+  These events use informational ETW level with the original platform
+  level in the payload, avoiding an unverified severity translation.
+  Eighteen production logging checks cover registration, truncation,
+  formatting, common-host routing, Xid, assertion frames, and concurrency.
+  Release x64 build/signing and ARM64 NVKMS/IDDCX compilation passed.
+  Capturing these messages on the target requires a new coordinated window;
+  the released OEM28 baseline has not been replaced by this local build.
+- The fourth explicitly acknowledged window deployed the RM-to-ETW bridge,
+  then the expanded state-cache/stack diagnostic. Both reproduced Xid 56:
+  `CMDre 00000008 00000200 00001001 00000005 00000020`.
+  Channel 8 is normal window 7, method `0x200` is UPDATE, and public Nouveau
+  definitions identify reason 5 as `INVALID_STATE`; detail `0x20` is not
+  decoded. Core ownership and new format/scaling usage bounds were armed,
+  while the overlay's new image, size, notifier, and ILUT remained assembly
+  only. Thus consumed DMA bytes did not mean UPDATE passed state validation.
+  The initial incomplete demo request was explicitly rejected because no
+  connector was selected; the reproductions selected connector 3.
+  Recovery also rejected an overlay-disable UPDATE with the same reason.
+  Removing the demo values and restarting only NVIDIA restored the desktop.
+- Captured recovery frames, resolved against the exact state-validation PDB,
+  establish a separate timeout-classification bug: an outer
+  `rpcRmApiFree_GSP` waits in `_kgspRpcRecvPoll`; its memory subsystem probe
+  calls `kbusSendSysmembarSingle_KERNEL`, which issues a second synchronous
+  GSP control and hits the no-recursive-poll assertion at line 2893.
+  The local Windows-only fix explicitly returns `NV_ERR_NOT_SUPPORTED`
+  with a warning when this diagnostic would require a nested RPC. Hardware
+  probes backed by local methods, disabled detection, normal non-polling
+  callers, timeout reporting, and fatal/reset policy remain unchanged.
+  Thirty-four extracted production-body probe checks in each of Windows and
+  unchanged non-Windows builds, plus eighteen platform
+  logging checks passed, as did the Release x64 solution build/signing.
+  This guard was subsequently deployed in the fifth window, but that
+  window did not exercise the nested-RPC timeout path. It remains
+  runtime-unverified and does not bypass overlay UPDATE validation.
+- Final fourth-window cleanup at 04:52:43 PDT retained NVIDIA `oem8.inf`,
+  loaded DLL SHA256
+  `450A048660B48FFC16F3AAA89405EF967284A716A54C434F5BF168C422D80792`,
+  stable host PID 12444 started at 04:51:27.3118488 PDT, native D3D12/demo Off
+  applied generation 1/revision 4, and the exact original registry journal.
+  Both exact devices reported problem code 0; AMD OEM22/original service
+  remained untouched. Tasks/loggers/rollback/retry were clear, and actual
+  ShadowCast 2 Pro capture showed the desktop. Unbound `oem5.inf` was removed
+  only after export/hash ownership verification; prior OEM28 was retained.
+  The target was explicitly released to AMD with the superseding OEM8/hash
+  baseline. Both RM-ETW captures and the expanded capture decoded with zero
+  lost events, format errors, or unknowns. Expanded snapshot regression
+  passed 301 checks and ARM64 NVKMS compilation passed.
+- The fifth acknowledged window deployed signed Release `oem5.inf`, loaded
+  DLL SHA256
+  `D233EB9C69CE7E8C2DD1CF25D8E857CB7277A8AE8343513000825950ACAC0F51`.
+  LUT Gallery selected on connector 3 reached applied generation 2/revision
+  2, with the actual overlay visible in ShadowCast capture and repeated
+  layer timestamp retirements and overlay-only frames. Its explicit input
+  LUT distinguishes it from the earlier failing default-LUT scenes, but
+  does not alone establish the underlying default-resource defect.
+  Switching to CSC Color Lab failed the old scene's retirement with software
+  `flipResult=1` before the new scene activated. Neither capture contained
+  Xid or the guarded nested-RPC timeout; both decoded with zero lost events,
+  format errors, or unknowns. This is not runtime acceptance of the guard.
+  Removing the demo settings and restarting only NVIDIA recovered native
+  D3D12/demo Off. Final successful cleanup at October 11 06:38:21 PDT
+  verified OEM5/the D233 image, host PID 10300 started at
+  06:37:31.6994872 PDT, applied generation 1/revision 4, original settings
+  absent, healthy unchanged AMD OEM22, and owned tasks/loggers cleared.
+  Physical capture showed the restored desktop. A later SSH refresh failed
+  local key-agent signing before remote execution; the explicit AMD release
+  distinguished recorded cleanup from later unverified health.
+- The sixth acknowledged window fixed live overlay disable at the actual
+  production validator: a non-null surface container with a zero image
+  handle incorrectly acquired a notifier, which is invalid for a disabled
+  channel. Null disabled surfaces now have no layer notifier, and the
+  same atomic non-tearing flip resubmits the primary as a real completion
+  witness. Pending disable gates later submissions and holds old leases.
+  Regression tests execute the actual disabled-channel validator and cover
+  witness retirement, lease retention, and neutral/custom LUT handling.
+  Packed Windows layers use the explicit CE-uploaded neutral ILUT instead
+  of the upstream default allocation; the underlying allocation/binding
+  difference remains an unproven defect hypothesis.
+- October 12 final candidate DLL SHA256
+  `1C457AA090B604D47B548699AF134D701314D3CD4561194F9B0B685C3FF22E7F`
+  was deployed as OEM37. All six scenes and Off applied on D3D12 (generations
+  3-9) and D3D11 (10-16), with the same PID 1452/start
+  04:53:02.1040459 PDT throughout. Earlier F6D tests physically verified
+  Alpha, CSC, gain, LUT, and Showcase; final-build recordings added 12 seconds
+  of adaptive Geometry and 36 seconds of the full supported Showcase cycle.
+  Exact transform mask `0x55` permits 0/180 degrees and reflected-X variants.
+  Only unity scale passed the finite preflight; 0.5x/1.5x were rejected before
+  activation. The scale root cause is not established, and no validation
+  bypass or software-prerotation substitute was introduced.
+- Final-build over-budget plane count, malformed type, and odd revision
+  tests retained the active scene and applied generation. An equivalent
+  even commit did not recreate it. Requested cadences 15/60/30 applied;
+  achieved cadence still needs measurement. Private memory returned near
+  the native baseline, but handles increased from 430 to 503 across this
+  round. Twelve additional read-only pipe polls left the count unchanged;
+  source-recreation handle ownership/long-run stability remain open.
+  Final ETW decoded 643,930 events with zero lost events, format errors,
+  or unknowns. Its 36 software flip failures matched intentional rejected
+  scale probes; no Xid, retirement timeout, assertion, fail-fast, or nested
+  RPC warning was observed. The GSP timeout guard remains unexercised.
+- Sixth-window final cleanup at October 12 05:05:10 PDT verified OEM37/the
+  1C457 image, the unchanged host lifetime, native D3D12/Off applied
+  generation 22/revision 4, all 17 values and legacy readback absent, AMD
+  OEM22/original service/problem 0, owned tasks zero, logger stopped, and
+  no PnP process or rollback/retry/deploy in flight. Fresh ShadowCast capture
+  showed the restored desktop, followed by an explicit coordination release.
+  These are timestamped recorded findings, not a claim about subsequent
+  target state. Interactive unelevated GUI/UAC, long-run resources/cadence,
+  and all-layer hotplug/power/failure recovery remain acceptance work.
+- A new, separately acknowledged fifteen-minute NVIDIA window validated
+  the cadence correction: QPC absolute deadlines replace coarse
+  `GetTickCount64`, and a high-resolution waitable timer waits only until
+  the next deadline instead of adding a full interval after rendering.
+  Missed deadlines advance to the next slot without catch-up bursts.
+  Tests cover 3,600 late-work frames per requested rate, exact remaining
+  budgets, missed-slot skipping, restart, invalid rates, and overflow.
+  Existing IDDCX regressions, signed Release x64 build, and fresh ARM64/WPP
+  compilation passed.
+  Signed DLL `D6B437A94DD3D29D3AE36FD46327E60ED123A1CB88B101A63D7D000BF5E43211`
+  was deployed as OEM45. Three 36-second full-Showcase windows measured
+  unique layer retirements at 15.000/29.9997/58.804 Hz for requests of
+  15/30/60, versus roughly 11.6/20.4/30.3 in earlier sampled windows.
+  Median intervals were 67/33/17 ms. This establishes substantially improved
+  observed cadence, not an exact 60 Hz guarantee. All six native scenes
+  and Off passed again; D3D11 Geometry/Gallery/Off also passed. Physical
+  capture recorded another complete supported Showcase cycle.
+- Exact-process read-only handle snapshots identified the growth as three
+  `DxgkSharedSyncObject` handles per source recreation, 3 to 45 across
+  14 changes in the same host. Primary shared resources stayed at 3 and
+  private memory remained near 111 MB. Nonduplicable handle classes are
+  reported explicitly by error/type index, not mislabeled. This narrows
+  the investigation but does not prove which component owns the open
+  synchronization handles. Do not guess-close opaque or borrowed handles.
+  Allocation/open/close ownership tracing and long-run stability remain
+  required before final reliability acceptance.
+- Seventh-window final cleanup at October 12 05:25:36 PDT verified OEM45/the
+  D6B437 image, stable PID 13220/start 05:18:12.0612351 PDT, native12/Off
+  applied generation 15/revision DWORD4, all 17 settings and legacy absent,
+  unchanged healthy AMD OEM22/original service, zero owned tasks/logger,
+  and no PnP/rollback/retry in flight. Fresh physical capture showed the
+  desktop. Exact-PDB ETW decoded 446,120 events with zero loss, format errors,
+  or unknowns and no Xid/assertion/retirement timeout/pipeline failure/nested
+  RPC warning. The target was explicitly released within the time budget.
+  Interactive unelevated UAC and all-layer hotplug/power/failure acceptance
+  remain unverified; the GSP timeout guard remains unexercised.
+
 ### 12. Validate Presentation and Teardown
 
 For each driver, test CPU-forced, DMA-forced, automatic fallback, injected CE
