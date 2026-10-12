@@ -1981,6 +1981,9 @@ Add an unpackaged C# WinUI 3 application under `windows-open\tools` after mode
 review. Use a pinned supported .NET/Windows App SDK/CsWinRT combination and
 `PublishAot=true`; Windows App SDK has supported NativeAOT since 1.6. Prove a
 minimal themed app publishes and launches before building the full editor.
+Use the smaller `Microsoft.WindowsAppSDK.WinUI` component package rather
+than the aggregate SDK so unused AI, ML, Widgets, and DWrite components are
+not brought into the control tool.
 
 - Compact two-section layout: **Swapchain** and **MPO Demos**, with Fluent
   cards, light/dark/system themes, Mica when available, and an accessible
@@ -2396,6 +2399,17 @@ Reference contracts: [UMDF registry handles][live-params-handle],
   RPC warning. The target was explicitly released within the time budget.
   Interactive unelevated UAC and all-layer hotplug/power/failure acceptance
   remain unverified; the GSP timeout guard remains unexercised.
+- October 12 control-tool packaging uses `Microsoft.WindowsAppSDK.WinUI`
+  1.8.260224000, retaining the WinUI version previously resolved through
+  aggregate SDK 1.8.260317003. Regenerated locks omit the aggregate SDK and
+  its unrelated AI/ML/Widgets/DWrite/Runtime/Tensors dependencies. The helper
+  clears only its exact publish output before building so stale assets cannot
+  obscure the reduction. Clean NativeAOT publication shrank from 287 files/
+  approximately 146.9 MB to 240 files/96.0 MB (about 35% fewer bytes).
+  The native x64 GUI PE, absent CLR/JIT, required WinUI DLLs and app PRI,
+  442 production-model/transport assertions including 38 request-file checks,
+  and responsive three-tab local UI smoke passed. No target deployment or
+  interactive UAC test was performed for this package-only change.
 
 ### 12. Validate Presentation and Teardown
 

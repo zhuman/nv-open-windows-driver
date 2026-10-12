@@ -1,0 +1,17 @@
+<Application
+    x:Class="NvIddCx.Control.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+            <Color x:Key="SystemAccentColor">#75E5BB</Color>
+            <SolidColorBrush x:Key="AccentFillColorDefaultBrush">#75E5BB</SolidColorBrush>
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush">#9BF0CE</SolidColorBrush>
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush">#5FC69F</SolidColorBrush>
+            <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush">#0B1718</SolidColorBrush>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
