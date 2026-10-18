@@ -99,6 +99,7 @@ public:
         return colorTransform_;
     }
     bool Active() const noexcept { return active_; }
+    bool HardwareRemoved() const noexcept;
     auto LockFrameStateShared() noexcept
     {
         return stateLock_.lock_shared();

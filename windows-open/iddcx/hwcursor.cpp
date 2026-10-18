@@ -112,7 +112,7 @@ void HwCursor::Process() noexcept
     {
         const DWORD wait = WaitForMultipleObjects(
             ARRAYSIZE(handles), handles, FALSE, retry ? 16 : INFINITE);
-        if (wait == WAIT_OBJECT_0 || wait == WAIT_FAILED)
+        if (wait == WAIT_OBJECT_0 || wait == WAIT_FAILED || output_->HardwareRemoved())
         {
             break;
         }
@@ -235,7 +235,7 @@ void HwCursor::Process() noexcept
             updates, whiteLevel);
     }
     auto outputLock = output_->LockFrameStateShared();
-    if (output_->Active())
+    if (output_->Active() && !output_->HardwareRemoved())
     {
         NvKmsWindowsUpdateCursor(output_->AssignedHead(),
             output_->DisplayState().displayHandle, nullptr, NV_TRUE, 0, 0, 80);

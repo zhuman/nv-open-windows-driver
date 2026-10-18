@@ -33,6 +33,7 @@ typedef struct NV_KMS_WINDOWS_DISPLAY_INFO
 
 typedef struct NV_KMS_WINDOWS_SURFACE NV_KMS_WINDOWS_SURFACE;
 typedef void (*NV_KMS_WINDOWS_DISPLAY_CHANGE_CALLBACK)(void* context);
+typedef NvBool (*NV_KMS_WINDOWS_GPU_REMOVED_CALLBACK)(void* context);
 
 typedef enum NV_KMS_WINDOWS_SCANOUT_FORMAT
 {
@@ -208,13 +209,16 @@ typedef struct NV_KMS_WINDOWS_CURSOR_TIMING
 	NvU64 programEnd;
 } NV_KMS_WINDOWS_CURSOR_TIMING;
 
+// The predicate must not block; its context must outlive GPU unregistration.
 NV_STATUS NvKmsWindowsRegisterGpu(
 	NvU32 gpuId,
 	NvU32 domain,
 	NvU8 bus,
 	NvU8 slot,
 	NvU8 function,
-	void* osDevice);
+	void* osDevice,
+	NV_KMS_WINDOWS_GPU_REMOVED_CALLBACK removedCallback,
+	void* removedContext);
 void NvKmsWindowsUnregisterGpu(NvU32 gpuId);
 NV_STATUS NvKmsWindowsProbeGpuEnumeration(NV_KMS_WINDOWS_GPU_INFO* gpuInfo);
 NV_STATUS NvKmsWindowsProbeDisplays(NV_KMS_WINDOWS_DISPLAY_INFO* displayInfo);
@@ -324,6 +328,9 @@ void NvKmsWindowsSetDisplayChangeCallback(
 	void* context);
 NV_STATUS NvKmsWindowsInitialize(void);
 void NvKmsWindowsShutdown(void);
+NvBool NvKmsWindowsIsGpuRemoved(void);
+// Unavailability alone is not evidence of physical surprise removal.
+NvBool NvKmsWindowsIsGpuSurpriseRemoved(void);
 
 #ifdef __cplusplus
 }

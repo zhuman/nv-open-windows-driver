@@ -46,6 +46,24 @@ static void channelPushMethod(OBJCHANNEL *pChannel, CHANNEL_PB_INFO *pChannelPbI
                               NvBool bPipelined, NvBool bInsertFinishPayload,
                               NvU32 launchType, NvU32 semaValue, NvU32 copyType, NvU32 **ppPtr);
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool NvKmsWindowsIsGpuSurpriseRemoved(void);
+void NvKmsWindowsTraceMessage(const char *message);
+#endif
+
+static NvBool
+_channelGpuIsSurpriseRemoved(void)
+{
+#if defined(NV_WINDOWS_IDDCX)
+    if (NvKmsWindowsIsGpuSurpriseRemoved())
+    {
+        NvKmsWindowsTraceMessage("RM channel: physical removal; canceling hardware access");
+        return NV_TRUE;
+    }
+#endif
+    return NV_FALSE;
+}
+
 /* Public APIs */
 NV_STATUS
 channelSetupIDs
@@ -304,6 +322,9 @@ channelServiceScrubberInterrupts(
     OBJCHANNEL *pChannel
 )
 {
+    if (_channelGpuIsSurpriseRemoved())
+        return;
+
     OBJGPU *pGpu = pChannel->pGpu;
     Intr *pIntr = GPU_GET_INTR(pGpu);
     KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
@@ -349,6 +370,9 @@ channelWaitForFinishPayload
 {
     NV_ASSERT_OR_RETURN(pChannel != NULL, NV_ERR_INVALID_STATE);
 
+    if (_channelGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     OBJGPU *pGpu = pChannel->pGpu;
     RMTIMEOUT timeout;
     NV_STATUS status = NV_OK;
@@ -356,7 +380,16 @@ channelWaitForFinishPayload
     gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, GPU_TIMEOUT_FLAGS_BYPASS_THREAD_STATE);
     while (1)
     {
-        if (READ_CHANNEL_PAYLOAD_SEMA(pChannel) >= targetPayload)
+        NvU32 completedPayload;
+
+        if (_channelGpuIsSurpriseRemoved())
+            return NV_ERR_GPU_IS_LOST;
+
+        completedPayload = READ_CHANNEL_PAYLOAD_SEMA(pChannel);
+        if (_channelGpuIsSurpriseRemoved())
+            return NV_ERR_GPU_IS_LOST;
+
+        if (completedPayload >= targetPayload)
         {
             break;
         }
@@ -380,6 +413,9 @@ channelWaitForFinishPayload
         }
     }
 
+    if (_channelGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     return status;
 }
 
@@ -396,6 +432,9 @@ channelWaitForFreeEntry
 {
     NV_ASSERT_OR_RETURN(pChannel != NULL, NV_ERR_INVALID_STATE);
 
+    if (_channelGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     OBJGPU *pGpu = pChannel->pGpu;
     RMTIMEOUT timeout;
     NV_STATUS status = NV_OK;
@@ -408,10 +447,15 @@ channelWaitForFreeEntry
     gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, GPU_TIMEOUT_FLAGS_BYPASS_THREAD_STATE);
     do
     {
+        if (_channelGpuIsSurpriseRemoved())
+            return NV_ERR_GPU_IS_LOST;
+
         getIndex = READ_CHANNEL_PB_SEMA(pChannel);
 
-        NV_PRINTF(LEVEL_INFO, "Get Index: %x, PayloadIndex: %x\n", getIndex,
-                              READ_CHANNEL_PAYLOAD_SEMA(pChannel));
+        if (_channelGpuIsSurpriseRemoved())
+            return NV_ERR_GPU_IS_LOST;
+
+        NV_PRINTF(LEVEL_INFO, "Get Index: %x\n", getIndex);
 
         if (getIndex != putIndex)
         {
@@ -436,6 +480,9 @@ channelWaitForFreeEntry
             osSchedule();
         }
     } while(1);
+
+    if (_channelGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
 
     if (status == NV_OK)
     {

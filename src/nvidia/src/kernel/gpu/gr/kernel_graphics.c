@@ -67,6 +67,11 @@
 #include "class/clc637.h"
 #include "class/clc638.h"
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool NvKmsWindowsIsGpuSurpriseRemoved(void);
+void NvKmsWindowsTraceMessage(const char *message);
+#endif
+
 //
 // We use NV2080_CTRL_INTERNAL_GR_MAX_GPC to statically allocate certain
 // GPC related array in ctrl call header file. We will need to adjust
@@ -2604,7 +2609,21 @@ void kgraphicsFreeGlobalCtxBuffers_IMPL
     if (bEvict)
     {
         NV_STATUS status;
+#if defined(NV_WINDOWS_IDDCX)
+        if (NvKmsWindowsIsGpuSurpriseRemoved())
+        {
+            NvKmsWindowsTraceMessage("RM graphics context cleanup: physical removal; skipping hardware cache eviction");
+            return;
+        }
+#endif
         status = kmemsysCacheOp_HAL(pGpu, pKernelMemorySystem, NULL, FB_CACHE_VIDEO_MEMORY, FB_CACHE_EVICT);
+#if defined(NV_WINDOWS_IDDCX)
+        if ((status == NV_ERR_GPU_IS_LOST) && NvKmsWindowsIsGpuSurpriseRemoved())
+        {
+            NvKmsWindowsTraceMessage("RM graphics context cleanup: physical removal during cache eviction; not claiming completion");
+            return;
+        }
+#endif
         NV_ASSERT((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
     }
 }
@@ -4593,4 +4612,3 @@ NvU32 kgraphicsMapGlobalCtxBufferToRegkey_IMPL(OBJGPU* pGpu, KernelGraphics* pKe
 void kgraphicsSetContextBufferPteKind_IMPL(OBJGPU* pGpu, KernelGraphics* pKernelGraphics, MEMORY_DESCRIPTOR** ppMemDesc, NvU32 bufferType, NvBool globalBuffer, NvU32 pteKind)
 {
 }
-

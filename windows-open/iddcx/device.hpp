@@ -40,6 +40,7 @@ struct DeviceContext final
     volatile LONG nvKmsWorkCanceled;
     volatile LONG nvKmsWorkCompleted;
     volatile LONG d0Active;
+    volatile LONG surpriseRemoved;
     bool rmDeviceOpened;
     bool rmGpuAttached;
     bool rmGpuStateLoaded;
@@ -51,11 +52,18 @@ struct DeviceContext final
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DeviceContext, GetDeviceContext);
 
+inline bool IsHardwareRemoved(WDFDEVICE device) noexcept
+{
+    return InterlockedCompareExchange(
+        &GetDeviceContext(device)->surpriseRemoved, 0, 0) != 0;
+}
+
 EVT_WDF_DRIVER_DEVICE_ADD DeviceAdd;
 EVT_WDF_DEVICE_PREPARE_HARDWARE PrepareHardware;
 EVT_WDF_DEVICE_RELEASE_HARDWARE ReleaseHardware;
 EVT_WDF_DEVICE_D0_ENTRY EnterD0;
 EVT_WDF_DEVICE_D0_EXIT ExitD0;
+EVT_WDF_DEVICE_SURPRISE_REMOVAL SurpriseRemoval;
 EVT_WDF_OBJECT_CONTEXT_CLEANUP DeviceCleanup;
 NTSTATUS StartNvKmsInitialization(_In_ WDFDEVICE device) noexcept;
 DWORD WINAPI InitializeNvKms(_In_ void* parameter);

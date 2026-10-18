@@ -832,6 +832,11 @@ void Output::OnSwapChainDestroyed(SwapChainD3D12* swapChain) noexcept
     }
 }
 
+bool Output::HardwareRemoved() const noexcept
+{
+    return IsHardwareRemoved(owner_->Device());
+}
+
 void Output::QuiesceSwapChain() noexcept
 {
     SwapChainD3D11* swapChain = nullptr;

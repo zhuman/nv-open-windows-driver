@@ -25,6 +25,7 @@
 
 
 #include "platform/chipset/chipset.h"
+#include "resserv/rs_server.h"
 
 #include "gpu_mgr/gpu_mgr.h"
 #include "gpu/gpu.h"
@@ -175,7 +176,7 @@ memDestruct_IMPL
     if (pMemory->bRpcAlloc && (IS_VIRTUAL(pGpu) || IS_FW_CLIENT(pGpu)))
     {
         NV_RM_RPC_FREE(pGpu, hClient, hParent, hMemory, status);
-        NV_ASSERT((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
+        NV_ASSERT(serverIsFreeRpcStatusExpected(status));
     }
 }
 

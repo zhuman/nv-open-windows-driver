@@ -43,6 +43,35 @@
 #include "class/cl0070.h" // NV01_MEMORY_VIRTUAL
 #include "class/cl50a0.h" // NV50_MEMORY_VIRTUAL
 
+#if defined(NV_WINDOWS_IDDCX)
+#include "core/printf.h"
+
+void NvKmsWindowsTraceMessage(const char *message);
+
+static void
+_virtmemTraceLifetime
+(
+    const char    *operation,
+    VirtualMemory *pVirtualMemory
+)
+{
+    Memory *pMemory = staticCast(pVirtualMemory, Memory);
+    MEMORY_DESCRIPTOR *pMemDesc = pMemory->pMemDesc;
+    char message[512];
+
+    nvDbgSnprintf(message, sizeof(message),
+        "RM virtual memory %s: object=%p client=0x%x parent=0x%x handle=0x%x hvas=0x%x desc=%p va=0x%llx class=0x%x constructed=%u rpc=%u reserve=%u owner=0x%x allocated=%u",
+        operation, pVirtualMemory, RES_GET_CLIENT_HANDLE(pVirtualMemory),
+        RES_GET_PARENT_HANDLE(pVirtualMemory), RES_GET_HANDLE(pVirtualMemory),
+        pVirtualMemory->hVASpace, pMemDesc,
+        pMemDesc != NULL ? memdescGetPhysAddr(pMemDesc, AT_GPU, 0) : 0,
+        pMemory->categoryClassId, pMemory->bConstructed, pMemory->bRpcAlloc,
+        pVirtualMemory->bReserveVaOnAlloc, pMemory->HeapOwner,
+        pMemDesc != NULL ? pMemDesc->Allocated : 0);
+    NvKmsWindowsTraceMessage(message);
+}
+#endif
+
 static void _virtmemFreeKernelMapping(OBJGPU *, CLI_DMA_MAPPING_INFO *);
 
 /*!
@@ -263,6 +292,10 @@ _virtmemCopyConstruct
             vaspaceIncAllocRefCnt(pVASSrc, vaddr));
     }
 
+#if defined(NV_WINDOWS_IDDCX)
+    _virtmemTraceLifetime("duplicate-source", pSrcVirtualMemory);
+    _virtmemTraceLifetime("duplicate", pDstVirtualMemory);
+#endif
     return NV_OK;
 }
 
@@ -592,6 +625,9 @@ virtmemConstruct_IMPL
     pVirtualMemory->hVASpace = pAllocData->hVASpace;
     pVirtualMemory->bReserveVaOnAlloc = NV_TRUE;
 
+#if defined(NV_WINDOWS_IDDCX)
+    _virtmemTraceLifetime("allocate", pVirtualMemory);
+#endif
     if (pAllocData->hVASpace != NV01_NULL_OBJECT)
     {
         NV_CHECK_OK_OR_GOTO(status, LEVEL_SILENT,
@@ -680,6 +716,9 @@ virtmemDestruct_IMPL
 
     NV_ASSERT(pMemDesc);
 
+#if defined(NV_WINDOWS_IDDCX)
+    _virtmemTraceLifetime("destroy", pVirtualMemory);
+#endif
     memDestructCommon(pMemory);
 
     //

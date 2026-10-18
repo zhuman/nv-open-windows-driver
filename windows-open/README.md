@@ -766,6 +766,122 @@ was available. This recovery covers firmware startup timeouts, not arbitrary
 runtime GPU hangs; other GPUs, unsupported reset paths, and a second failed
 firmware attempt remain hardware-unverified.
 
+## USB4 enclosure surprise removal
+
+IddCx now registers `EvtDeviceSurpriseRemoval` and latches a terminal,
+per-device removal flag. The callback does not wait for workers, take the
+lifecycle lock, or dereference hardware owners: WDF may invoke it concurrently
+with preparation or release, including after resources have been released.
+It cancels initialization and prevents subsequent D0 entry.
+
+After removal, PCI configuration requests return `STATUS_DEVICE_REMOVED`;
+register reads return all ones and register writes are suppressed. Interrupt
+disable acknowledges the absent hardware without calling RM, and pending
+interrupt callbacks no longer service it. Interface dereferences, mappings,
+DMA allocations, and worker handles still follow their normal cleanup paths.
+Firmware-startup recovery does not request a reset for a removed device.
+
+Before output cleanup, release marks the RM GPU disconnected under its normal
+locks. Presentation shutdown then skips hardware-plane disable/flip-retirement
+waits for the physically absent GPU, without fabricating a completion on a live
+GPU or bypassing its ordinary retirement rules. Successful device opens remain
+owned for cleanup even if cancellation arrives immediately afterward.
+Adapter cleanup also skips the all-heads-off modeset after removal, and cursor
+shutdown does not submit a hardware hide for the absent GPU.
+NVKMS registers the same per-device terminal-removal predicate with its GPU
+record. Native display notifier waits abort with `FALSE` after removal, before
+reading or modifying the notifier; an RM fault alone does not bypass waits for
+a still-present device. GPU unregistration clears the predicate before the
+device context is released. Non-Windows notifier behavior is unchanged.
+The removal predicate remains registered through RM detach. During confirmed
+physical removal, RM resource-tree, memory, and VA-space cleanup accept a
+firmware-free
+`NV_ERR_GPU_IS_LOST`, log it, and still destroy local objects, mappings, and
+references. The error is preserved, not converted to successful firmware
+completion. An RM fault on a still-present GPU, an unavailable predicate, and
+unrelated free errors retain their assertion checks; non-Windows free-status
+rules are unchanged.
+
+The focused runner exercises production callback, interrupt, PCI/MMIO,
+RM-disconnect, and presentation-stop bodies with instrumented backends:
+
+```powershell
+& .\windows-open\iddcx\tests\run-device-removal-tests.ps1 -VerifyBaseline
+```
+
+`-VerifyBaseline` uses the pinned pre-fix commit `955ba86c`, so checking in the
+fix does not change its reproductions. It also demonstrates that the prior
+committed interrupt-disable path still calls RM after surprise removal.
+An initial physical unplug test
+reached the new callback, but Windows terminated the host after a 60-second
+teardown timeout. That build still attempted an all-heads-off modeset after
+the GPU was disconnected. A second test isolated another wait inside native
+surface unregistration: VRR teardown waited for a notifier from the absent GPU.
+The additional adapter/cursor guards and native notifier cancellation address
+these paths. A third test confirmed immediate notifier cancellation, then
+isolated a fail-fast RM assertion when firmware-free returned GPU-lost during
+cursor destruction. The removal-scoped software-cleanup change addresses that
+path. A fourth test progressed through cursor cleanup but found a separate
+firmware-free assertion in memory destruction; memory and VA-space destructors
+now use the same removal-scoped status policy. A fifth test passed those checks
+but found a missing local VA-heap block during CE-utils virtual-memory
+destruction. This software-ownership assertion remains enabled; it is not an
+expected firmware-free error. Windows diagnostic tracing now records virtual
+memory allocation/duplication/destruction and VA heap allocation, reference,
+free, and space-destruction identities to establish the mismatched lifetime.
+A sixth diagnostic test identified the double free: a failed NV50 unmap freed
+the owning virtual-memory object's reservation before that object's destructor
+freed it again. The DMA unmapper now preserves client-owned reservations when
+PTE invalidation fails and returns the original error; internal allocation
+cleanup and the missing-block assertion are unchanged. The focused runner also
+reproduces this double free with the committed production unmapper and checks
+the fixed unmapper together with the production virtual-memory destructor,
+including multi-GPU, peer, alignment, and error cases.
+The seventh unplug confirmed this ownership fix: the reservation was freed once
+by its owner and its VA space was destroyed. Teardown then failed in the memory
+scrubber's CE interrupt polling during RM unload. Channel waits and inline
+interrupt servicing now cancel on explicit physical-removal proof; CE teardown
+discards pending completion callbacks without invoking them or advancing the
+completion payload. Scrubber teardown skips GPU polling and page-cleanliness
+certification while still releasing local resources. Regression tests compile
+these production bodies, reproduce the committed scrubber failure, and check
+entry/read/service races, callback cancellation, cleanup, and healthy/non-Windows
+behavior. The eighth unplug confirmed truthful CE progress and channel
+cancellation, but exposed an earlier PMA free path still submitting VRAM scrub
+work and asserting on the canceled submission. PMA now invalidates its scrubber
+on confirmed physical removal, preserving scrub-on-free policy so ordinary
+clean allocations are rejected while CPU-side allocation bookkeeping can be
+released. It does not unregister the scrubber prematurely, disable scrubbing,
+or mark abandoned work complete. Submission and wait races propagate GPU-lost,
+release temporary descriptors/lists and locks, and publish no clean-page list;
+unrelated submission failures retain their assertion policy. Production-body
+regressions cover the PMA-to-scrub handoff and reproduce the committed failure.
+The ninth unplug passed those earlier failure points: PMA invalidation,
+CE cancellation, scrubber-destructor cancellation, and owning VA destruction
+all ran before a later graphics pre-unload assertion. Global graphics-context
+cleanup had released its local buffer descriptors, then tried to evict cache
+lines on the absent GPU. That final cache operation now skips confirmed
+physical removal; a removal race accepts only actual GPU-lost with the same
+proof. Healthy eviction, full-chip-reset handling, software ownership checks,
+and unrelated/non-Windows errors remain strict. The production-body regression
+also reproduces this committed graphics-cleanup failure.
+
+The tenth physical test on the RTX 4070 USB4 target passed a complete
+unplug/replug cycle on 2026-10-18. RM unload and detach returned success,
+finishing about 144 ms after the surprise-removal callback. The host exited
+naturally, the NVIDIA device and its ROG PG27U monitor disappeared, and no
+assertion, host-crash event, or watchdog termination was observed. Reconnecting
+restored the same installed driver without a reinstall, restart, or PnP
+intervention. Two independent health snapshots more than 30 seconds apart
+confirmed the same new host, native D3D12/VRR configuration, and reappeared ROG
+monitor parented to the NVIDIA device. The user reported that the image
+returned; this was not camera-verified. Exact-PDB unplug/replug trace decodes
+contained 8,031/13,146 events respectively, with no lost events, format errors,
+or unknown formats. The original AMD device, service/packages, typed settings,
+firmware, and trust state were preserved, and all owned diagnostic tasks and
+loggers were stopped. This validates one complete cycle on this target, not
+other GPUs or repeated-cycle soak reliability.
+
 ## Monitor control (I2C/DDC/CI)
 
 IddCx now registers monitor I2C transmit, receive, and availability-gated

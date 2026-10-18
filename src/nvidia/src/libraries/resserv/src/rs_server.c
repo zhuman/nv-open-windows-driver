@@ -34,6 +34,29 @@
 #include "os/os.h"
 #endif
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool NvKmsWindowsIsGpuSurpriseRemoved(void);
+void NvKmsWindowsTraceMessage(const char *message);
+#endif
+
+NvBool serverIsFreeRpcStatusExpected(NV_STATUS status)
+{
+    if ((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET))
+        return NV_TRUE;
+
+#if defined(NV_WINDOWS_IDDCX)
+    if ((status == NV_ERR_GPU_IS_LOST) && NvKmsWindowsIsGpuSurpriseRemoved())
+    {
+        NvKmsWindowsTraceMessage(
+            "RM free: physical removal, preserving NV_ERR_GPU_IS_LOST; local cleanup only");
+        return NV_TRUE;
+    }
+    return NV_FALSE;
+#else
+    return NV_FALSE;
+#endif
+}
+
 // Describes types of clients to find when getting client entries
 enum CLIENT_STATE
 {
@@ -256,7 +279,7 @@ NV_STATUS serverFreeResourceTreeUnderLock(RsServer *pServer, RS_RES_FREE_PARAMS 
             goto done;
 
         status = clientFreeResource(pResourceRef->pClient, pServer, pFreeParams);
-        NV_ASSERT((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
+        NV_ASSERT(serverIsFreeRpcStatusExpected(status));
 
         serverResLock_Epilogue(pServer, LOCK_ACCESS_WRITE, pLockInfo, &releaseFlags);
     }
@@ -1372,7 +1395,7 @@ serverFreeResourceTree
         freeParams.bInvalidateOnly = bInvalidateOnly;
         freeParams.pSecInfo = pParams->pSecInfo;
         status = serverFreeResourceTreeUnderLock(pServer, &freeParams);
-        NV_ASSERT((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
+        NV_ASSERT(serverIsFreeRpcStatusExpected(status));
 
         if (pServer->bDebugFreeList)
         {

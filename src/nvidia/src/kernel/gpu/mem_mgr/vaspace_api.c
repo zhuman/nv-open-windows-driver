@@ -24,6 +24,7 @@
 #include "core/core.h"
 #include "os/os.h"
 #include "core/locks.h"
+#include "resserv/rs_server.h"
 
 #include "gpu/mem_mgr/vaspace_api.h"
 #include "mem_mgr/vaspace.h"
@@ -570,7 +571,7 @@ skip_destroy:
     if ((IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu)) && !bBar1VA && !bFlaVA)
     {
         NV_RM_RPC_FREE(pGpu, hClient, hParent, hVASpace, status);
-        NV_ASSERT((status == NV_OK) || (status == NV_ERR_GPU_IN_FULLCHIP_RESET));
+        NV_ASSERT(serverIsFreeRpcStatusExpected(status));
     }
 
     NV_PRINTF(LEVEL_INFO,

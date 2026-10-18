@@ -1,4 +1,5 @@
 #include "adapter.hpp"
+#include "device.hpp"
 #include "display_modes.hpp"
 #include "driver_parameters.hpp"
 #include "output.hpp"
@@ -354,7 +355,7 @@ void Adapter::ResetOutputs() noexcept
     {
         outputs_[index]->StopMonitorControl();
     }
-    if (outputCount_ != 0)
+    if (outputCount_ != 0 && !IsHardwareRemoved(device_))
     {
         NvKmsWindowsSetDisplayModes(nullptr, 0);
     }

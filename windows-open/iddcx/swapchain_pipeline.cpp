@@ -486,6 +486,7 @@ HRESULT SwapChainUploadPipeline::Animate() noexcept
 
 HRESULT SwapChainUploadPipeline::DisableDemo() noexcept
 {
+    if (output_->HardwareRemoved()) return S_OK;
     if (!scene_ || !demoSubmitted_) return S_OK;
     // Source and animation threads are stopped; cancellation cannot free a live plane.
     const auto deadline = GetTickCount64() + 2000;
@@ -493,9 +494,11 @@ HRESULT SwapChainUploadPipeline::DisableDemo() noexcept
     {
         for (;;)
         {
+            if (output_->HardwareRemoved()) return S_OK;
             bool overlays = false;
             NvBool primary = NV_FALSE;
             const HRESULT retired = scene_->Retire(&overlays);
+            if (output_->HardwareRemoved()) return S_OK;
             if (FAILED(retired) ||
                 NvKmsWindowsGetFlipPending(output_->AssignedHead(), &primary) != NV_OK)
                 return E_FAIL;
@@ -505,8 +508,10 @@ HRESULT SwapChainUploadPipeline::DisableDemo() noexcept
         }
         if (phase == 0)
         {
+            if (output_->HardwareRemoved()) return S_OK;
             const HRESULT refreshed = Refresh();
             if (FAILED(refreshed)) return refreshed;
+            if (output_->HardwareRemoved()) return S_OK;
             desktop_.surface = output_->ScanoutSurface();
             if (NvKmsWindowsPresentLayersTimed(output_->AssignedHead(),
                 output_->DisplayState().displayHandle, &desktop_, 1, NV_FALSE, nullptr) != NV_OK)
@@ -527,7 +532,8 @@ DWORD WINAPI SwapChainUploadPipeline::ThreadEntry(void* context) noexcept
 
 void SwapChainUploadPipeline::Process() noexcept
 {
-    while (WaitForSingleObject(stopEvent_, 0) != WAIT_OBJECT_0)
+    while (WaitForSingleObject(stopEvent_, 0) != WAIT_OBJECT_0 &&
+        !output_->HardwareRemoved())
     {
         UINT index = FrameSlots::Invalid;
         Job job;
@@ -643,11 +649,11 @@ HRESULT SwapChainUploadPipeline::Stop() noexcept
         output_->RequireScanoutReset();
         Fail(disabled);
     }
-    if (output_ != nullptr && submitted_)
+    if (output_ != nullptr && submitted_ && !output_->HardwareRemoved())
     {
         const NvU64 deadline = GetTickCount64() + 2000;
         NvBool pending = NV_TRUE;
-        while (pending)
+        while (pending && !output_->HardwareRemoved())
         {
             if (NvKmsWindowsGetFlipPending(output_->AssignedHead(), &pending) != NV_OK)
             {

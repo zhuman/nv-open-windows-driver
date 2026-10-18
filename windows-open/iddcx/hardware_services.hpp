@@ -96,6 +96,7 @@ public:
 
 private:
     void TraceResetStatus() const noexcept;
+    WDFDEVICE device_;
     UmDeviceResetInterface interface_;
     ULONGLONG pciResetTypes_;
 };
@@ -125,6 +126,7 @@ public:
     [[nodiscard]] PHYSICAL_ADDRESS MemoryBarAddress(_In_ ULONG index) const noexcept;
 
 private:
+    WDFDEVICE device_;
     BUS_INTERFACE_STANDARD interface_;
     PciIdentity identity_;
     PHYSICAL_ADDRESS memoryBarAddresses_[MaximumMemoryBarCount];

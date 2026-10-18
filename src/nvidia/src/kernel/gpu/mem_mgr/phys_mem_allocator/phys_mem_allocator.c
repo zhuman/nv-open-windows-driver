@@ -36,6 +36,11 @@
 #include "utils/nvprintf.h"
 #include "utils/nvassert.h"
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool NvKmsWindowsIsGpuSurpriseRemoved(void);
+void NvKmsWindowsTraceMessage(const char *message);
+#endif
+
 #if !defined(SRT_BUILD)
 #define PMA_DEBUG 1
 #else
@@ -1403,6 +1408,15 @@ pmaFreePages
     NV_ASSERT(pageCount != 0);
     NV_ASSERT(pPages != NULL);
 
+#if defined(NV_WINDOWS_IDDCX)
+    if (pPma->bScrubOnFree && NvKmsWindowsIsGpuSurpriseRemoved())
+    {
+        // Keep scrub-on-free enabled so clean allocations reject this invalid allocator.
+        portAtomicSetSize(&pPma->scrubberValid, PMA_SCRUBBER_INVALID);
+        NvKmsWindowsTraceMessage("RM PMA free: physical removal; invalidating scrubber before local release");
+    }
+#endif
+
     if (pageCount != 1)
     {
         NV_ASSERT((size == _PMA_64KB)  ||
@@ -1523,6 +1537,14 @@ pmaFreePages
         PSCRUB_NODE pPmaScrubList = NULL;
         NvU64 count;
 
+        #if defined(NV_WINDOWS_IDDCX)
+        if (NvKmsWindowsIsGpuSurpriseRemoved())
+        {
+            portAtomicSetSize(&pPma->scrubberValid, PMA_SCRUBBER_INVALID);
+            NvKmsWindowsTraceMessage("RM PMA free: physical removal; canceling scrub submission");
+        }
+        else
+        #endif
         if (scrubSubmitPages(pPma->pScrubObj, size, pPages, pageCount,
                              &pPmaScrubList, &count, scrubFlags) == NV_OK)
         {

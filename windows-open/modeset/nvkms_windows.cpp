@@ -97,6 +97,8 @@ namespace {
 SRWLOCK gpuRegistryLock = SRWLOCK_INIT;
 nv_gpu_info_t registeredGpu = {};
 NvBool gpuRegistered = NV_FALSE;
+NV_KMS_WINDOWS_GPU_REMOVED_CALLBACK gpuRemovedCallback = nullptr;
+void* gpuRemovedContext = nullptr;
 NvKmsKapiFunctionsTable kmsFunctions = {};
 NvKmsKapiDevice* kmsDevice = nullptr;
 NvU32 monitorControlHandle = 0;
@@ -1058,6 +1060,24 @@ extern "C" NvBool nvkms_open_gpu(NvU32 gpuId, NvBool)
 }
 
 extern "C" void nvkms_close_gpu(NvU32, NvBool) {}
+extern "C" NvBool NvKmsWindowsIsGpuRemoved(void)
+{
+    AcquireSRWLockShared(&gpuRegistryLock);
+    const NvBool removed = !gpuRegistered || gpuRemovedCallback == nullptr ||
+        gpuRemovedCallback(gpuRemovedContext);
+    ReleaseSRWLockShared(&gpuRegistryLock);
+    return removed;
+}
+
+extern "C" NvBool NvKmsWindowsIsGpuSurpriseRemoved(void)
+{
+    AcquireSRWLockShared(&gpuRegistryLock);
+    const NvBool removed = gpuRegistered && gpuRemovedCallback != nullptr &&
+        gpuRemovedCallback(gpuRemovedContext);
+    ReleaseSRWLockShared(&gpuRegistryLock);
+    return removed;
+}
+
 extern "C" NvBool nvkms_allow_write_combining(void) { return NV_TRUE; }
 extern "C" NvBool nvkms_kernel_supports_syncpts(void) { return NV_FALSE; }
 extern "C" NvBool nvkms_fd_is_nvidia_chardev(int) { return NV_FALSE; }
@@ -3668,9 +3688,12 @@ extern "C" NV_STATUS NvKmsWindowsRegisterGpu(
     NvU8 bus,
     NvU8 slot,
     NvU8 function,
-    void* osDevice)
+    void* osDevice,
+    NV_KMS_WINDOWS_GPU_REMOVED_CALLBACK removedCallback,
+    void* removedContext)
 {
-    if (gpuId == 0 || osDevice == nullptr)
+    if (gpuId == 0 || osDevice == nullptr || removedCallback == nullptr ||
+        removedContext == nullptr)
     {
         return NV_ERR_INVALID_ARGUMENT;
     }
@@ -3691,6 +3714,8 @@ extern "C" NV_STATUS NvKmsWindowsRegisterGpu(
         registeredGpu.needs_numa_setup = NV_FALSE;
         registeredGpu.is_soc_disp = NV_FALSE;
         registeredGpu.os_device_ptr = osDevice;
+        gpuRemovedCallback = removedCallback;
+        gpuRemovedContext = removedContext;
         gpuRegistered = NV_TRUE;
     }
     ReleaseSRWLockExclusive(&gpuRegistryLock);
@@ -3704,6 +3729,8 @@ extern "C" void NvKmsWindowsUnregisterGpu(NvU32 gpuId)
     {
         registeredGpu = {};
         gpuRegistered = NV_FALSE;
+        gpuRemovedCallback = nullptr;
+        gpuRemovedContext = nullptr;
     }
     ReleaseSRWLockExclusive(&gpuRegistryLock);
 }

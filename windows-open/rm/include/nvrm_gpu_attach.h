@@ -28,6 +28,9 @@ NV_STATUS NvRmInitializeGpuFirmware(
 NV_STATUS NvRmUnloadGpuState(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 
+NV_STATUS NvRmMarkGpuLost(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
+
 NV_STATUS NvRmServiceGpuInterrupt(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext);
 

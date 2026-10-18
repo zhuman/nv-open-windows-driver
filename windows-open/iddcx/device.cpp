@@ -213,6 +213,12 @@ NV_STATUS AllocateDmaBuffer(
         &configuration,
         static_cast<ULONG>(alignment));
     auto* deviceContext = static_cast<DeviceContext*>(context);
+    if (InterlockedCompareExchange(&deviceContext->surpriseRemoved, 0, 0) != 0)
+    {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER,
+            "DMA common buffer rejected: device surprise removed");
+        return NV_ERR_GPU_IS_LOST;
+    }
     if (purpose != NV_PLATFORM_RM_MEMORY_PURPOSE_DEFAULT &&
         purpose != NV_PLATFORM_RM_MEMORY_PURPOSE_CACHED_PIXEL_STAGING)
     {
@@ -274,6 +280,13 @@ void FreeDmaBuffer(void*, void* providerAllocation)
     }
 }
 
+#if defined(NV_RM_USER_LINK_PROBE)
+NvBool IsNvKmsDeviceRemoved(void* context)
+{
+    return IsHardwareRemoved(static_cast<WDFDEVICE>(context)) ? NV_TRUE : NV_FALSE;
+}
+#endif
+
 NTSTATUS CreateRmGpuContext(_Inout_ DeviceContext* context) noexcept
 {
     const PciIdentity* identity = context->configSpace.Identity();
@@ -320,6 +333,13 @@ NTSTATUS CreateRmGpuContext(_Inout_ DeviceContext* context) noexcept
 void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
 {
 #if defined(NV_RM_USER_LINK_PROBE)
+    if (context->rmGpuAttached &&
+        InterlockedCompareExchange(&context->surpriseRemoved, 0, 0) != 0)
+    {
+        const NV_STATUS status = NvRmMarkGpuLost(context->rmGpuContext);
+        TraceEvents(status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER, "RM surprise-removal disconnect: 0x%08X", status);
+    }
     if (context->nvKmsInitialized)
     {
         NvKmsWindowsSetDisplayChangeCallback(nullptr, nullptr);
@@ -359,12 +379,12 @@ void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
 
     if (context->rmGpuAttached)
     {
-        NvKmsWindowsUnregisterGpu(context->rmGpuId);
         const NV_STATUS status = NvRmDetachGpuContext(
             context->rmGpuContext,
             context->rmGpuInstance,
             context->rmDeviceInstance,
             context->rmGpuId);
+        NvKmsWindowsUnregisterGpu(context->rmGpuId);
         TraceEvents(
             status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
             TRACE_DRIVER,
@@ -484,6 +504,7 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     pnpCallbacks.EvtDeviceReleaseHardware = ReleaseHardware;
     pnpCallbacks.EvtDeviceD0Entry = EnterD0;
     pnpCallbacks.EvtDeviceD0Exit = ExitD0;
+    pnpCallbacks.EvtDeviceSurpriseRemoval = SurpriseRemoval;
     WdfDeviceInitSetPnpPowerEventCallbacks(deviceInit, &pnpCallbacks);
 
     WDF_OBJECT_ATTRIBUTES attributes;
@@ -624,6 +645,10 @@ NTSTATUS PrepareHardware(
     WDFCMRESLIST resourcesTranslated)
 {
     DeviceContext* context = GetDeviceContext(device);
+    if (IsHardwareRemoved(device))
+    {
+        return STATUS_DEVICE_REMOVED;
+    }
     const ULONG resourceCount = WdfCmResourceListGetCount(resourcesTranslated);
     TraceEvents(
         TRACE_LEVEL_INFORMATION,
@@ -809,7 +834,7 @@ NTSTATUS PrepareHardware(
         TRACE_DRIVER,
         "NvRmInitializeGpuFirmware: 0x%08X",
         firmwareStatus);
-    if (firmwareStatus == NV_ERR_TIMEOUT)
+    if (firmwareStatus == NV_ERR_TIMEOUT && !IsHardwareRemoved(device))
     {
         // Retain framework resources; rebuild only failed RM state and its BAR1 leases.
         DestroyRmGpuContext(context);
@@ -863,7 +888,9 @@ NTSTATUS PrepareHardware(
             identity->bus,
             identity->device,
             identity->function,
-            context->rmGpuContext);
+            context->rmGpuContext,
+            IsNvKmsDeviceRemoved,
+            device);
     if (modesetRegisterStatus != NV_OK)
     {
         return STATUS_DRIVER_INTERNAL_ERROR;
@@ -903,6 +930,10 @@ DWORD WINAPI InitializeNvKms(void* parameter)
         return 0;
     }
     context->nvKmsInitialized = true;
+    if (InterlockedCompareExchange(&context->nvKmsWorkCanceled, 0, 0) != 0)
+    {
+        return 0;
+    }
     NvKmsWindowsSetDisplayChangeCallback(
         [](void* callbackContext)
         {
@@ -910,7 +941,8 @@ DWORD WINAPI InitializeNvKms(void* parameter)
                 static_cast<WDFDEVICE>(callbackContext);
             DeviceContext* const callbackDeviceContext =
                 GetDeviceContext(callbackDevice);
-            if (callbackDeviceContext->displayChangeWorkItem != nullptr)
+            if (callbackDeviceContext->displayChangeWorkItem != nullptr &&
+                !IsHardwareRemoved(callbackDevice))
             {
                 WdfWorkItemEnqueue(
                     callbackDeviceContext->displayChangeWorkItem);
@@ -973,13 +1005,12 @@ DWORD WINAPI InitializeNvKms(void* parameter)
         context->rmClientHandle,
         context->rmDeviceHandle,
         context->rmSubdeviceHandle);
+    context->rmDeviceOpened = openStatus == NV_OK;
     if (openStatus != NV_OK ||
         InterlockedCompareExchange(&context->nvKmsWorkCanceled, 0, 0) != 0)
     {
         return 0;
     }
-    context->rmDeviceOpened = true;
-
     InterlockedExchange(&context->nvKmsWorkCompleted, 1);
 
     AcquireSRWLockExclusive(&context->lifecycleLock);
@@ -1006,12 +1037,21 @@ NTSTATUS StartNvKmsInitialization(_In_ WDFDEVICE device) noexcept
 {
 #if defined(NV_RM_USER_LINK_PROBE)
     DeviceContext* const context = GetDeviceContext(device);
+    if (IsHardwareRemoved(device))
+    {
+        return STATUS_DEVICE_REMOVED;
+    }
     if (context->nvKmsThread != nullptr)
     {
         return STATUS_SUCCESS;
     }
 
     InterlockedExchange(&context->nvKmsWorkCanceled, 0);
+    if (IsHardwareRemoved(device))
+    {
+        InterlockedExchange(&context->nvKmsWorkCanceled, 1);
+        return STATUS_DEVICE_REMOVED;
+    }
     InterlockedExchange(&context->nvKmsWorkCompleted, 0);
     context->nvKmsThread = CreateThread(
         nullptr,
@@ -1062,6 +1102,7 @@ NTSTATUS ReleaseHardware(
 
     DeviceContext* context = GetDeviceContext(device);
     InterlockedExchange(&context->nvKmsWorkCanceled, 1);
+    InterlockedExchange(&context->d0Active, 0);
     if (context->nvKmsThread != nullptr)
     {
         WaitForSingleObject(context->nvKmsThread, INFINITE);
@@ -1069,6 +1110,14 @@ NTSTATUS ReleaseHardware(
         context->nvKmsThread = nullptr;
     }
     InterlockedExchange(&context->nvKmsWorkCompleted, 0);
+#if defined(NV_RM_USER_LINK_PROBE)
+    if (context->rmGpuAttached && IsHardwareRemoved(device))
+    {
+        const NV_STATUS status = NvRmMarkGpuLost(context->rmGpuContext);
+        TraceEvents(status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
+            TRACE_DRIVER, "RM disconnect before output cleanup: 0x%08X", status);
+    }
+#endif
     context->adapter.Reset();
     DestroyRmGpuContext(context);
     context->deviceReset.Reset();
@@ -1088,6 +1137,11 @@ NTSTATUS EnterD0(WDFDEVICE device, WDF_POWER_DEVICE_STATE previousState)
 {
     DeviceContext* const context = GetDeviceContext(device);
     AcquireSRWLockExclusive(&context->lifecycleLock);
+    if (IsHardwareRemoved(device))
+    {
+        ReleaseSRWLockExclusive(&context->lifecycleLock);
+        return STATUS_DEVICE_REMOVED;
+    }
     InterlockedExchange(&context->d0Active, 1);
     const NTSTATUS status = context->adapter.EnterD0(device);
     ReleaseSRWLockExclusive(&context->lifecycleLock);
@@ -1111,6 +1165,18 @@ NTSTATUS ExitD0(WDFDEVICE device, WDF_POWER_DEVICE_STATE targetState)
     context->adapter.ExitD0();
     ReleaseSRWLockExclusive(&context->lifecycleLock);
     return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+void SurpriseRemoval(WDFDEVICE device)
+{
+    DeviceContext* const context = GetDeviceContext(device);
+    // WDF can invoke this concurrently with prepare/release; do not touch their owners.
+    InterlockedExchange(&context->surpriseRemoved, 1);
+    InterlockedExchange(&context->nvKmsWorkCanceled, 1);
+    InterlockedExchange(&context->d0Active, 0);
+    TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER,
+        "Device surprise removed: hardware access and initialization canceled");
 }
 
 } // namespace nv::iddcx

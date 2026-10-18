@@ -89,6 +89,11 @@ namespace nv::iddcx {
 NTSTATUS DeviceResetInterface::Initialize(_In_ WDFDEVICE device) noexcept
 {
     Reset();
+    device_ = device;
+    if (IsHardwareRemoved(device))
+    {
+        return STATUS_DEVICE_REMOVED;
+    }
 
     constexpr USHORT versions[] = {
         3,
@@ -182,6 +187,10 @@ void DeviceResetInterface::TraceResetStatus() const noexcept
 
 NTSTATUS DeviceResetInterface::ResetDevice(_In_ ULONG resetType) noexcept
 {
+    if (device_ != nullptr && IsHardwareRemoved(device_))
+    {
+        return STATUS_DEVICE_REMOVED;
+    }
     if (interface_.deviceReset == nullptr ||
         resetType >= sizeof(interface_.supportedResetTypes) * CHAR_BIT ||
         (interface_.supportedResetTypes & (1UL << resetType)) == 0)
@@ -206,6 +215,10 @@ NTSTATUS DeviceResetInterface::ResetDevice(_In_ ULONG resetType) noexcept
 
 NTSTATUS DeviceResetInterface::ResetDeviceInPlace() noexcept
 {
+    if (device_ != nullptr && IsHardwareRemoved(device_))
+    {
+        return STATUS_DEVICE_REMOVED;
+    }
     constexpr ULONGLONG FunctionLevelResetInPlace = 1ULL << 5;
     constexpr ULONGLONG KeepStackReset = 1ULL;
     if (interface_.version < 2 || interface_.deviceBusSpecificReset == nullptr ||
@@ -234,6 +247,7 @@ void DeviceResetInterface::Reset() noexcept
     }
     ZeroMemory(&interface_, sizeof(interface_));
     pciResetTypes_ = 0;
+    device_ = nullptr;
 }
 
 bool DeviceResetInterface::IsAvailable() const noexcept
@@ -249,6 +263,11 @@ ULONG DeviceResetInterface::SupportedResetTypes() const noexcept
 NTSTATUS ConfigSpace::Initialize(_In_ WDFDEVICE device) noexcept
 {
     Reset();
+    device_ = device;
+    if (IsHardwareRemoved(device))
+    {
+        return STATUS_DEVICE_REMOVED;
+    }
     TraceEvents(
         TRACE_LEVEL_INFORMATION,
         TRACE_PCI,
@@ -516,7 +535,7 @@ NTSTATUS ConfigSpace::EnableMemorySpace() noexcept
 
 void ConfigSpace::Reset() noexcept
 {
-    if (memorySpaceEnabledByDriver_ && IsAvailable())
+    if (memorySpaceEnabledByDriver_ && IsAvailable() && !IsHardwareRemoved(device_))
     {
         USHORT command = 0;
         if (NT_SUCCESS(Read(PciCommandOffset, &command, sizeof(command))))
@@ -537,6 +556,7 @@ void ConfigSpace::Reset() noexcept
     memoryBarCount_ = 0;
     identityValid_ = false;
     memorySpaceEnabledByDriver_ = false;
+    device_ = nullptr;
 }
 
 NTSTATUS ConfigSpace::Read(
@@ -547,6 +567,10 @@ NTSTATUS ConfigSpace::Read(
     if (!IsAvailable() || buffer == nullptr || length == 0)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+    if (IsHardwareRemoved(device_))
+    {
+        return STATUS_DEVICE_REMOVED;
     }
 
     const ULONG bytesRead = interface_.GetBusData(
@@ -566,6 +590,10 @@ NTSTATUS ConfigSpace::Write(
     if (!IsAvailable() || buffer == nullptr || length == 0)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+    if (IsHardwareRemoved(device_))
+    {
+        return STATUS_DEVICE_REMOVED;
     }
 
     const ULONG bytesWritten = interface_.SetBusData(
@@ -615,6 +643,10 @@ NTSTATUS RegisterAperture::InitializeRange(
             "Invalid UMDF MMIO mapping: start=0x%llX length=0x%llX",
             physicalAddress.QuadPart, static_cast<ULONGLONG>(length));
         return STATUS_INVALID_PARAMETER;
+    }
+    if (IsHardwareRemoved(device))
+    {
+        return STATUS_DEVICE_REMOVED;
     }
     NTSTATUS status = WdfDeviceMapIoSpace(
         device,
@@ -681,6 +713,7 @@ void RegisterAperture::Reset() noexcept
 
 UCHAR RegisterAperture::ReadRegister8(_In_ SIZE_T offset) const noexcept
 {
+    if (IsHardwareRemoved(device_)) return MAXBYTE;
     return WDF_READ_REGISTER_UCHAR(
         device_,
         static_cast<UCHAR*>(pseudoAddress_) + offset);
@@ -688,6 +721,7 @@ UCHAR RegisterAperture::ReadRegister8(_In_ SIZE_T offset) const noexcept
 
 USHORT RegisterAperture::ReadRegister16(_In_ SIZE_T offset) const noexcept
 {
+    if (IsHardwareRemoved(device_)) return MAXWORD;
     return WDF_READ_REGISTER_USHORT(
         device_,
         reinterpret_cast<USHORT*>(static_cast<UCHAR*>(pseudoAddress_) + offset));
@@ -695,6 +729,7 @@ USHORT RegisterAperture::ReadRegister16(_In_ SIZE_T offset) const noexcept
 
 ULONG RegisterAperture::ReadRegister32(_In_ SIZE_T offset) const noexcept
 {
+    if (IsHardwareRemoved(device_)) return MAXDWORD;
     return WDF_READ_REGISTER_ULONG(
         device_,
         reinterpret_cast<ULONG*>(static_cast<UCHAR*>(pseudoAddress_) + offset));
@@ -708,6 +743,11 @@ void RegisterAperture::ReadRegisterBuffer32(
     constexpr ULONG MaximumTransferCount = 64;
     while (count != 0)
     {
+        if (IsHardwareRemoved(device_))
+        {
+            for (ULONG index = 0; index < count; ++index) buffer[index] = MAXDWORD;
+            return;
+        }
         const ULONG transferCount = min(count, MaximumTransferCount);
         WDF_READ_REGISTER_BUFFER_ULONG(
             device_,
@@ -724,6 +764,7 @@ void RegisterAperture::WriteRegister8(
     _In_ SIZE_T offset,
     _In_ UCHAR value) const noexcept
 {
+    if (IsHardwareRemoved(device_)) return;
     WDF_WRITE_REGISTER_UCHAR(
         device_,
         static_cast<UCHAR*>(pseudoAddress_) + offset,
@@ -734,6 +775,7 @@ void RegisterAperture::WriteRegister16(
     _In_ SIZE_T offset,
     _In_ USHORT value) const noexcept
 {
+    if (IsHardwareRemoved(device_)) return;
     WDF_WRITE_REGISTER_USHORT(
         device_,
         reinterpret_cast<USHORT*>(static_cast<UCHAR*>(pseudoAddress_) + offset),
@@ -744,6 +786,7 @@ void RegisterAperture::WriteRegister32(
     _In_ SIZE_T offset,
     _In_ ULONG value) const noexcept
 {
+    if (IsHardwareRemoved(device_)) return;
     WDF_WRITE_REGISTER_ULONG(
         device_,
         reinterpret_cast<ULONG*>(static_cast<UCHAR*>(pseudoAddress_) + offset),
@@ -758,6 +801,10 @@ NTSTATUS RegisterAperture::Read32(
         offset > length_ || sizeof(*value) > length_ - offset)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+    if (IsHardwareRemoved(device_))
+    {
+        return STATUS_DEVICE_REMOVED;
     }
 
     *value = ReadRegister32(offset);
@@ -962,6 +1009,10 @@ _Use_decl_annotations_
 NTSTATUS Interrupt::Enable(WDFINTERRUPT interrupt, WDFDEVICE device)
 {
     UNREFERENCED_PARAMETER(interrupt);
+    if (IsHardwareRemoved(device))
+    {
+        return STATUS_DEVICE_REMOVED;
+    }
     DeviceContext* const context = GetDeviceContext(device);
     const NV_STATUS status = context->rmGpuStateLoaded
         ? NvRmSetGpuInterruptEnabled(context->rmGpuContext, NV_TRUE)
@@ -978,6 +1029,12 @@ _Use_decl_annotations_
 NTSTATUS Interrupt::Disable(WDFINTERRUPT interrupt, WDFDEVICE device)
 {
     UNREFERENCED_PARAMETER(interrupt);
+    if (IsHardwareRemoved(device))
+    {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+            "GPU interrupt disable: surprise-removed hardware, no register access");
+        return STATUS_SUCCESS;
+    }
     DeviceContext* const context = GetDeviceContext(device);
     const NV_STATUS status = context->rmGpuStateLoaded
         ? NvRmSetGpuInterruptEnabled(context->rmGpuContext, NV_FALSE)
@@ -993,6 +1050,10 @@ NTSTATUS Interrupt::Disable(WDFINTERRUPT interrupt, WDFDEVICE device)
 _Use_decl_annotations_
 BOOLEAN Interrupt::Isr(WDFINTERRUPT interrupt, ULONG messageId)
 {
+    if (IsHardwareRemoved(WdfInterruptGetDevice(interrupt)))
+    {
+        return FALSE;
+    }
     static volatile LONG observedInterrupts = 0;
     const LONG interruptCount = InterlockedIncrement(&observedInterrupts);
 
@@ -1018,6 +1079,10 @@ void Interrupt::Dpc(WDFINTERRUPT interrupt, WDFOBJECT associatedObject)
     UNREFERENCED_PARAMETER(associatedObject);
 
     DeviceContext* const context = GetDeviceContext(WdfInterruptGetDevice(interrupt));
+    if (IsHardwareRemoved(WdfInterruptGetDevice(interrupt)))
+    {
+        return;
+    }
     const NV_STATUS status = context->rmGpuStateLoaded
         ? NvRmServiceGpuInterrupt(context->rmGpuContext)
         : NV_ERR_INVALID_STATE;

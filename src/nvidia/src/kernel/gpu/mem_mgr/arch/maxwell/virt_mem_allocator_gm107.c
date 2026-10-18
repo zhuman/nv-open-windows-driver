@@ -1624,7 +1624,7 @@ dmaFreeMapping_GM107
             if (status != NV_OK)
             {
                 NV_PRINTF(LEVEL_ERROR, "error updating VA space.\n");
-                vaspaceFree(pVAS, vaLo);
+                // The VirtualMemory object still owns this reservation.
                 return status;
             }
         }

@@ -29,6 +29,10 @@
 #include "class/clc57d.h" // NVC57D_{PUT,GET}
 #include "nvos.h"
 
+#if defined(NV_WINDOWS_IDDCX)
+extern NvBool NvKmsWindowsIsGpuRemoved(void);
+#endif
+
 #define NV_DMA_PUSHER_CHASE_PAD 5
 #define NV_EVO_NOTIFIER_SHORT_TIMEOUT_USEC 3000000 // 3 seconds
 
@@ -200,6 +204,15 @@ static NvBool EvoCheckNotifier(const NVDispEvoRec *pDispEvo,
 
     // While the completion notifier is not set to done_true
     do {
+#if defined(NV_WINDOWS_IDDCX)
+        if (NvKmsWindowsIsGpuRemoved()) {
+            if (wait) {
+                nvEvoLogDisp(pDispEvo, EVO_LOG_WARN,
+                            "GPU removed; abandoning display notifier wait.");
+            }
+            return FALSE;
+        }
+#endif
         const NvU32 val = *pNotifier;
         const NvU32 done_mask = DRF_SHIFTMASK(done_extent_bit:done_base_bit);
         const NvU32 done_val = done_value << done_base_bit;

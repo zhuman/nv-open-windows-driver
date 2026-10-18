@@ -65,6 +65,24 @@
 
 #include "class/clcab5.h"      // BLACKWELL_DMA_COPY_B
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool NvKmsWindowsIsGpuSurpriseRemoved(void);
+void NvKmsWindowsTraceMessage(const char *message);
+#endif
+
+static NvBool
+_scrubGpuIsSurpriseRemoved(void)
+{
+#if defined(NV_WINDOWS_IDDCX)
+    if (NvKmsWindowsIsGpuSurpriseRemoved())
+    {
+        NvKmsWindowsTraceMessage("RM scrub submission: physical removal; canceling hardware work");
+        return NV_TRUE;
+    }
+#endif
+    return NV_FALSE;
+}
+
 static NvU64     _scrubCheckProgress(OBJMEMSCRUB *pScrubber);
 static NvU64     _searchScrubList(OBJMEMSCRUB *pScrubber, RmPhysAddr base, NvU64 size);
 static NV_STATUS _waitForPayload(OBJMEMSCRUB  *pScrubber, RmPhysAddr  base, RmPhysAddr end);
@@ -75,7 +93,8 @@ static NvU32     _scrubMemory(OBJMEMSCRUB  *pScrubber, RmPhysAddr base, NvU64 si
 static NV_STATUS _scrubWaitAndSave(OBJMEMSCRUB *pScrubber, PSCRUB_NODE pList, NvLength  itemsToSave);
 static NvU64     _scrubGetFreeEntries(OBJMEMSCRUB *pScrubber);
 static NvU64     _scrubCheckAndSubmit(OBJMEMSCRUB *pScrubber, NvU64 pageCount, PSCRUB_NODE  pList,
-                                   PSCRUB_NODE pScrubListCopy, NvLength  pagesToScrubCheck, NvU32 flags);
+                                   PSCRUB_NODE pScrubListCopy, NvLength  pagesToScrubCheck, NvU32 flags,
+                                   NV_STATUS *pStatus);
 static void   _scrubCopyListItems(OBJMEMSCRUB *pScrubber, PSCRUB_NODE pList, NvLength itemsToSave);
 
 static NV_STATUS _scrubCheckLocked(OBJMEMSCRUB  *pScrubber, PSCRUB_NODE *ppList, NvU64 *pSize);
@@ -270,18 +289,30 @@ scrubberDestruct
     pmaUnregMemScrub(pPma);
     portSyncMutexAcquire(pScrubber->pScrubberMutex);
 
-    if (!API_GPU_IN_RESET_SANITY_CHECK(pGpu))
+    if (!API_GPU_IN_RESET_SANITY_CHECK(pGpu)
+#if defined(NV_WINDOWS_IDDCX)
+        && !NvKmsWindowsIsGpuSurpriseRemoved()
+#endif
+       )
     {
         RMTIMEOUT     timeout;
         gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, 0);
 
-        while (_isScrubWorkPending(pScrubber))
+        while (
+#if defined(NV_WINDOWS_IDDCX)
+               !NvKmsWindowsIsGpuSurpriseRemoved() &&
+#endif
+               _isScrubWorkPending(pScrubber))
         {
            // just wait till it finishes
            // Since the default RM Timeout is violated by this, added this for FMODEL
            if (!IS_FMODEL(pGpu))
            {
-               if (gpuCheckTimeout(pGpu, &timeout) == NV_ERR_TIMEOUT)
+               if (gpuCheckTimeout(pGpu, &timeout) == NV_ERR_TIMEOUT
+#if defined(NV_WINDOWS_IDDCX)
+                   && !NvKmsWindowsIsGpuSurpriseRemoved()
+#endif
+                  )
                {
                      NV_PRINTF(LEVEL_FATAL,
                                " Timed out when waiting for the scrub to complete the pending work .\n");
@@ -292,12 +323,28 @@ scrubberDestruct
         }
     }
 
-    // check for the completed scrub work items
-    NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(status, _scrubCheckLocked(pScrubber, &pPmaScrubList, &count));
+#if defined(NV_WINDOWS_IDDCX)
+    if (NvKmsWindowsIsGpuSurpriseRemoved())
+    {
+        NvKmsWindowsTraceMessage(
+            "RM scrubber teardown: physical removal; canceling pending scrub, not certifying pages");
+    }
+    else
+    {
+#endif
+        // check for the completed scrub work items
+        NV_ASSERT_OK_OR_CAPTURE_FIRST_ERROR(status, _scrubCheckLocked(pScrubber, &pPmaScrubList, &count));
 
-    // Make sure all scrubbed pages are returned to PMA
-    if (count > 0)
-        pmaClearScrubbedPages(pPma, pPmaScrubList, count);
+        // Make sure all scrubbed pages are returned to PMA
+        if (count > 0
+#if defined(NV_WINDOWS_IDDCX)
+            && !NvKmsWindowsIsGpuSurpriseRemoved()
+#endif
+           )
+            pmaClearScrubbedPages(pPma, pPmaScrubList, count);
+#if defined(NV_WINDOWS_IDDCX)
+    }
+#endif
 
     portMemFree(pPmaScrubList);
 
@@ -428,6 +475,12 @@ scrubSubmitPages
     *pSize  = 0;
     *ppList = pScrubList;
 
+    if (_scrubGpuIsSurpriseRemoved())
+    {
+        status = NV_ERR_GPU_IS_LOST;
+        goto cleanup;
+    }
+
     NV_CHECK_OR_GOTO(LEVEL_INFO, pageCount > 0, cleanup);
 
     NV_PRINTF(LEVEL_INFO, "submitting pages, pageCount = 0x%llx chunkSize = 0x%llx\n", pageCount, chunkSize);
@@ -472,7 +525,10 @@ scrubSubmitPages
                                                &pScrubList[totalSubmitted],
                                                &pScrubListCopy[curPagesSaved],
                                                pagesToScrubCheck,
-                                               flags);
+                                               flags, &status);
+
+            if (status != NV_OK)
+                goto cleanup;
 
             scrubListSize     -= numFinished;
             curPagesSaved     += pagesToScrubCheck;
@@ -486,18 +542,28 @@ scrubSubmitPages
     else
     {
         totalSubmitted = _scrubCheckAndSubmit(pScrubber, scrubListSize,
-                                              pScrubList, NULL, 0, flags);
+                                              pScrubList, NULL, 0, flags, &status);
         *ppList = NULL;
         *pSize  = 0;
     }
 
 cleanup:
+    if (status == NV_OK && _scrubGpuIsSurpriseRemoved())
+        status = NV_ERR_GPU_IS_LOST;
+
     portSyncMutexRelease(pScrubber->pScrubberMutex);
 
     if (pScrubList != NULL)
     {
         portMemFree(pScrubList);
         pScrubList = NULL;
+    }
+
+    if (status != NV_OK)
+    {
+        portMemFree(pScrubListCopy);
+        *ppList = NULL;
+        *pSize = 0;
     }
 
     NV_CHECK_OK_OR_RETURN(LEVEL_INFO, status);
@@ -724,17 +790,21 @@ _scrubCheckAndSubmit
     PSCRUB_NODE  pList,
     PSCRUB_NODE  pScrubListCopy,
     NvLength     pagesToScrubCheck,
-    NvU32        flags
+    NvU32        flags,
+    NV_STATUS   *pStatus
 )
 {
     NvU64     iter = 0;
     NvU64     newId;
-    NV_STATUS status;
+    NV_STATUS status = NV_OK;
+
+    *pStatus = NV_OK;
 
     if (pScrubListCopy == NULL && pagesToScrubCheck != 0)
     {
         NV_PRINTF(LEVEL_ERROR,
                   "pages need to be saved off, but stash list is invalid\n");
+        status = NV_ERR_INVALID_ARGUMENT;
         goto exit;
     }
 
@@ -769,6 +839,12 @@ _scrubCheckAndSubmit
 
     return iter;
 exit:
+    *pStatus = status;
+    if ((status != NV_ERR_GPU_IS_LOST) || !_scrubGpuIsSurpriseRemoved())
+    {
+        NV_PRINTF(LEVEL_FATAL, "Scrub submission failed: 0x%x\n", status);
+        DBG_BREAKPOINT();
+    }
     return 0;
 
 }
@@ -867,6 +943,9 @@ _scrubWaitAndSave
     OBJGPU    *pGpu   = pScrubber->pGpu;
     NV_STATUS  status = NV_OK;
 
+    if (_scrubGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     if (itemsToSave == 0)
         goto done;
 
@@ -874,6 +953,9 @@ _scrubWaitAndSave
 
     while (_scrubCheckProgress(pScrubber) < (pScrubber->lastSeenIdByClient + itemsToSave))
     {
+        if (_scrubGpuIsSurpriseRemoved())
+            return NV_ERR_GPU_IS_LOST;
+
         _serviceInterrupts(pScrubber);
 
         status = gpuCheckTimeout(pGpu, &timeout);
@@ -894,9 +976,15 @@ _scrubWaitAndSave
         }
     }
 
+    if (_scrubGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     _scrubCopyListItems(pScrubber, pList, itemsToSave);
 
 done:
+    if ((status == NV_OK || status == NV_ERR_TIMEOUT) && _scrubGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     return status;
 }
 
@@ -919,6 +1007,9 @@ _waitForPayload
     NvBool     bGpuLockTaken = (rmDeviceGpuLockIsOwner(gpuGetInstance(pGpu)) ||
                                 rmGpuLockIsOwner());
 
+    if (_scrubGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     //We need to look up in the range between [lastSeenIdByClient, lastSubmittedWorkId]
     idToWait = _searchScrubList(pScrubber, base, end);
 
@@ -932,6 +1023,9 @@ _waitForPayload
     // Loop will break out, when the semaphore is equal to payload, or times out
     while (_scrubCheckProgress(pScrubber) < idToWait)
     {
+        if (_scrubGpuIsSurpriseRemoved())
+            return NV_ERR_GPU_IS_LOST;
+
         if (bGpuLockTaken)
         {
             _serviceInterrupts(pScrubber);
@@ -954,6 +1048,9 @@ _waitForPayload
             break;
         }
     }
+    if (_scrubGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     return status;
 }
 
@@ -1056,6 +1153,10 @@ _scrubMemory
 {
     NV_STATUS status = NV_OK;
     MEMORY_DESCRIPTOR *pMemDesc = NULL;
+
+    if (_scrubGpuIsSurpriseRemoved())
+        return NV_ERR_GPU_IS_LOST;
+
     NV_ASSERT_OK_OR_RETURN(memdescCreate(&pMemDesc, pScrubber->pGpu, size, 0, NV_TRUE,
                                           ADDR_FBMEM, dstCpuCacheAttrib, MEMDESC_FLAGS_NONE));
 
@@ -1067,13 +1168,25 @@ _scrubMemory
         pMemDesc->localizedMask = (GPU_GET_MEMORY_MANAGER(pScrubber->pGpu))->localizedMask;
     }
 
+    if (_scrubGpuIsSurpriseRemoved())
+    {
+        status = NV_ERR_GPU_IS_LOST;
+        goto cleanup;
+    }
+
     if (pScrubber->bIsEngineTypeSec2)
     {
         SEC2UTILS_MEMSET_PARAMS memsetParams = {0};
         memsetParams.pMemDesc = pMemDesc;
         memsetParams.length = size;
 
-        NV_ASSERT_OK_OR_GOTO(status, sec2utilsMemset(pScrubber->pSec2Utils, &memsetParams), cleanup);
+        status = sec2utilsMemset(pScrubber->pSec2Utils, &memsetParams);
+        if ((status == NV_OK || status == NV_ERR_GPU_IS_LOST) && _scrubGpuIsSurpriseRemoved())
+        {
+            status = NV_ERR_GPU_IS_LOST;
+            goto cleanup;
+        }
+        NV_ASSERT_OR_GOTO(status == NV_OK, cleanup);
         pScrubber->lastSubmittedWorkId = memsetParams.submittedWorkId;
     }
     else
@@ -1083,7 +1196,13 @@ _scrubMemory
         memsetParams.length = size;
         memsetParams.flags = NV0050_CTRL_MEMSET_FLAGS_ASYNC | NV0050_CTRL_MEMSET_FLAGS_PIPELINED;
 
-        NV_ASSERT_OK_OR_GOTO(status, ceutilsMemset(pScrubber->pCeUtils, &memsetParams), cleanup);
+        status = ceutilsMemset(pScrubber->pCeUtils, &memsetParams);
+        if ((status == NV_OK || status == NV_ERR_GPU_IS_LOST) && _scrubGpuIsSurpriseRemoved())
+        {
+            status = NV_ERR_GPU_IS_LOST;
+            goto cleanup;
+        }
+        NV_ASSERT_OR_GOTO(status == NV_OK, cleanup);
         pScrubber->lastSubmittedWorkId = memsetParams.submittedWorkId;
     }
 

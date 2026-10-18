@@ -270,6 +270,43 @@ NV_STATUS NvRmInitializeGpuFirmware(
     return status;
 }
 
+NV_STATUS NvRmMarkGpuLost(
+    NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
+{
+    void* publishedGpu = NULL;
+    NV_STATUS status;
+
+    if (gpuContext == NULL)
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    NvPlatformRmGpuMarkLost(gpuContext);
+    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DESTROY);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    status = gpumgrThreadEnableExpandedGpuVisibility();
+    if (status == NV_OK)
+    {
+        status = NvPlatformRmGpuGetPublishedRmGpu(gpuContext, &publishedGpu);
+        if (status == NV_OK)
+        {
+            status = rmGpuLocksAcquire(GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_DESTROY);
+            if (status == NV_OK)
+            {
+                status = osHandleGpuLost((OBJGPU*)publishedGpu, NV_FALSE);
+                rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
+            }
+        }
+        gpumgrThreadDisableExpandedGpuVisibility();
+    }
+    rmapiLockRelease();
+    return status;
+}
+
 NV_STATUS NvRmUnloadGpuState(
     NV_PLATFORM_RM_GPU_CONTEXT* gpuContext)
 {

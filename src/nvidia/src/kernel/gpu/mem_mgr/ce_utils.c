@@ -42,6 +42,11 @@
 
 #include "class/cl0080.h"
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool NvKmsWindowsIsGpuSurpriseRemoved(void);
+void NvKmsWindowsTraceMessage(const char *message);
+#endif
+
 NV_STATUS
 ceutilsGetFirstAsyncCe_IMPL
 (
@@ -86,13 +91,14 @@ ceutilsGetFirstAsyncCe_IMPL
 static void _ceutilsProcessCompletionCallbacksThrough
 (
     CeUtils *pCeUtils,
-    NvU64 lastCompletedPayload
+    NvU64 lastCompletedPayload,
+    NvBool bCancel
 )
 {
     CeUtilsCallbackList pendingCallbacks;
     CeUtilsCallback *pCallbackEntry;
 
-    NV_PRINTF(LEVEL_INFO, "lastCompletedPayload=%llu\n", lastCompletedPayload);
+    NV_PRINTF(LEVEL_INFO, "callback payload limit=%llu cancel=%u\n", lastCompletedPayload, bCancel);
 
     listInitIntrusive(&pendingCallbacks);
 
@@ -109,8 +115,18 @@ static void _ceutilsProcessCompletionCallbacksThrough
 
     while ((pCallbackEntry = listHead(&pendingCallbacks)) != NULL)
     {
-        NV_PRINTF(LEVEL_INFO, "calling completion callback payload=%llu\n", pCallbackEntry->payload);
-        pCallbackEntry->pCallback(pCallbackEntry->pArg);
+#if defined(NV_WINDOWS_IDDCX)
+        bCancel = bCancel || NvKmsWindowsIsGpuSurpriseRemoved();
+#endif
+        if (!bCancel)
+        {
+            NV_PRINTF(LEVEL_INFO, "calling completion callback payload=%llu\n", pCallbackEntry->payload);
+            pCallbackEntry->pCallback(pCallbackEntry->pArg);
+        }
+        else
+        {
+            NV_PRINTF(LEVEL_WARNING, "canceling completion callback payload=%llu\n", pCallbackEntry->payload);
+        }
         listRemove(&pendingCallbacks, pCallbackEntry);
         portMemFree(pCallbackEntry);
     }
@@ -125,7 +141,8 @@ static void _ceutilsProcessCompletionCallbacks
 {
     _ceutilsProcessCompletionCallbacksThrough(
         pCeUtils,
-        ceutilsUpdateProgress(pCeUtils));
+        ceutilsUpdateProgress(pCeUtils),
+        NV_FALSE);
 }
 
 static NV_STATUS
@@ -352,6 +369,19 @@ ceutilsDestruct_IMPL
     NV_STATUS status = channelWaitForFinishPayload(
         pCeUtils->pChannel,
         lastSubmittedPayload);
+#if defined(NV_WINDOWS_IDDCX)
+    NvBool bSurpriseRemoved = NvKmsWindowsIsGpuSurpriseRemoved() &&
+        ((status == NV_OK) || (status == NV_ERR_GPU_IS_LOST) || (status == NV_ERR_TIMEOUT));
+
+    if (bSurpriseRemoved)
+    {
+        NvKmsWindowsTraceMessage(
+            "RM CE teardown: physical removal; canceling work without claiming completion");
+        _ceutilsProcessCompletionCallbacksThrough(pCeUtils, NV_U64_MAX, NV_TRUE);
+    }
+    else
+    {
+#endif
 #if defined(NV_RM_USER_LINK_PROBE)
     if (status != NV_OK)
     {
@@ -373,17 +403,26 @@ ceutilsDestruct_IMPL
         pCeUtils->lastCompletedPayload = lastSubmittedPayload;
         _ceutilsProcessCompletionCallbacksThrough(
             pCeUtils,
-            lastSubmittedPayload);
+            lastSubmittedPayload,
+            NV_FALSE);
     }
     else
     {
         _ceutilsProcessCompletionCallbacks(pCeUtils);
     }
+#if defined(NV_WINDOWS_IDDCX)
+    }
+#endif
     portSyncSpinlockAcquire(pCeUtils->pCallbackLock);
     NV_ASSERT(listCount(&pCeUtils->completionCallbacks) == 0);
     portSyncSpinlockRelease(pCeUtils->pCallbackLock);
     // make sure no new work was queued from callbacks
-    NV_ASSERT(pCeUtils->lastCompletedPayload == lastSubmittedPayload);
+#if defined(NV_WINDOWS_IDDCX)
+    if (bSurpriseRemoved)
+        NV_ASSERT(pCeUtils->lastSubmittedPayload == lastSubmittedPayload);
+    else
+#endif
+        NV_ASSERT(pCeUtils->lastCompletedPayload == lastSubmittedPayload);
 
     if ((pChannel->bClientUserd) && (pChannel->pControlGPFifo != NULL))
     {
@@ -867,12 +906,30 @@ ceutilsUpdateProgress_IMPL
     NvU32 hwCurrentCompletedPayload = 0;
     NvU64 swLastCompletedPayload = pCeUtils->lastCompletedPayload;
 
+#if defined(NV_WINDOWS_IDDCX)
+    if (NvKmsWindowsIsGpuSurpriseRemoved())
+    {
+        NvKmsWindowsTraceMessage(
+            "RM CE progress: physical removal; retaining last observed payload");
+        return swLastCompletedPayload;
+    }
+#endif
+
     //
     // CeUtils uses 64 bit index to track the work submitted. But HW supports
     // only 32 bit semaphore. The current completed Id is calculated here, based
     // on the lastSubmittedPayload and current HW semaphore value.
     //
     hwCurrentCompletedPayload = READ_CHANNEL_PAYLOAD_SEMA(pCeUtils->pChannel);
+
+#if defined(NV_WINDOWS_IDDCX)
+    if (NvKmsWindowsIsGpuSurpriseRemoved())
+    {
+        NvKmsWindowsTraceMessage(
+            "RM CE progress: removal during read; discarding unverified payload");
+        return swLastCompletedPayload;
+    }
+#endif
 
     // No work has been completed since we checked last time
     if (hwCurrentCompletedPayload == (NvU32)swLastCompletedPayload)

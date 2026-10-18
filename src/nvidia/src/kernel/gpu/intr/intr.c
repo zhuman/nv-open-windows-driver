@@ -47,6 +47,24 @@
 #include "nvrm_registry.h"
 #include "nvmisc.h"
 
+#if defined(NV_WINDOWS_IDDCX)
+NvBool NvKmsWindowsIsGpuSurpriseRemoved(void);
+void NvKmsWindowsTraceMessage(const char *message);
+#endif
+
+static NvBool
+_intrGpuIsSurpriseRemoved(void)
+{
+#if defined(NV_WINDOWS_IDDCX)
+    if (NvKmsWindowsIsGpuSurpriseRemoved())
+    {
+        NvKmsWindowsTraceMessage("RM inline interrupts: physical removal; canceling service");
+        return NV_TRUE;
+    }
+#endif
+    return NV_FALSE;
+}
+
 
 //
 // Used by _intrServiceStallExactList inside a critical section.
@@ -1628,12 +1646,24 @@ intrServiceStallList_IMPL
     NvBool              bPending;
     CALL_CONTEXT       *pOldContext = NULL;
 
-    NV_ASSERT_OK_OR_ELSE(status, _intrServiceStallCommonCheckBegin(pGpu, pIntr, &pOldContext), return);
+    if (_intrGpuIsSurpriseRemoved())
+        return;
+    status = _intrServiceStallCommonCheckBegin(pGpu, pIntr, &pOldContext);
+    if ((status == NV_ERR_GPU_IS_LOST) && _intrGpuIsSurpriseRemoved())
+        return;
+    NV_ASSERT_OR_ELSE(status == NV_OK, return);
 
     do
     {
-        NV_ASSERT_OK_OR_ELSE(status, intrGetPendingStall_HAL(pGpu, pIntr, &exactEngines, NULL /* threadstate */),
-          break);
+        if (_intrGpuIsSurpriseRemoved())
+            break;
+
+        status = intrGetPendingStall_HAL(pGpu, pIntr, &exactEngines, NULL /* threadstate */);
+        if ((status == NV_ERR_GPU_IS_LOST) && _intrGpuIsSurpriseRemoved())
+            break;
+        NV_ASSERT_OR_ELSE(status == NV_OK, break);
+        if (_intrGpuIsSurpriseRemoved())
+            break;
 
         if (pEngines == NULL)
         {
@@ -1681,14 +1711,25 @@ intrServiceStallSingle_IMPL
     bitVectorClrAll(&engines);
     bitVectorSet(&engines, engIdx);
 
-    NV_ASSERT_OK_OR_ELSE(status, _intrServiceStallCommonCheckBegin(pGpu, pIntr, &pOldContext), return);
+    if (_intrGpuIsSurpriseRemoved())
+        return;
+    status = _intrServiceStallCommonCheckBegin(pGpu, pIntr, &pOldContext);
+    if ((status == NV_ERR_GPU_IS_LOST) && _intrGpuIsSurpriseRemoved())
+        return;
+    NV_ASSERT_OR_ELSE(status == NV_OK, return);
 
     do
     {
+        if (_intrGpuIsSurpriseRemoved())
+            break;
+
         if (!intrIsPending_HAL(pGpu, pIntr, engIdx, NV_INTR_VECTOR_INVALID, NULL))
         {
             break;
         }
+
+        if (_intrGpuIsSurpriseRemoved())
+            break;
 
         bPending = _intrServiceStallExactList(pGpu, pIntr, &engines);
     }

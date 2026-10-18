@@ -53,6 +53,33 @@
 #include "core/locks.h"
 #include "mem_mgr/pool_alloc.h"
 #include "deprecated/rmapi_deprecated.h"
+
+#if defined(NV_WINDOWS_IDDCX)
+#include "core/printf.h"
+
+void NvKmsWindowsTraceMessage(const char *message);
+
+static void
+_gvaspaceTraceAllocation
+(
+    const char   *operation,
+    OBJGVASPACE  *pGVAS,
+    NvU64         vAddr,
+    EMEMBLOCK    *pMemBlock
+)
+{
+    char message[384];
+
+    nvDbgSnprintf(message, sizeof(message),
+        "RM VA %s: vas=%p heap=%p va=0x%llx block=%p begin=0x%llx end=0x%llx refs=%u owner=0x%x",
+        operation, pGVAS, pGVAS->pHeap, vAddr, pMemBlock,
+        pMemBlock != NULL ? pMemBlock->begin : 0,
+        pMemBlock != NULL ? pMemBlock->end : 0,
+        pMemBlock != NULL ? pMemBlock->refCount : 0,
+        pMemBlock != NULL ? pMemBlock->owner : 0);
+    NvKmsWindowsTraceMessage(message);
+}
+#endif
 #include "rmapi/rs_utils.h"
 #include "gpu/mem_mgr/vaspace_api.h"
 #include "platform/sli/sli.h"
@@ -893,6 +920,9 @@ _gvaspaceReleaseVaForServerRm
 void
 gvaspaceDestruct_IMPL(OBJGVASPACE *pGVAS)
 {
+#if defined(NV_WINDOWS_IDDCX)
+    _gvaspaceTraceAllocation("destroy-space", pGVAS, 0, NULL);
+#endif
     // Destroy BC state.
     if (NULL != pGVAS->pHeap)
     {
@@ -1520,6 +1550,11 @@ gvaspaceAlloc_IMPL
 
 catch:
     pHeap->eheapSetAllocRange(pHeap, origRangeLo, origRangeHi);
+#if defined(NV_WINDOWS_IDDCX)
+    if (status == NV_OK)
+        _gvaspaceTraceAllocation("allocate", pGVAS, *pAddr,
+                                pHeap->eheapGetBlock(pHeap, *pAddr, 0));
+#endif
     return status;
 }
 
@@ -1632,6 +1667,9 @@ gvaspaceFree_IMPL
 )
 {
     EMEMBLOCK *pMemBlock = pGVAS->pHeap->eheapGetBlock(pGVAS->pHeap, vAddr, 0);
+#if defined(NV_WINDOWS_IDDCX)
+    _gvaspaceTraceAllocation("free", pGVAS, vAddr, pMemBlock);
+#endif
     NV_ASSERT_OR_RETURN(NULL != pMemBlock, NV_ERR_INVALID_ARGUMENT);
 
     return _gvaspaceInternalFree(pGVAS, vAddr, pMemBlock);
@@ -1764,6 +1802,9 @@ gvaspaceIncAllocRefCnt_IMPL
 
     pVASpaceBlock->refCount++;
 
+#if defined(NV_WINDOWS_IDDCX)
+    _gvaspaceTraceAllocation("add-reference", pGVAS, vAddr, pVASpaceBlock);
+#endif
     return NV_OK;
 }
 
