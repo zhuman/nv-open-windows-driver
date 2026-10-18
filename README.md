@@ -153,9 +153,11 @@ kernel-mode miniport. See Microsoft's
 
 ## ✅ Confirmed working
 
-Hardware validation has used an **RTX 4070 connected over USB4** on Windows 11.
-These are demonstrated features, not a claim that every GPU in the inherited
-supported-device table has been tested.
+Hardware validation includes an **RTX 4070 connected over USB4** on Windows 11
+and an **RTX 3060 Ti** confirmed working by the user. Detailed feature and USB4
+lifecycle testing documented here was performed on the RTX 4070. This does not
+mean every feature has been tested on each GPU, or that every GPU in the
+inherited supported-device table has been tested.
 
 | Area | Working functionality |
 | --- | --- |
@@ -269,9 +271,12 @@ From the repository root, run:
 
 The [build script](build-windows-iddcx.ps1) locates 64-bit MSBuild, restores the
 WIL NuGet dependency, and rebuilds the driver and its RM/NVKMS dependencies.
-It also explicitly sets `NvRmUserLinkProbe=true`, the historical name for
-enabling the real GPU backend. The IddCx and user-mode RM projects now default
-to that same backend, so Visual Studio builds do not need an extra property.
+The real RM/NVKMS backend is intrinsic to the IddCx project, so Visual Studio
+builds do not need a backend-enablement property. Portable downstream fixes
+default on; verbose RM engine/VA diagnostics default off. Use
+`-VerboseRmDiagnostics` with the helper to include those breadcrumbs without
+changing backend functionality. See the [build macro policy](windows-open/README.md#build-macro-policy)
+for the independent Windows, downstream-fix, and diagnostic guards.
 Open [the solution](windows-open/nv-windows-drivers.slnx) and select
 `Debug|x64` or `Release|x64`. WIL uses native C++ `PackageReference` support,
 enabled by `EnableNativePackageReferenceSupport=true` in the IddCx project.

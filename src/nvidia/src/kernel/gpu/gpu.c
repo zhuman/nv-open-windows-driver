@@ -30,7 +30,7 @@
 #include "lib/base_utils.h"
 #include "gpu/gpu.h"
 
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
 void NvKmsWindowsTraceMessage(const char *message);
 void NvKmsWindowsTraceStateInitEngine(NvU32 index, NvU32 descriptor, const char *name, NvBool begin);
 void NvKmsWindowsTraceStateLoadEngine(NvU32 index, NvU32 descriptor, const char *name, NvBool begin);
@@ -2351,7 +2351,7 @@ gpuStateInit_IMPL
         rmStatus = gpuLoadFailurePathTest(pGpu, NV_REG_STR_GPU_LOAD_FAILURE_TEST_STAGE_INIT, curEngDescIdx, NV_FALSE);
         if (rmStatus == NV_OK)
         {
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
             NvKmsWindowsTraceStateInitEngine(
                 curEngDescIdx,
                 curEngDescriptor,
@@ -2361,7 +2361,7 @@ gpuStateInit_IMPL
             engstateLogStateTransitionPre(pEngstate, ENGSTATE_STATE_INIT, &engTransitionData);
             rmStatus = engstateStateInit(pGpu, pEngstate);
             engstateLogStateTransitionPost(pEngstate, ENGSTATE_STATE_INIT, &engTransitionData);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
             NvKmsWindowsTraceStateInitEngine(
                 curEngDescIdx,
                 curEngDescriptor,
@@ -2801,7 +2801,7 @@ gpuStateLoad_IMPL
         rmStatus = gpuLoadFailurePathTest(pGpu, NV_REG_STR_GPU_LOAD_FAILURE_TEST_STAGE_LOAD, curEngDescIdx, NV_FALSE);
         if (rmStatus == NV_OK)
         {
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
             NvKmsWindowsTraceStateLoadEngine(
                 curEngDescIdx,
                 curEngDescriptor,
@@ -2813,7 +2813,7 @@ gpuStateLoad_IMPL
             engstateLogStateTransitionPre(pEngstate, ENGSTATE_STATE_LOAD, &engTransitionData);
             rmStatus = engstateStateLoad(pGpu, pEngstate, flags);
             engstateLogStateTransitionPost(pEngstate, ENGSTATE_STATE_LOAD, &engTransitionData);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
             NvKmsWindowsTraceStateLoadEngine(
                 curEngDescIdx,
                 curEngDescriptor,
@@ -2876,20 +2876,20 @@ gpuStateLoad_IMPL
     if (!(pGpu->pGpuArch->bGpuArchIsZeroFb && (flags & GPU_STATE_FLAGS_PRESERVING)))
     {
         // Video logging is not a required feature, don't override existing status
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM state load tail: video logging begin");
 #endif
         NV_CHECK(LEVEL_ERROR, gpuInitVideoLogging(pGpu) == NV_OK);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM state load tail: video logging end");
 #endif
     }
 
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     NvKmsWindowsTraceMessage("RM state load tail: VMMU info begin");
 #endif
     rmStatus = gpuInitVmmuInfo(pGpu);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     NvKmsWindowsTraceMessage("RM state load tail: VMMU info end");
 #endif
     if (rmStatus != NV_OK)
@@ -2900,11 +2900,11 @@ gpuStateLoad_IMPL
 
     {
         // Perform post load operations
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM state load tail: post load begin");
 #endif
         rmStatus = gpuStatePostLoad(pGpu, flags);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM state load tail: post load end");
 #endif
         if (rmStatus != NV_OK)
@@ -2959,11 +2959,11 @@ gpuStateLoad_IMPL
 
     if (IS_GSP_CLIENT(pGpu))
     {
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM state load tail: GSP metadata begin");
 #endif
         _gpuDumpGpuInitMetadataCper(pGpu);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM state load tail: GSP metadata end");
 #endif
     }
@@ -2984,7 +2984,7 @@ gpuStateLoad_IMPL
 
         MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
 
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM state load tail: PMA check begin");
 #endif
         NV_ASSERT_OK_OR_ELSE(localStatus,
@@ -2992,7 +2992,7 @@ gpuStateLoad_IMPL
             _gpuStateLoadUnknownFailureStore(
                 pGpu, localStatus);
             return localStatus);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM state load tail: PMA check end");
 #endif
     }
@@ -3002,19 +3002,19 @@ gpuStateLoad_IMPL
     // polling registry can set the mask to non-zero. Handle resume before
     // the polling registry.
     //
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     NvKmsWindowsTraceMessage("RM state load tail: RUSD polling begin");
 #endif
     gpuResumeRusdPollingOnLoad(pGpu);
     gpuHandleRusdPollingRegistry(pGpu);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     NvKmsWindowsTraceMessage("RM state load tail: RUSD polling end");
     NvKmsWindowsTraceMessage("RM state load tail: PCIe P2P begin");
 #endif
 
     // Initialize GPU PCIe P2P capability
     _gpuInitPcieP2PCapability(pGpu);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     NvKmsWindowsTraceMessage("RM state load tail: PCIe P2P end");
 #endif
 
@@ -3761,7 +3761,7 @@ gpuStatePostLoad
         rmStatus = gpuLoadFailurePathTest(pGpu, NV_REG_STR_GPU_LOAD_FAILURE_TEST_STAGE_POSTLOAD, curEngDescIdx, NV_FALSE);
         if (rmStatus == NV_OK)
         {
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
             NvKmsWindowsTraceStatePostLoadEngine(
                 curEngDescIdx,
                 curEngDescriptor,
@@ -3773,7 +3773,7 @@ gpuStatePostLoad
             rmStatus = engstateStatePostLoad(pGpu, pEngstate, flags);
             engstateLogStateTransitionPost(pEngstate, ENGSTATE_STATE_POST_LOAD, &engTransitionData);
             RMTRACE_ENGINE_PROFILE_EVENT("gpuStatePostLoadEngEnd", curEngDescriptor, pGpu->registerAccess.regReadCount, pGpu->registerAccess.regWriteCount);
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
             NvKmsWindowsTraceStatePostLoadEngine(
                 curEngDescIdx,
                 curEngDescriptor,

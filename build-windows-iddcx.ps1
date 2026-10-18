@@ -9,7 +9,9 @@ param(
     [ValidateSet('Build', 'Rebuild')]
     [string]$Target = 'Rebuild',
 
-    [string]$MSBuildPath
+    [string]$MSBuildPath,
+
+    [switch]$VerboseRmDiagnostics
 )
 
 Set-StrictMode -Version Latest
@@ -73,9 +75,11 @@ $arguments = @(
     '/m',
     "/p:Configuration=$Configuration",
     "/p:Platform=$Platform",
-    '/p:NvRmUserLinkProbe=true',
     '/v:minimal'
 )
+if ($VerboseRmDiagnostics) {
+    $arguments += '/p:NvRmVerboseDiagnostics=true'
+}
 
 Write-Host "Repository: $repoRoot"
 Write-Host "MSBuild:   $msbuild"

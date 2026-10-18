@@ -443,11 +443,40 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
   /p:Configuration=Debug /p:Platform=x64 /m
 ```
 
-The IddCx and user-mode RM projects default `NvRmUserLinkProbe` to `true`.
-Despite its historical name, this enables the real RM/NVKMS GPU backend used
-by the driver; the IDE therefore links the same backend as the build helper.
-Explicit property overrides remain available, and kernel-mode RM activation
-gates are unchanged.
+The real user-mode RM/NVKMS backend is intrinsic to the IddCx project. The IDE
+and build helper always link it; no backend-enablement property is needed.
+Kernel-mode RM activation gates are unchanged.
+
+### Build macro policy
+
+The former `NV_RM_USER_LINK_PROBE` / `NvRmUserLinkProbe` umbrella is retired.
+Its responsibilities are separated as follows:
+
+| Macro | Meaning | Default |
+| --- | --- | --- |
+| `NV_WINDOWS_IDDCX` | Windows IddCx integration and Windows-only common-code adaptations. | Defined by IddCx, user-mode RM, and NVKMS projects. |
+| `NV_DOWNSTREAM_BUGFIXES` | Portable downstream correctness fixes, currently preserving the owning virtual-memory reservation after a failed reserved unmap. | On in Windows builds through `NvDownstreamBugfixes=true`; non-Windows builds must explicitly opt in. |
+| `NV_RM_VERBOSE_DIAGNOSTICS` | Detailed RM engine/FIFO lifecycle and VA allocation/lifetime breadcrumbs. Windows trace calls additionally require `NV_WINDOWS_IDDCX`. | Off; enable with `NvRmVerboseDiagnostics=true` or the helper's `-VerboseRmDiagnostics` switch. |
+
+`NV_USER_MODE` still identifies the execution environment; it does not select
+these policies. Assertion/error reporting and physical-removal cancellation
+logs do not depend on verbose diagnostics. The redundant 4 KiB DMA smoke test
+and duplicate pre-attach BOOT_1 reads have been removed; actual DMA allocation,
+firmware initialization, and error checking remain active.
+
+The Windows profile retains its GSP thread-state timeout adaptation, global
+CeUtils suppression, BAR2 shutdown cleanup/leak checks, and legacy CE timeout
+fallback. These are not advertised as portable Linux fixes. In particular, the
+legacy CE timeout path can advance completion and invoke callbacks; confirmed
+physical removal instead uses the separate cancellation path without claiming
+completion. Verbose diagnostics never select either policy.
+
+The downstream-fix switch is independent of the Windows integration. Setting
+`NvDownstreamBugfixes=false` reproduces upstream reserved-unmap ownership,
+including the known double-free failure, and is intended only for comparison
+tests. The focused removal runner verifies Windows/native policy, verbose
+diagnostics on/off, and downstream-fix on/off combinations against production
+bodies. Non-Windows coverage is not a full Linux build or runtime validation.
 
 WIL is pinned as a `PackageReference` in
 [iddcx/nv-iddcx.vcxproj](iddcx/nv-iddcx.vcxproj). The project's

@@ -43,7 +43,7 @@
 #include "class/cl0070.h" // NV01_MEMORY_VIRTUAL
 #include "class/cl50a0.h" // NV50_MEMORY_VIRTUAL
 
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
 #include "core/printf.h"
 
 void NvKmsWindowsTraceMessage(const char *message);
@@ -292,7 +292,7 @@ _virtmemCopyConstruct
             vaspaceIncAllocRefCnt(pVASSrc, vaddr));
     }
 
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     _virtmemTraceLifetime("duplicate-source", pSrcVirtualMemory);
     _virtmemTraceLifetime("duplicate", pDstVirtualMemory);
 #endif
@@ -625,7 +625,7 @@ virtmemConstruct_IMPL
     pVirtualMemory->hVASpace = pAllocData->hVASpace;
     pVirtualMemory->bReserveVaOnAlloc = NV_TRUE;
 
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     _virtmemTraceLifetime("allocate", pVirtualMemory);
 #endif
     if (pAllocData->hVASpace != NV01_NULL_OBJECT)
@@ -716,7 +716,7 @@ virtmemDestruct_IMPL
 
     NV_ASSERT(pMemDesc);
 
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     _virtmemTraceLifetime("destroy", pVirtualMemory);
 #endif
     memDestructCommon(pMemory);

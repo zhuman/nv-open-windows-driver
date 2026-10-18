@@ -34,7 +34,7 @@
 #include "vgpu/rpc.h"
 #include "gpu/bus/kern_bus.h"
 
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
 void NvKmsWindowsTraceMessage(const char *message);
 #endif
 
@@ -175,11 +175,11 @@ kfifoStatePostLoad_GM107
     if (!(flags & GPU_STATE_FLAGS_PRESERVING))
     {
         // Prealloc USERD
-    #if defined(NV_RM_USER_LINK_PROBE)
+    #if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM KernelFifo post load: USERD prealloc begin");
     #endif
         NV_ASSERT_OK_OR_RETURN(kfifoPreAllocUserD_HAL(pGpu, pKernelFifo));
-    #if defined(NV_RM_USER_LINK_PROBE)
+    #if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM KernelFifo post load: USERD prealloc end");
     #endif
 
@@ -235,11 +235,11 @@ kfifoStatePostLoad_GM107
 
     if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu))
     {
-    #if defined(NV_RM_USER_LINK_PROBE)
+    #if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM KernelFifo post load: scheduling callback begin");
     #endif
         status = kfifoTriggerPostSchedulingEnableCallback(pGpu, pKernelFifo);
-    #if defined(NV_RM_USER_LINK_PROBE)
+    #if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         NvKmsWindowsTraceMessage("RM KernelFifo post load: scheduling callback end");
     #endif
         if (status != NV_OK)

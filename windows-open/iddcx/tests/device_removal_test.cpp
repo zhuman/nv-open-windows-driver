@@ -1040,7 +1040,7 @@ void TestVaOwnershipDiagnostics()
         messages.clear();
         CHECK(gvaspaceFree_IMPL(&vas, block.begin) == status);
         CHECK(internalFrees == 1 && heap.block == (status == NV_OK ? nullptr : &block) && block.refCount == 1);
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
         CHECK(messages.size() == 1 && messages[0].find("RM VA free:") == 0);
         CHECK(messages[0].find("va=0x120000000") != std::string::npos);
         CHECK(messages[0].find("refs=1") != std::string::npos);
@@ -1051,7 +1051,7 @@ void TestVaOwnershipDiagnostics()
     heap.block = &block;
     messages.clear();
     CHECK(gvaspaceIncAllocRefCnt_IMPL(&vas, block.begin) == NV_OK && block.refCount == 2);
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     CHECK(messages.size() == 1 && messages[0].find("add-reference") != std::string::npos);
     CHECK(messages[0].find("refs=2") != std::string::npos);
 #else
@@ -1066,7 +1066,7 @@ void TestVaOwnershipDiagnostics()
     try { gvaspaceFree_IMPL(&vas, block.begin); }
     catch (const ResourceFree::Assertion&) { asserted = true; }
     CHECK(asserted && internalFrees == 0 && heap.block == nullptr);
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     CHECK(messages.size() == 1 && messages[0].find("refs=0") != std::string::npos);
     _gvaspaceTraceAllocation("destroy-space", &vas, 0, nullptr);
     CHECK(messages.size() == 2 && messages.back().find("destroy-space") != std::string::npos);
@@ -1149,7 +1149,7 @@ void TestReservedVaUnmapOwnership()
             ((peer ? gpuCount : 0) + (defer && mappingKind != 0 ? 1U : 0));
         CHECK(cacheInvalidations == expectedCache);
         bool prematurelyFreed = false;
-#if defined(NV_REMOVAL_TEST_DMA_BASELINE)
+#if defined(NV_REMOVAL_TEST_DMA_BASELINE) || !defined(NV_DOWNSTREAM_BUGFIXES)
         prematurelyFreed = reserved && expectedStatus != NV_OK;
 #endif
         CHECK(internalFrees == (!reserved || prematurelyFreed ? 1U : 0U));

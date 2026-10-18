@@ -503,7 +503,7 @@ memmgrInitInternalChannels_IMPL
         return NV_OK;
     }
 
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX)
     return NV_OK;
 #endif
 

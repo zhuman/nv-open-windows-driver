@@ -59,7 +59,9 @@ try {
         'NTSTATUS RegisterAperture::Read32(', 'NTSTATUS Interrupt::Enable(',
         'NTSTATUS Interrupt::Disable(', 'BOOLEAN Interrupt::Isr(', 'void Interrupt::Dpc('
     )
-    $modes = if ($VerifyBaseline) { @('baseline', 'fixed', 'fixed-native-policy', 'dma-baseline') } else { @('fixed', 'fixed-native-policy') }
+    $modes = @('fixed', 'fixed-diagnostics', 'fixed-native-policy',
+        'fixed-native-diagnostics', 'downstream-disabled', 'native-downstream-disabled')
+    if ($VerifyBaseline) { $modes = @('baseline') + $modes + @('dma-baseline') }
     foreach ($mode in $modes) {
         $source = $hardware
         if ($mode -eq 'baseline') {
@@ -83,7 +85,7 @@ try {
                 (Get-Function $client "NV_STATUS`nclientFreeResource_IMPL") + "`n" +
                 (Get-Function $memory "void`nmemDestruct_IMPL") + "`n}"
             $production += "`nnamespace VaOwnership {`n"
-            $production += "`n#if defined(NV_WINDOWS_IDDCX)`n" +
+            $production += "`n#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)`n" +
                 (Get-Function $gpuVaSpace "static void`n_gvaspaceTraceAllocation") + "`n" +
                 (Get-Function $virtualMemory "static void`n_virtmemTraceLifetime") + "`n#endif`n"
             $production += (Get-Function $gpuVaSpace "NV_STATUS`ngvaspaceFree_IMPL") + "`n" +
@@ -108,8 +110,11 @@ try {
         }
         $production | Set-Content -LiteralPath (Join-Path $output 'device_removal_production.inc') -Encoding ascii
         $test = Join-Path $PSScriptRoot 'device_removal_test.cpp'
-        $defines = '/DNV_RM_USER_LINK_PROBE'
-        if ($mode -ne 'fixed-native-policy') { $defines += ' /DNV_WINDOWS_IDDCX' }
+        $defines = if ($mode -like '*downstream-disabled') { '' } else { '/DNV_DOWNSTREAM_BUGFIXES' }
+        if ($mode -notin @('fixed-native-policy', 'fixed-native-diagnostics', 'native-downstream-disabled')) {
+            $defines += ' /DNV_WINDOWS_IDDCX'
+        }
+        if ($mode -like '*diagnostics') { $defines += ' /DNV_RM_VERBOSE_DIAGNOSTICS' }
         if ($mode -eq 'baseline') { $defines += ' /DNV_REMOVAL_TEST_BASELINE' }
         if ($mode -eq 'dma-baseline') { $defines += ' /DNV_REMOVAL_TEST_DMA_BASELINE' }
         $executable = Join-Path $output "device_removal_$mode.exe"
@@ -127,7 +132,7 @@ try {
             Write-Host 'Committed DMA baseline reproduced: failed reserved unmap frees the owner allocation twice.'
         }
     }
-    $scrubberModes = @('fixed', 'fixed-probe', 'native-policy')
+    $scrubberModes = @('fixed', 'fixed-diagnostics', 'native-policy', 'native-diagnostics')
     if ($VerifyBaseline) { $scrubberModes = @('baseline') + $scrubberModes }
     foreach ($mode in $scrubberModes) {
         $sources = @{}
@@ -163,9 +168,9 @@ try {
         }
         $production += (Get-Function $sources.mem_scrub "void`nscrubberDestruct") + "`n"
         $production | Set-Content -LiteralPath (Join-Path $output 'scrubber_removal_production.inc') -Encoding ascii
-        $defines = if ($mode -eq 'native-policy') { '' } else { '/DNV_WINDOWS_IDDCX' }
+        $defines = if ($mode -like 'native-*') { '' } else { '/DNV_WINDOWS_IDDCX' }
         if ($mode -eq 'baseline') { $defines += ' /DNV_SCRUBBER_TEST_BASELINE' }
-        if ($mode -eq 'fixed-probe') { $defines += ' /DNV_RM_USER_LINK_PROBE' }
+        if ($mode -like '*diagnostics') { $defines += ' /DNV_RM_VERBOSE_DIAGNOSTICS' }
         $test = Join-Path $PSScriptRoot 'scrubber_removal_test.cpp'
         $executable = Join-Path $output "scrubber_removal_$mode.exe"
         & $env:ComSpec /c "call `"$VcVarsPath`" >nul && cd /d `"$output`" && cl /nologo /std:c++20 /EHsc /W4 /WX /MT $defines /I`"$output`" /Fe:`"$executable`" `"$test`""
@@ -176,7 +181,7 @@ try {
             Write-Host 'Committed scrubber baseline reproduced: CE teardown services interrupts after physical removal.'
         }
     }
-    $pmaModes = @('fixed', 'fixed-probe', 'native-policy')
+    $pmaModes = @('fixed', 'fixed-diagnostics', 'native-policy', 'native-diagnostics')
     if ($VerifyBaseline) { $pmaModes = @('baseline') + $pmaModes }
     foreach ($mode in $pmaModes) {
         $sources = @{}
@@ -220,9 +225,9 @@ try {
         $production += "`nnamespace GraphicsCleanup {`n" +
             (Get-Function $sources.kernel_graphics 'void kgraphicsFreeGlobalCtxBuffers_IMPL') + "`n}`n"
         $production | Set-Content -LiteralPath (Join-Path $output 'pma_scrub_removal_production.inc') -Encoding ascii
-        $defines = if ($mode -eq 'native-policy') { '' } else { '/DNV_WINDOWS_IDDCX' }
+        $defines = if ($mode -like 'native-*') { '' } else { '/DNV_WINDOWS_IDDCX' }
         if ($mode -eq 'baseline') { $defines += ' /DNV_PMA_TEST_BASELINE' }
-        if ($mode -eq 'fixed-probe') { $defines += ' /DNV_RM_USER_LINK_PROBE' }
+        if ($mode -like '*diagnostics') { $defines += ' /DNV_RM_VERBOSE_DIAGNOSTICS' }
         $test = Join-Path $PSScriptRoot 'pma_scrub_removal_test.cpp'
         $executable = Join-Path $output "pma_scrub_removal_$mode.exe"
         & $env:ComSpec /c "call `"$VcVarsPath`" >nul && cd /d `"$output`" && cl /nologo /std:c++20 /EHsc /W4 /WX /MT $defines /I`"$output`" /Fe:`"$executable`" `"$test`""
@@ -237,23 +242,27 @@ try {
 } finally {
     foreach ($name in @('device_removal_production.inc', 'device_removal_test.obj',
         'device_removal_baseline.exe', 'device_removal_fixed.exe',
-        'device_removal_fixed-native-policy.exe', 'device_removal_dma-baseline.exe',
+        'device_removal_fixed-diagnostics.exe', 'device_removal_fixed-native-policy.exe',
+        'device_removal_fixed-native-diagnostics.exe', 'device_removal_dma-baseline.exe',
+        'device_removal_downstream-disabled.exe', 'device_removal_native-downstream-disabled.exe',
         'scrubber_removal_production.inc', 'scrubber_removal_test.obj',
         'scrubber_removal_baseline.exe', 'scrubber_removal_fixed.exe',
-        'scrubber_removal_fixed-probe.exe', 'scrubber_removal_native-policy.exe',
+        'scrubber_removal_fixed-diagnostics.exe', 'scrubber_removal_native-policy.exe',
+        'scrubber_removal_native-diagnostics.exe',
         'pma_scrub_removal_production.inc', 'pma_scrub_removal_test.obj',
         'pma_scrub_removal_baseline.exe', 'pma_scrub_removal_fixed.exe',
-        'pma_scrub_removal_fixed-probe.exe', 'pma_scrub_removal_native-policy.exe')) {
+        'pma_scrub_removal_fixed-diagnostics.exe', 'pma_scrub_removal_native-policy.exe',
+        'pma_scrub_removal_native-diagnostics.exe')) {
         $path = Join-Path $output $name
         if (Test-Path -LiteralPath $path) {
             for ($attempt = 0; ; ++$attempt) {
                 try { Remove-Item -LiteralPath $path; break }
                 catch [System.UnauthorizedAccessException] {
-                    if ($attempt -eq 49) { throw }
+                    if ($attempt -eq 299) { throw }
                     Start-Sleep -Milliseconds 200
                 }
                 catch [System.IO.IOException] {
-                    if ($attempt -eq 49) { throw }
+                    if ($attempt -eq 299) { throw }
                     Start-Sleep -Milliseconds 200
                 }
             }

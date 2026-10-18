@@ -54,7 +54,7 @@
 #include "mem_mgr/pool_alloc.h"
 #include "deprecated/rmapi_deprecated.h"
 
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
 #include "core/printf.h"
 
 void NvKmsWindowsTraceMessage(const char *message);
@@ -920,7 +920,7 @@ _gvaspaceReleaseVaForServerRm
 void
 gvaspaceDestruct_IMPL(OBJGVASPACE *pGVAS)
 {
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     _gvaspaceTraceAllocation("destroy-space", pGVAS, 0, NULL);
 #endif
     // Destroy BC state.
@@ -1550,7 +1550,7 @@ gvaspaceAlloc_IMPL
 
 catch:
     pHeap->eheapSetAllocRange(pHeap, origRangeLo, origRangeHi);
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     if (status == NV_OK)
         _gvaspaceTraceAllocation("allocate", pGVAS, *pAddr,
                                 pHeap->eheapGetBlock(pHeap, *pAddr, 0));
@@ -1667,7 +1667,7 @@ gvaspaceFree_IMPL
 )
 {
     EMEMBLOCK *pMemBlock = pGVAS->pHeap->eheapGetBlock(pGVAS->pHeap, vAddr, 0);
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     _gvaspaceTraceAllocation("free", pGVAS, vAddr, pMemBlock);
 #endif
     NV_ASSERT_OR_RETURN(NULL != pMemBlock, NV_ERR_INVALID_ARGUMENT);
@@ -1802,7 +1802,7 @@ gvaspaceIncAllocRefCnt_IMPL
 
     pVASpaceBlock->refCount++;
 
-#if defined(NV_WINDOWS_IDDCX)
+#if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
     _gvaspaceTraceAllocation("add-reference", pGVAS, vAddr, pVASpaceBlock);
 #endif
     return NV_OK;

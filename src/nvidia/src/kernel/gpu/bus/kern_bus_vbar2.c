@@ -339,7 +339,7 @@ kbusFlushVirtualBar2_VBAR2(OBJGPU *pGpu, KernelBus *pKernelBus, NvBool shutdown,
         return;
     }
 
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX)
     while (shutdown && listCount(&pKernelBus->virtualBar2[gfid].usedMapList))
     {
         VirtualBar2MapEntry *pMap =
@@ -1170,7 +1170,7 @@ kbusReleaseRmAperture_VBAR2
         }
     }
 
-#if defined(DEBUG) || defined(NV_RM_USER_LINK_PROBE)
+#if defined(DEBUG) || defined(NV_WINDOWS_IDDCX)
     it = listIterAll(&pKernelBus->virtualBar2[GPU_GFID_PF].usedMapList);
     while (listIterNext(&it))
     {

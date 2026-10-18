@@ -24,7 +24,7 @@
 #include "nvport/nvport.h"
 #include "utils/nvassert.h"
 
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX)
 void NvKmsWindowsTraceAssert(NvU32 lineNumber, NvU64 returnAddress);
 #endif
 
@@ -194,7 +194,7 @@ nvAssertFailedNoLog
     NvU64 ip = portUtilGetReturnAddress();
     PORT_UNREFERENCED_VARIABLE(ip);
 
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX)
     NvKmsWindowsTraceAssert(lineNum, ip);
 #endif
 

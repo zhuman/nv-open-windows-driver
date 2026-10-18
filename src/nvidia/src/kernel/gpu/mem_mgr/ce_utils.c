@@ -382,7 +382,7 @@ ceutilsDestruct_IMPL
     else
     {
 #endif
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX)
     if (status != NV_OK)
     {
         NV_PRINTF(
@@ -395,7 +395,7 @@ ceutilsDestruct_IMPL
 
     // process all callbacks while CeUtils is fully functional
     if (status == NV_OK
-#if defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX)
         || status == NV_ERR_TIMEOUT
 #endif
        )

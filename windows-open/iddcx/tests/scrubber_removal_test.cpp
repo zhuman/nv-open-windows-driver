@@ -308,7 +308,10 @@ int main()
         f.channel.get = 1;
         unsigned output = 99;
         CHECK(channelWaitForFreeEntry(&f.channel, &output) == NV_ERR_TIMEOUT && output == 99);
-#if !defined(NV_RM_USER_LINK_PROBE)
+#if defined(NV_WINDOWS_IDDCX)
+        ceutilsDestruct_IMPL(&f.ce);
+        CHECK(m.callbacks == 3 && f.ce.lastCompletedPayload == f.ce.lastSubmittedPayload);
+#else
         ExpectAssert([&] { ceutilsDestruct_IMPL(&f.ce); });
 #endif
     }

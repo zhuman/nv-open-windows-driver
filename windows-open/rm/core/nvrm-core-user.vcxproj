@@ -4,7 +4,6 @@
   <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
   <PropertyGroup>
     <NvRmUserModeBuild>true</NvRmUserModeBuild>
-    <NvRmUserLinkProbe Condition="'$(NvRmUserLinkProbe)' == ''">true</NvRmUserLinkProbe>
     <ProjectGuid>{98A9AA62-CB4A-4BBA-9A80-A761D2398910}</ProjectGuid>
     <RootNamespace>NvRmCoreUser</RootNamespace>
     <TargetName>nvrm-core-user</TargetName>

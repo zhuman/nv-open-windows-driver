@@ -4,12 +4,10 @@
 #include "output.hpp"
 #include "trace.h"
 
-#if defined(NV_RM_USER_LINK_PROBE)
 #include "nvrm_gpu_attach.h"
 #include "nvplatform_mmio_rm.h"
 #include "nvkms_windows.h"
 #include "rmosxfac.h"
-#endif
 
 #include <new>
 
@@ -20,6 +18,7 @@ extern "C" void NvKmsWindowsTraceMessage(const char* message)
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%s", message);
 }
 
+#if defined(NV_RM_VERBOSE_DIAGNOSTICS)
 extern "C" void NvKmsWindowsTraceStateInitEngine(
     unsigned int index,
     unsigned int descriptor,
@@ -68,6 +67,8 @@ extern "C" void NvKmsWindowsTraceStatePostLoadEngine(
         name != nullptr ? name : "<unknown>");
 }
 
+#endif
+
 extern "C" void NvKmsWindowsTraceAssert(
     unsigned int lineNumber,
     unsigned long long returnAddress)
@@ -96,7 +97,6 @@ namespace nv::iddcx {
 
 namespace {
 
-#if defined(NV_RM_USER_LINK_PROBE)
 constexpr wchar_t GspFirmwareDirectory[] = L"ProgramData";
 constexpr wchar_t GspFirmwareSuffix[] = L"\\nv-iddcx\\gsp_ga10x.bin";
 
@@ -162,7 +162,6 @@ NV_STATUS InitializeRmGpuFirmware(
     CloseHandle(firmwareFile);
     return status;
 }
-#endif
 
 NTSTATUS ReadPciConfig(
     void* context,
@@ -280,12 +279,10 @@ void FreeDmaBuffer(void*, void* providerAllocation)
     }
 }
 
-#if defined(NV_RM_USER_LINK_PROBE)
 NvBool IsNvKmsDeviceRemoved(void* context)
 {
     return IsHardwareRemoved(static_cast<WDFDEVICE>(context)) ? NV_TRUE : NV_FALSE;
 }
-#endif
 
 NTSTATUS CreateRmGpuContext(_Inout_ DeviceContext* context) noexcept
 {
@@ -332,7 +329,6 @@ NTSTATUS CreateRmGpuContext(_Inout_ DeviceContext* context) noexcept
 
 void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
 {
-#if defined(NV_RM_USER_LINK_PROBE)
     if (context->rmGpuAttached &&
         InterlockedCompareExchange(&context->surpriseRemoved, 0, 0) != 0)
     {
@@ -398,14 +394,12 @@ void DestroyRmGpuContext(_Inout_ DeviceContext* context) noexcept
         context->rmDeviceInstance = NV_U32_MAX;
         context->rmGpuId = 0;
     }
-#endif
 
     NvPlatformRmGpuMarkShutdown(context->rmGpuContext);
     NvPlatformRmGpuContextDestroy(context->rmGpuContext);
     context->rmGpuContext = nullptr;
 }
 
-#if defined(NV_RM_USER_LINK_PROBE)
 NV_STATUS AttachRmGpuContext(DeviceContext* context) noexcept
 {
     context->rmGpuInstance = NV_U32_MAX;
@@ -423,7 +417,6 @@ NV_STATUS AttachRmGpuContext(DeviceContext* context) noexcept
     context->rmGpuAttached = status == NV_OK;
     return status;
 }
-#endif
 
 } // namespace
 
@@ -569,7 +562,6 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
-#if defined(NV_RM_USER_LINK_PROBE)
     if (!RmInitRm())
     {
         nvPortWindowsShutdown(&context->commonHost);
@@ -579,7 +571,6 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
     context->rmInitialized = true;
-#endif
 
     status = IddCxDeviceInitialize(device);
     TraceEvents(
@@ -621,13 +612,11 @@ void DeviceCleanup(WDFOBJECT deviceObject)
     DeviceContext* context = GetDeviceContext(deviceObject);
     context->adapter.Reset();
     context->deviceReset.Reset();
-#if defined(NV_RM_USER_LINK_PROBE)
     if (context->rmInitialized)
     {
         RmDestroyRm();
         context->rmInitialized = false;
     }
-#endif
     if (context->nvPortInitialized)
     {
         nvPortWindowsShutdown(&context->commonHost);
@@ -753,33 +742,6 @@ NTSTATUS PrepareHardware(
         return STATUS_DRIVER_INTERNAL_ERROR;
     }
 
-#if defined(NV_RM_USER_LINK_PROBE)
-    void* dmaAllocation = nullptr;
-    void* dmaAddress = nullptr;
-    NvU64 dmaLogicalAddress = 0;
-    const NV_STATUS dmaProbeStatus = AllocateDmaBuffer(
-        context,
-        4096,
-        4096,
-        NV_PLATFORM_RM_MEMORY_UNCACHED,
-        NV_PLATFORM_RM_MEMORY_PURPOSE_DEFAULT,
-        &dmaAllocation,
-        &dmaAddress,
-        &dmaLogicalAddress);
-    TraceEvents(
-        dmaProbeStatus == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
-        TRACE_DRIVER,
-        "DMA common-buffer probe: status=0x%08X cpu=%p logical=0x%llX",
-        dmaProbeStatus,
-        dmaAddress,
-        dmaLogicalAddress);
-    FreeDmaBuffer(context, dmaAllocation);
-    if (dmaProbeStatus != NV_OK)
-    {
-        return STATUS_DRIVER_INTERNAL_ERROR;
-    }
-#endif
-
     status = context->interrupt.Initialize(
         device,
         resourcesRaw,
@@ -804,21 +766,6 @@ NTSTATUS PrepareHardware(
     {
         return status;
     }
-
-#if defined(NV_RM_USER_LINK_PROBE)
-    constexpr SIZE_T PmcBoot1Offset = 0x00000004;
-    const auto& bar0 = context->bars[PciBars::Bar0Index];
-    const ULONG directBoot1 =
-        bar0.Aperture().ReadRegister32(PmcBoot1Offset);
-    const ULONG routedBoot1 = NvPlatformRmReadRegister32(
-        static_cast<const volatile UCHAR*>(
-            bar0.Address()) + PmcBoot1Offset);
-    TraceEvents(
-        TRACE_LEVEL_INFORMATION,
-        TRACE_DRIVER,
-        "RM pre-attach BOOT_1: direct=0x%08X routed=0x%08X",
-        directBoot1,
-        routedBoot1);
 
     const NV_STATUS attachStatus = AttachRmGpuContext(context);
     if (attachStatus != NV_OK)
@@ -901,7 +848,6 @@ NTSTATUS PrepareHardware(
     {
         return workerStatus;
     }
-#endif
 
     cleanup.release();
     return STATUS_SUCCESS;
@@ -909,7 +855,6 @@ NTSTATUS PrepareHardware(
 
 DWORD WINAPI InitializeNvKms(void* parameter)
 {
-#if defined(NV_RM_USER_LINK_PROBE)
     const WDFDEVICE device = static_cast<WDFDEVICE>(parameter);
     DeviceContext* const context = GetDeviceContext(device);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "NVKMS worker begin");
@@ -1027,15 +972,10 @@ DWORD WINAPI InitializeNvKms(void* parameter)
         "NVKMS worker complete: %!STATUS!",
         adapterStatus);
     return 0;
-#else
-    UNREFERENCED_PARAMETER(parameter);
-    return 0;
-#endif
 }
 
 NTSTATUS StartNvKmsInitialization(_In_ WDFDEVICE device) noexcept
 {
-#if defined(NV_RM_USER_LINK_PROBE)
     DeviceContext* const context = GetDeviceContext(device);
     if (IsHardwareRemoved(device))
     {
@@ -1063,10 +1003,6 @@ NTSTATUS StartNvKmsInitialization(_In_ WDFDEVICE device) noexcept
     return context->nvKmsThread != nullptr
         ? STATUS_SUCCESS
         : STATUS_INSUFFICIENT_RESOURCES;
-#else
-    UNREFERENCED_PARAMETER(device);
-    return STATUS_SUCCESS;
-#endif
 }
 
 _Use_decl_annotations_
@@ -1110,14 +1046,12 @@ NTSTATUS ReleaseHardware(
         context->nvKmsThread = nullptr;
     }
     InterlockedExchange(&context->nvKmsWorkCompleted, 0);
-#if defined(NV_RM_USER_LINK_PROBE)
     if (context->rmGpuAttached && IsHardwareRemoved(device))
     {
         const NV_STATUS status = NvRmMarkGpuLost(context->rmGpuContext);
         TraceEvents(status == NV_OK ? TRACE_LEVEL_INFORMATION : TRACE_LEVEL_ERROR,
             TRACE_DRIVER, "RM disconnect before output cleanup: 0x%08X", status);
     }
-#endif
     context->adapter.Reset();
     DestroyRmGpuContext(context);
     context->deviceReset.Reset();

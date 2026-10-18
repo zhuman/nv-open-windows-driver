@@ -23,7 +23,6 @@
     <RootNamespace>NvIddCx</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
     <EnableNativePackageReferenceSupport>true</EnableNativePackageReferenceSupport>
-    <NvRmUserLinkProbe Condition="'$(NvRmUserLinkProbe)' == ''">true</NvRmUserLinkProbe>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
@@ -52,8 +51,7 @@
       <AdditionalIncludeDirectories>$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)nvport\kernel;$(WindowsOpenRoot)rm\include;$(WindowsOpenRoot)modeset;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>false</ExceptionHandling>
       <LanguageStandard>stdcpp23</LanguageStandard>
-      <PreprocessorDefinitions>UMDF_DRIVER;NV_USER_MODE;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=11;IDDCX_MINIMUM_VERSION_REQUIRED=10;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <PreprocessorDefinitions Condition="'$(NvRmUserLinkProbe)' == 'true'">NV_RM_USER_LINK_PROBE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>UMDF_DRIVER;NV_USER_MODE;NV_WINDOWS_IDDCX;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=11;IDDCX_MINIMUM_VERSION_REQUIRED=10;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WppEnabled>true</WppEnabled>
       <WppPreprocessorDefinitions>WPP_MACRO_USE_KM_VERSION_FOR_UM=1;%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
       <WppRecorderEnabled>true</WppRecorderEnabled>
@@ -123,13 +121,13 @@
     <ProjectReference Include="..\nvport\user\nvport-user.vcxproj">
       <Project>{85929975-D645-46C4-91E5-875CCFB3227D}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\rm\core\nvrm-core-user.vcxproj" Condition="'$(NvRmUserLinkProbe)' == 'true'">
+    <ProjectReference Include="..\rm\core\nvrm-core-user.vcxproj">
       <Project>{98A9AA62-CB4A-4BBA-9A80-A761D2398910}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\rm\kernel\nvrm-os-user.vcxproj" Condition="'$(NvRmUserLinkProbe)' == 'true'">
+    <ProjectReference Include="..\rm\kernel\nvrm-os-user.vcxproj">
       <Project>{68F23533-123F-4483-8909-B5FA4532DC3E}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\modeset\nvkms-user.vcxproj" Condition="'$(NvRmUserLinkProbe)' == 'true'">
+    <ProjectReference Include="..\modeset\nvkms-user.vcxproj">
       <Project>{845C8A81-EF0D-4B2E-A34A-69AB1B69D55C}</Project>
     </ProjectReference>
   </ItemGroup>
