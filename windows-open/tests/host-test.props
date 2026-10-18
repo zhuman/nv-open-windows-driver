@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64"><Configuration>Debug</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <Keyword>Win32Proj</Keyword>
+    <ProjectSubType>NativeUnitTestProject</ProjectSubType>
+    <IsTestProject>true</IsTestProject>
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
+    <EnableNativePackageReferenceSupport>true</EnableNativePackageReferenceSupport>
+    <NvDownstreamBugfixes>false</NvDownstreamBugfixes>
+    <NvRmVerboseDiagnostics>false</NvRmVerboseDiagnostics>
+    <NvTestProfile Condition="'$(NvTestProfile)' == ''">default</NvTestProfile>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <MSBuildProjectExtensionsPath>$(MSBuildThisFileDirectory)..\out\obj\$(Platform)\$(Configuration)\tests\$(MSBuildProjectName)\$(NvTestProfile)\nuget\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset Condition="'$(PlatformToolset)' == ''">v145</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' != 'Debug'">false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(WindowsOpenRoot)out\$(Platform)\$(Configuration)\tests\$(NvTestProfile)\</OutDir>
+    <IntDir>$(WindowsOpenRoot)out\obj\$(Platform)\$(Configuration)\tests\$(MSBuildProjectName)\$(NvTestProfile)\</IntDir>
+    <NvTestWdfIncludePath Condition="'$(NvTestWdfIncludePath)' == ''">$(WindowsSdkDir)Include\wdf\umdf\2.35</NvTestWdfIncludePath>
+    <NvTestWilIncludePath Condition="'$(NvTestUsesWil)' == 'true' And '$(NvTestWilIncludePath)' == ''">$(PkgMicrosoft_Windows_ImplementationLibrary)\include</NvTestWilIncludePath>
+    <ExternalIncludePath>$(PkgMicrosoft_googletest_v140_windesktop_msvcstl_static_rt-dyn)\build\native\include;$(NvidiaSdkInclude);$(RepoRoot)src\nvidia\inc;$(ExternalIncludePath)</ExternalIncludePath>
+    <ExternalIncludePath Condition="'$(NvTestUsesWdf)' == 'true'">$(NvTestWdfIncludePath);$(NvTestWilIncludePath);$(ExternalIncludePath)</ExternalIncludePath>
+    <Force-Enable-Microsoft-googletest-v140-windesktop-msvcstl-static-rt-dyn Condition="'$(PlatformToolset)' == 'ClangCL'">true</Force-Enable-Microsoft-googletest-v140-windesktop-msvcstl-static-rt-dyn>
+    <NvTestWindowsPolicy Condition="'$(NvRemovalFixture)' != '' And '$(NvTestProfile)' != 'native-policy' And '$(NvTestProfile)' != 'native-diagnostics' And '$(NvTestProfile)' != 'native-downstream-disabled'">true</NvTestWindowsPolicy>
+    <NvTestDownstreamFix Condition="'$(NvRemovalFixture)' == 'device' And '$(NvTestProfile)' != 'downstream-disabled' And '$(NvTestProfile)' != 'native-downstream-disabled'">true</NvTestDownstreamFix>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)' != 'Debug'">MultiThreadedDLL</RuntimeLibrary>
+      <PreprocessorDefinitions Condition="'$(Configuration)' == 'Release'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(NvTestWindowsPolicy)' == 'true'">NV_WINDOWS_IDDCX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(NvTestDownstreamFix)' == 'true'">NV_DOWNSTREAM_BUGFIXES;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(NvTestProfile)' == 'diagnostics' Or '$(NvTestProfile)' == 'native-diagnostics'">NV_RM_VERBOSE_DIAGNOSTICS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(NvRemovalFixture)' == 'device' And '$(NvTestProfile)' == 'baseline'">NV_REMOVAL_TEST_BASELINE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(NvRemovalFixture)' == 'device' And '$(NvTestProfile)' == 'dma-baseline'">NV_REMOVAL_TEST_DMA_BASELINE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(NvRemovalFixture)' == 'scrubber' And '$(NvTestProfile)' == 'baseline'">NV_SCRUBBER_TEST_BASELINE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(NvRemovalFixture)' == 'pma' And '$(NvTestProfile)' == 'baseline'">NV_PMA_TEST_BASELINE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(MSBuildProjectName)' == 'gsp-timeout-tests' And '$(NvTestProfile)' == 'native-policy'">NV_GSP_TIMEOUT_TEST_NONWINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization Condition="'$(Configuration)' == 'Debug'">Disabled</Optimization>
+      <Optimization Condition="'$(Configuration)' != 'Debug'">MaxSpeed</Optimization>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <DisableSpecificWarnings>4471;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn" Version="1.8.1.8" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.Windows.ImplementationLibrary" Version="1.0.260126.7" GeneratePathProperty="true" Condition="'$(NvTestUsesWil)' == 'true'" />
+  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(NvTestUsesWdf)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions Condition="'$(NvTestUsesWil)' == 'true'">UMDF_DRIVER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NvTestWdfIncludePath);$(NvTestWilIncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>

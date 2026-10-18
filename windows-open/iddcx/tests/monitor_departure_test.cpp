@@ -1,9 +1,9 @@
+#include <gtest/gtest.h>
+
 #include <windows.h>
 
 #include <array>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 
 using NvU32 = std::uint32_t;
 using NTSTATUS = LONG;
@@ -16,16 +16,6 @@ constexpr int TRACE_DRIVER = 1;
 
 namespace {
 
-unsigned checks = 0;
-void Check(bool condition)
-{
-    ++checks;
-    if (!condition)
-    {
-        std::fprintf(stderr, "Monitor departure case %u failed\n", checks);
-        std::abort();
-    }
-}
 
 class Adapter;
 class Output;
@@ -51,7 +41,7 @@ class Output
 public:
     IDDCX_MONITOR Monitor() const noexcept { return monitor_; }
     const ::DisplayState& DisplayState() const noexcept { return state_; }
-    void StopMonitorControl() noexcept { Check(false); }
+    void StopMonitorControl() noexcept { EXPECT_TRUE(false); }
 
     ::Monitor* monitor_;
     ::DisplayState state_;
@@ -59,12 +49,12 @@ public:
 
 void TraceEvents(int, int, const char*, NTSTATUS, NvU32 displayHandle)
 {
-    Check(displayHandle >= 1 && displayHandle <= 16);
+    EXPECT_TRUE(displayHandle >= 1 && displayHandle <= 16);
 }
 
 void WdfObjectDelete(IDDCX_MONITOR)
 {
-    Check(false);
+    EXPECT_TRUE(false);
 }
 
 NTSTATUS IddCxMonitorDeparture(IDDCX_MONITOR monitor);
@@ -92,18 +82,22 @@ public:
 
 void Destroy(Monitor& monitor)
 {
-    Check(!monitor.destroyed);
+    ASSERT_FALSE(monitor.destroyed);
     monitor.owner->OnOutputDestroyed(monitor.output);
     monitor.destroyed = true;
     DWORD oldProtection = 0;
     // A framework-owned context becomes inaccessible before departure returns.
-    Check(VirtualProtect(monitor.output, 4096, PAGE_NOACCESS, &oldProtection) != FALSE);
+    EXPECT_TRUE(VirtualProtect(monitor.output, 4096, PAGE_NOACCESS, &oldProtection) != FALSE);
 }
 
 NTSTATUS IddCxMonitorDeparture(IDDCX_MONITOR monitor)
 {
-    Check(!monitor->destroyed);
-    Check(++monitor->departures == 1);
+    if (monitor == nullptr || monitor->destroyed)
+    {
+        ADD_FAILURE() << "Departure requires a live monitor";
+        return DepartureFailure;
+    }
+    EXPECT_TRUE(++monitor->departures == 1);
     if (monitor->fail)
     {
         return DepartureFailure;
@@ -115,7 +109,8 @@ NTSTATUS IddCxMonitorDeparture(IDDCX_MONITOR monitor)
     return STATUS_SUCCESS;
 }
 
-void Run(NvU32 count, NvU32 connectedMask, NvU32 failureMask, NvU32 deferredMask)
+void VerifyDepartureScenario(
+    NvU32 count, NvU32 connectedMask, NvU32 failureMask, NvU32 deferredMask)
 {
     Adapter adapter;
     std::array<Monitor, Adapter::MaxOutputs> monitors{};
@@ -131,7 +126,7 @@ void Run(NvU32 count, NvU32 connectedMask, NvU32 failureMask, NvU32 deferredMask
         monitor.defer = (deferredMask & (1U << index)) != 0;
         monitor.output = static_cast<Output*>(VirtualAlloc(
             nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-        Check(monitor.output != nullptr);
+        ASSERT_NE(monitor.output, nullptr);
         monitor.output->monitor_ = &monitor;
         monitor.output->state_.displayHandle = monitor.displayHandle;
         adapter.outputs_[adapter.outputCount_++] = monitor.output;
@@ -140,57 +135,63 @@ void Run(NvU32 count, NvU32 connectedMask, NvU32 failureMask, NvU32 deferredMask
         expectFailure = expectFailure || (!connected[index] && monitor.fail);
     }
 
-    Check(adapter.Depart(connected) == (expectFailure ? DepartureFailure : STATUS_SUCCESS));
-    Check(adapter.outputCount_ == expectedRemaining);
+    EXPECT_TRUE(adapter.Depart(connected) == (expectFailure ? DepartureFailure : STATUS_SUCCESS));
+    EXPECT_TRUE(adapter.outputCount_ == expectedRemaining);
     NvU32 remainingIndex = 0;
     for (NvU32 index = 0; index < count; ++index)
     {
         auto& monitor = monitors[index];
-        Check(monitor.departures == (connected[index] ? 0U : 1U));
+        EXPECT_TRUE(monitor.departures == (connected[index] ? 0U : 1U));
         if (connected[index] || monitor.fail)
         {
-            Check(!monitor.destroyed);
-            Check(adapter.outputs_[remainingIndex++] == monitor.output);
+            EXPECT_TRUE(!monitor.destroyed);
+            EXPECT_TRUE(adapter.outputs_[remainingIndex++] == monitor.output);
         }
         else
         {
             if (monitor.defer)
             {
-                Check(!monitor.destroyed);
+                EXPECT_TRUE(!monitor.destroyed);
                 Destroy(monitor);
             }
-            Check(monitor.destroyed);
-            Check(adapter.outputCount_ == expectedRemaining);
+            EXPECT_TRUE(monitor.destroyed);
+            EXPECT_TRUE(adapter.outputCount_ == expectedRemaining);
         }
     }
     for (NvU32 index = adapter.outputCount_; index < Adapter::MaxOutputs; ++index)
     {
-        Check(adapter.outputs_[index] == nullptr);
+        EXPECT_TRUE(adapter.outputs_[index] == nullptr);
     }
     for (NvU32 index = 0; index < count; ++index)
     {
-        Check(VirtualFree(monitors[index].output, 0, MEM_RELEASE) != FALSE);
+        EXPECT_TRUE(VirtualFree(monitors[index].output, 0, MEM_RELEASE) != FALSE);
     }
 }
 
 } // namespace
 
-int main()
+TEST(MonitorDeparture, EmptyAdapter)
 {
-    Run(0, 0, 0, 0);
+    VerifyDepartureScenario(0, 0, 0, 0);
+}
+
+TEST(MonitorDeparture, ExhaustsFourOutputConnectionFailureAndDeferralMasks)
+{
+    // Synchronous destruction compacts outputs during iteration. Mix delayed
+    // callbacks and failures to catch skipped or double-departed monitors.
     for (NvU32 connected = 0; connected < 16; ++connected)
     {
         for (NvU32 failed = 0; failed < 16; ++failed)
         {
             for (NvU32 deferred = 0; deferred < 16; ++deferred)
             {
-                Run(4, connected, failed, deferred);
+                VerifyDepartureScenario(4, connected, failed, deferred);
             }
         }
     }
-    Run(16, 0, 0, 0);
-    Run(16, 0, 0, 0xffff);
-    Run(16, 0xaaaa, 0x4444, 0x2222);
-    Run(16, 0xffff, 0, 0);
-    std::printf("%u production monitor departure checks passed\n", checks);
 }
+
+TEST(MonitorDeparture, SynchronouslyDepartsAllSixteenOutputs) { VerifyDepartureScenario(16, 0, 0, 0); }
+TEST(MonitorDeparture, DefersAllSixteenDepartures) { VerifyDepartureScenario(16, 0, 0, 0xffff); }
+TEST(MonitorDeparture, MixesSixteenConnectedFailedAndDeferredOutputs) { VerifyDepartureScenario(16, 0xaaaa, 0x4444, 0x2222); }
+TEST(MonitorDeparture, LeavesAllConnectedOutputsAlive) { VerifyDepartureScenario(16, 0xffff, 0, 0); }

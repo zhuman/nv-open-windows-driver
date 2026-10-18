@@ -1,8 +1,8 @@
+#include <gtest/gtest.h>
+
 #include "..\dirty_regions.hpp"
 
 #include <algorithm>
-#include <cstdio>
-#include <cstdlib>
 #include <vector>
 
 using nv::iddcx::DirtyRegions;
@@ -10,74 +10,75 @@ using nv::iddcx::DirtyRegionTracker;
 
 namespace {
 
-void Require(bool value)
-{
-    if (!value)
-    {
-        std::fputs("Dirty-region test failed\n", stderr);
-        std::abort();
-    }
-}
 
 DirtyRegions Pending(DirtyRegionTracker& tracker, UINT slot)
 {
     DirtyRegions regions;
-    Require(SUCCEEDED(tracker.Pending(slot, &regions)));
-    Require(regions.count <= 2);
+    if (FAILED(tracker.Pending(slot, &regions)))
+    {
+        ADD_FAILURE() << "Unable to query pending dirty regions for slot " << slot;
+        return {};
+    }
+    if (regions.count > 2)
+    {
+        ADD_FAILURE() << "Unexpected dirty-region count: " << regions.count;
+        return {};
+    }
     for (UINT index = 0; index < regions.count; ++index)
     {
         const RECT& r = regions.rectangles[index];
-        Require(r.left == 0 && r.right == static_cast<LONG>(tracker.Width()));
-        Require(r.top >= 0 && r.top < r.bottom &&
+        EXPECT_TRUE(r.left == 0 && r.right == static_cast<LONG>(tracker.Width()));
+        EXPECT_TRUE(r.top >= 0 && r.top < r.bottom &&
             r.bottom <= static_cast<LONG>(tracker.Height()));
-        Require(index == 0 || regions.rectangles[index - 1].bottom < r.top);
+        EXPECT_TRUE(index == 0 || regions.rectangles[index - 1].bottom < r.top);
     }
     return regions;
 }
 
-void BasicCases()
+TEST(DirtyRegions, ValidatesBoundsCoalescingAndResize)
 {
     DirtyRegionTracker tracker;
     DirtyRegions regions;
-    Require(FAILED(tracker.Pending(0, &regions)));
-    Require(FAILED(tracker.Configure(0, 100, 2)));
-    Require(FAILED(tracker.Configure(100, 100, 0)));
-    Require(FAILED(tracker.Configure(0xffffffffU, 100, 2)));
-    Require(SUCCEEDED(tracker.Configure(100, 100, 3)));
+    EXPECT_TRUE(FAILED(tracker.Pending(0, &regions)));
+    EXPECT_TRUE(FAILED(tracker.Configure(0, 100, 2)));
+    EXPECT_TRUE(FAILED(tracker.Configure(100, 100, 0)));
+    EXPECT_TRUE(FAILED(tracker.Configure(0xffffffffU, 100, 2)));
+    ASSERT_TRUE(SUCCEEDED(tracker.Configure(100, 100, 3)));
     for (UINT slot = 0; slot < 3; ++slot)
     {
         const auto initial = Pending(tracker, slot);
-        Require(initial.count == 1 && initial.rectangles[0].bottom == 100);
-        Require(SUCCEEDED(tracker.Commit(slot)));
+        EXPECT_TRUE(initial.count == 1 && initial.rectangles[0].bottom == 100);
+        EXPECT_TRUE(SUCCEEDED(tracker.Commit(slot)));
     }
-    Require(FAILED(tracker.Commit(3)));
-    Require(FAILED(tracker.Pending(0, nullptr)));
+    EXPECT_TRUE(FAILED(tracker.Commit(3)));
+    EXPECT_TRUE(FAILED(tracker.Pending(0, nullptr)));
     const RECT rectangles[] = {{4, 10, 9, 20}, {4, 30, 9, 40}, {4, 80, 9, 90}};
-    Require(SUCCEEDED(tracker.AddFrame(rectangles)));
+    // The bounded band list may over-copy clean rows, but must not drop damage.
+    EXPECT_TRUE(SUCCEEDED(tracker.AddFrame(rectangles)));
     const auto collapsed = Pending(tracker, 0);
-    Require(collapsed.count == 2);
-    Require(collapsed.rectangles[0].top == 10 && collapsed.rectangles[0].bottom == 40);
-    Require(collapsed.rectangles[1].top == 80 && collapsed.rectangles[1].bottom == 90);
-    Require(SUCCEEDED(tracker.Commit(0)));
-    Require(Pending(tracker, 0).count == 0);
-    Require(Pending(tracker, 1).count == 2);
+    EXPECT_TRUE(collapsed.count == 2);
+    EXPECT_TRUE(collapsed.rectangles[0].top == 10 && collapsed.rectangles[0].bottom == 40);
+    EXPECT_TRUE(collapsed.rectangles[1].top == 80 && collapsed.rectangles[1].bottom == 90);
+    EXPECT_TRUE(SUCCEEDED(tracker.Commit(0)));
+    EXPECT_TRUE(Pending(tracker, 0).count == 0);
+    EXPECT_TRUE(Pending(tracker, 1).count == 2);
     const RECT empty[] = {{0, 0, 0, 0}, {-20, 4, -10, 8}, {101, 4, 110, 8}};
-    Require(SUCCEEDED(tracker.AddFrame(empty)));
-    Require(Pending(tracker, 0).count == 0);
+    EXPECT_TRUE(SUCCEEDED(tracker.AddFrame(empty)));
+    EXPECT_TRUE(Pending(tracker, 0).count == 0);
     const RECT clipped[] = {{-4, -5, 8, 5}, {99, 95, 105, 105}};
-    Require(SUCCEEDED(tracker.AddFrame(clipped)));
-    Require(Pending(tracker, 0).rectangles[0].top == 0);
-    Require(Pending(tracker, 0).rectangles[1].bottom == 100);
+    EXPECT_TRUE(SUCCEEDED(tracker.AddFrame(clipped)));
+    EXPECT_TRUE(Pending(tracker, 0).rectangles[0].top == 0);
+    EXPECT_TRUE(Pending(tracker, 0).rectangles[1].bottom == 100);
     const RECT invalid[] = {{10, 10, 5, 20}};
-    Require(FAILED(tracker.AddFrame(invalid)));
+    EXPECT_TRUE(FAILED(tracker.AddFrame(invalid)));
     tracker.Invalidate();
     for (UINT slot = 0; slot < 3; ++slot)
     {
-        Require(Pending(tracker, slot).rectangles[0].bottom == 100);
+        EXPECT_TRUE(Pending(tracker, slot).rectangles[0].bottom == 100);
     }
-    Require(SUCCEEDED(tracker.Configure(7, 5, 1)));
-    Require(Pending(tracker, 0).rectangles[0].right == 7);
-    Require(Pending(tracker, 0).rectangles[0].bottom == 5);
+    EXPECT_TRUE(SUCCEEDED(tracker.Configure(7, 5, 1)));
+    EXPECT_TRUE(Pending(tracker, 0).rectangles[0].right == 7);
+    EXPECT_TRUE(Pending(tracker, 0).rectangles[0].bottom == 5);
 }
 
 unsigned Random(unsigned& state)
@@ -86,12 +87,14 @@ unsigned Random(unsigned& state)
     return state;
 }
 
+// The full incoming image is the oracle; seeded slot reuse checks cumulative
+// damage independently for every RAM/VRAM copy, including dropped uploads.
 void ModelFrames(UINT slots)
 {
     constexpr UINT Width = 32;
     constexpr UINT Height = 24;
     DirtyRegionTracker tracker;
-    Require(SUCCEEDED(tracker.Configure(Width, Height, slots)));
+    ASSERT_TRUE(SUCCEEDED(tracker.Configure(Width, Height, slots)));
     std::vector<unsigned> incoming(Width * Height, 0);
     std::vector<std::vector<unsigned>> ram(slots, std::vector<unsigned>(Width * Height, ~0U));
     std::vector<std::vector<unsigned>> vram = ram;
@@ -115,7 +118,7 @@ void ModelFrames(UINT slots)
                 }
             }
         }
-        Require(SUCCEEDED(tracker.AddFrame(rectangles)));
+        EXPECT_TRUE(SUCCEEDED(tracker.AddFrame(rectangles)));
         const UINT slot = Random(random) % slots;
         const auto pending = Pending(tracker, slot);
         for (const RECT& r : pending.Rectangles())
@@ -135,20 +138,16 @@ void ModelFrames(UINT slots)
             const UINT last = static_cast<UINT>(r.bottom) * Width;
             std::copy(ram[slot].begin() + first, ram[slot].begin() + last, vram[slot].begin() + first);
         }
-        Require(vram[slot] == incoming);
-        Require(SUCCEEDED(tracker.Commit(slot)));
-        Require(Pending(tracker, slot).count == 0);
+        EXPECT_TRUE(vram[slot] == incoming);
+        EXPECT_TRUE(SUCCEEDED(tracker.Commit(slot)));
+        EXPECT_TRUE(Pending(tracker, slot).count == 0);
     }
 }
 
 } // namespace
 
-int main()
-{
-    BasicCases();
-    for (UINT slots : {1U, 2U, 3U, 7U, 17U})
-    {
-        ModelFrames(slots);
-    }
-    std::puts("PASS: boundaries, coalescing, resize, and 100000 modeled frames across 1/2/3/7/17 buffers");
-}
+TEST(DirtyRegions, ModelsOneBuffer) { ModelFrames(1); }
+TEST(DirtyRegions, ModelsTwoBuffers) { ModelFrames(2); }
+TEST(DirtyRegions, ModelsThreeBuffers) { ModelFrames(3); }
+TEST(DirtyRegions, ModelsSevenBuffers) { ModelFrames(7); }
+TEST(DirtyRegions, ModelsSeventeenBuffers) { ModelFrames(17); }

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <NvTestPowerShell Condition="'$(NvTestPowerShell)' == ''">$(SystemRoot)\System32\WindowsPowerShell\v1.0\powershell.exe</NvTestPowerShell>
+    <NvTestGenerator>$(MSBuildThisFileDirectory)generate-test-sources.ps1</NvTestGenerator>
+    <NvTestNeedsGeneration Condition="'$(NvRemovalFixture)' != '' Or '$(MSBuildProjectName)' == 'monitor-departure-tests' Or '$(MSBuildProjectName)' == 'mpo-retirement-tests' Or '$(MSBuildProjectName)' == 'mpo-request-tests' Or '$(MSBuildProjectName)' == 'gsp-timeout-tests'">true</NvTestNeedsGeneration>
+    <NvTestGeneratedFile Condition="'$(NvRemovalFixture)' == 'device'">device_removal_production.inc</NvTestGeneratedFile>
+    <NvTestGeneratedFile Condition="'$(NvRemovalFixture)' == 'scrubber'">scrubber_removal_production.inc</NvTestGeneratedFile>
+    <NvTestGeneratedFile Condition="'$(NvRemovalFixture)' == 'pma'">pma_scrub_removal_production.inc</NvTestGeneratedFile>
+    <NvTestGeneratedFile Condition="'$(MSBuildProjectName)' == 'monitor-departure-tests'">monitor_departure_test.cpp</NvTestGeneratedFile>
+    <NvTestGeneratedFile Condition="'$(MSBuildProjectName)' == 'mpo-retirement-tests'">mpo_retirement_test.cpp</NvTestGeneratedFile>
+    <NvTestGeneratedFile Condition="'$(MSBuildProjectName)' == 'mpo-request-tests'">flip_channel_validation.hpp</NvTestGeneratedFile>
+    <NvTestGeneratedFile Condition="'$(MSBuildProjectName)' == 'gsp-timeout-tests'">gsp_timeout_probe.inc</NvTestGeneratedFile>
+    <NvTestResultFile Condition="'$(NvTestResultFile)' == ''">$(OutDir)results\$(MSBuildProjectName).xml</NvTestResultFile>
+    <NvTestFilter Condition="'$(NvTestFilter)' == ''">*</NvTestFilter>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)iddcx\tests;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(NvTestUsesWil)' == 'true'">$(NvTestWilIncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(NvTestNeedsGeneration)' == 'true'">
+    <NvTestGenerationInput Include="$(NvTestGenerator);$(WindowsOpenRoot)iddcx\tests\generate-removal-sources.ps1;$(WindowsOpenRoot)iddcx\tests\monitor_departure_test.cpp;$(WindowsOpenRoot)iddcx\tests\mpo_retirement_test.cpp;$(WindowsOpenRoot)iddcx\device.cpp;$(WindowsOpenRoot)iddcx\device.hpp;$(WindowsOpenRoot)iddcx\hardware_services.cpp;$(WindowsOpenRoot)iddcx\swapchain_pipeline.cpp;$(WindowsOpenRoot)iddcx\adapter.cpp;$(WindowsOpenRoot)iddcx\mpo_scene.cpp;$(WindowsOpenRoot)modeset\nvkms_windows.cpp;$(WindowsOpenRoot)rm\kernel\nvrm_gpu_attach.c;$(RepoRoot)src\nvidia-modeset\src\nvkms-dma.c;$(RepoRoot)src\nvidia-modeset\src\nvkms-hw-flip.c;$(RepoRoot)src\nvidia\src\libraries\resserv\src\rs_server.c;$(RepoRoot)src\nvidia\src\libraries\resserv\src\rs_client.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\mem.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\virtual_mem.c;$(RepoRoot)src\nvidia\src\kernel\mem_mgr\gpu_vaspace.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\arch\maxwell\virt_mem_allocator_gm107.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\ce_utils.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\channel_utils.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\mem_scrub.c;$(RepoRoot)src\nvidia\src\kernel\gpu\intr\intr.c;$(RepoRoot)src\nvidia\src\kernel\gpu\mem_mgr\phys_mem_allocator\phys_mem_allocator.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gr\kernel_graphics.c;$(RepoRoot)src\nvidia\src\kernel\gpu\gsp\kernel_gsp.c" />
+  </ItemGroup>
+  <Target Name="ValidateHostTestProfile" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(NvTestProfile)' != 'default' And '$(NvTestProfile)' != 'diagnostics' And '$(NvTestProfile)' != 'native-policy' And '$(NvTestProfile)' != 'native-diagnostics' And '$(NvTestProfile)' != 'downstream-disabled' And '$(NvTestProfile)' != 'native-downstream-disabled' And '$(NvTestProfile)' != 'baseline' And '$(NvTestProfile)' != 'dma-baseline'" Text="Unknown NvTestProfile: $(NvTestProfile)" />
+    <Error Condition="'$(NvRemovalFixture)' == '' And '$(NvTestProfile)' != 'default' And !('$(MSBuildProjectName)' == 'gsp-timeout-tests' And '$(NvTestProfile)' == 'native-policy')" Text="$(MSBuildProjectName) does not support NvTestProfile=$(NvTestProfile)." />
+    <Error Condition="'$(NvRemovalFixture)' != 'device' And ('$(NvTestProfile)' == 'downstream-disabled' Or '$(NvTestProfile)' == 'native-downstream-disabled' Or '$(NvTestProfile)' == 'dma-baseline')" Text="Only device-removal-tests supports NvTestProfile=$(NvTestProfile)." />
+    <Error Condition="'$(NvTestUsesWdf)' == 'true' And !Exists('$(NvTestWdfIncludePath)\wdf.h')" Text="UMDF 2.35 headers not found. Install the WDK or set NvTestWdfIncludePath." />
+    <Error Condition="'$(NvTestUsesWil)' == 'true' And !Exists('$(NvTestWilIncludePath)\wil\resource.h')" Text="WIL headers not found. Restore packages or set NvTestWilIncludePath to a valid include directory." />
+  </Target>
+  <Target Name="GenerateHostTestSources" BeforeTargets="ClCompile" Condition="'$(NvTestNeedsGeneration)' == 'true'" Inputs="@(NvTestGenerationInput)" Outputs="$(IntDir)$(NvTestGeneratedFile)">
+    <MakeDir Directories="$(IntDir)" />
+    <Exec Command="&quot;$(NvTestPowerShell)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(NvTestGenerator)&quot; -Project &quot;$(MSBuildProjectName)&quot; -Profile &quot;$(NvTestProfile)&quot; -OutputDirectory &quot;$(IntDir).&quot;" />
+    <ItemGroup><FileWrites Include="$(IntDir)$(NvTestGeneratedFile)" /></ItemGroup>
+  </Target>
+  <Target Name="Test" DependsOnTargets="Build">
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(NvTestResultFile)'))" />
+    <Exec Command="&quot;$(TargetPath)&quot; --gtest_filter=&quot;$(NvTestFilter)&quot; --gtest_output=&quot;xml:$(NvTestResultFile)&quot;" />
+  </Target>
+</Project>

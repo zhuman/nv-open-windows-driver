@@ -3,6 +3,24 @@
     <Platform Name="ARM64" />
     <Platform Name="x64" />
   </Configurations>
+  <Folder Name="/Host tests/">
+    <Project Path="tests/bar-resources-tests.vcxproj" />
+    <Project Path="tests/debug-log-tests.vcxproj" />
+    <Project Path="tests/device-removal-tests.vcxproj" />
+    <Project Path="tests/dirty-regions-tests.vcxproj" />
+    <Project Path="tests/driver-parameters-tests.vcxproj" />
+    <Project Path="tests/frame-slots-tests.vcxproj" />
+    <Project Path="tests/gsp-timeout-tests.vcxproj" />
+    <Project Path="tests/monitor-departure-tests.vcxproj" />
+    <Project Path="tests/monitor-i2c-tests.vcxproj" />
+    <Project Path="tests/mpo-patterns-tests.vcxproj" />
+    <Project Path="tests/mpo-request-tests.vcxproj" />
+    <Project Path="tests/mpo-retirement-tests.vcxproj" />
+    <Project Path="tests/pci-bars-tests.vcxproj" />
+    <Project Path="tests/pma-scrub-removal-tests.vcxproj" />
+    <Project Path="tests/presentation-locks-tests.vcxproj" />
+    <Project Path="tests/scrubber-removal-tests.vcxproj" />
+  </Folder>
   <Project Path="common/kernel/nvcommon-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="c83a5fea-a7e8-45c5-a0d6-34e95160b902" />
   <Project Path="common/user/nvcommon-user.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="20d7d8a6-432f-4dfa-8dba-7affd8aa1e61" />
   <Project Path="iddcx/nv-iddcx.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="9269e1a1-9305-4ba4-894c-4d31bd78060e" />

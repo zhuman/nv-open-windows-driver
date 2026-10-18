@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(WindowsOpenRoot)modeset;$(WindowsOpenRoot)nvport\include;$(WindowsOpenRoot)platform\kernel;$(WindowsOpenRoot)rm\include;$(WindowsOpenRoot)iddcx;$(RepoRoot)src\nvidia-modeset\include;$(RepoRoot)src\nvidia-modeset\interface;$(RepoRoot)src\nvidia-modeset\src;$(RepoRoot)src\nvidia-modeset\src\shaders;$(RepoRoot)src\nvidia-modeset\kapi\include;$(RepoRoot)src\nvidia-modeset\kapi\interface;$(RepoRoot)src\nvidia-modeset\os-interface\include;$(RepoRoot)src\nvidia\arch\nvalloc\common\inc;$(RepoRoot)src\nvidia\arch\nvalloc\unix\include;$(RepoRoot)src\nvidia\inc;$(RepoRoot)src\nvidia\inc\kernel;$(RepoRoot)src\nvidia\inc\libraries;$(RepoRoot)src\nvidia\generated;$(RepoRoot)src\nvidia\interface;$(RepoRoot)src\nvidia\src;$(RepoRoot)src\common\displayport\inc;$(RepoRoot)src\common\displayport\inc\dptestutil;$(RepoRoot)src\common\inc;$(RepoRoot)src\common\inc\displayport;$(RepoRoot)src\common\inc\swref;$(RepoRoot)src\common\inc\swref\published;$(RepoRoot)src\common\modeset;$(RepoRoot)src\common\sdk\nvidia\inc;$(RepoRoot)src\common\shared\inc;$(RepoRoot)src\common\softfloat\nvidia;$(RepoRoot)src\common\softfloat\source\8086-SSE;$(RepoRoot)src\common\softfloat\source\include;$(RepoRoot)src\common\unix\common\inc;$(RepoRoot)src\common\unix\common\utils\interface;$(RepoRoot)src\common\unix\nvidia-3d\include;$(RepoRoot)src\common\unix\nvidia-3d\interface;$(RepoRoot)src\common\unix\nvidia-headsurface;$(RepoRoot)src\common\unix\nvidia-push\include;$(RepoRoot)src\common\unix\nvidia-push\interface;$(RepoRoot)src\common\unix\xzminidec\interface;$(RepoRoot)src\common\unix\xzminidec\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/clang:-fno-operator-names %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+    </ClCompile>
+    <Link>
+      <OptimizeReferences>true</OptimizeReferences>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>

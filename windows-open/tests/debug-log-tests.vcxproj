@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{3F73514B-B46A-44D6-BF89-663241908C0F}</ProjectGuid>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="host-test.props" />
+  <Import Project="nvkms-test.props" />
+  <ItemDefinitionGroup><Link><AdditionalDependencies>ntdll.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link></ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\platform\tests\debug_log_tests.cpp" />
+    <ClCompile Include="..\platform\user\nvplatform_common.cpp" />
+    <ClCompile Include="..\platform\user\nvplatform_system_rm.cpp" />
+    <ClCompile Include="..\iddcx\common_services.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Project="host-test.targets" />
+</Project>

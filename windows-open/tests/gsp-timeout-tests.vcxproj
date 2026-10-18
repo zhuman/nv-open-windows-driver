@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{3F73514B-B46A-44D6-BF89-663241908C10}</ProjectGuid>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="host-test.props" />
+  <ItemDefinitionGroup><ClCompile><WarningLevel>Level3</WarningLevel></ClCompile></ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="..\platform\tests\gsp_timeout_probe_tests.cpp" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Project="host-test.targets" />
+</Project>

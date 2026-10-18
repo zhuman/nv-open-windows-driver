@@ -1,441 +1,83 @@
-# Windows Driver Scaffold
+# Windows Driver Harness
 
-This directory is the sidecar build and platform root for the experimental
-Windows port. It does not replace or modify the NVIDIA source build system.
+This directory contains the Windows sidecar projects and platform adapters.
+It does not replace NVIDIA's upstream Linux build system. The functional
+display path hosts RM, GSP host code, and NVKMS in a **UMDF 2 / IddCx**
+driver; the **KMDOD** miniport remains an experimental scaffold with production
+RM activation gated off. They are alternative function drivers: install only
+one on a given GPU.
 
-## Live IddCx parameters and hardware-plane experiments
+This is an independent, experimental **display-only** port, not an NVIDIA
+Windows rendering driver. Windows renders on another adapter and supplies
+frames through IddCx. The default native D3D12 path copies into imported WDF
+common-buffer memory, then NVIDIA's copy engine (CE) uploads to VRAM for
+NVKMS scanout. D3D11 staging and D3D12 reference paths are also available.
+There is no NVIDIA rendering UMD, CUDA support, or custom kernel transport
+companion for the IddCx path.
 
-**Validation status (updated October 12, 2026):** implemented and locally
-tested; Release x64 build/signing, ARM64 compile checks, and NativeAOT app
-smoke checks passed. Coordinated October 12 hardware tests applied all six
-scenes and Off on both D3D11 and native D3D12, with repeated live transitions
-in one unchanged driver host. ShadowCast 2 Pro recordings verified animated
-Geometry Compass and complete supported Showcase cycles. High-resolution
-deadline scheduling reached measured layer-retirement rates of approximately
-15.0/30.0/58.8 Hz for requests of 15/30/60 Hz. Long-run resource,
-hotplug/power recovery, and interactive UAC acceptance remain open.
-The monitor-departure double deletion and elevated GUI request-ownership issue
-have production regressions and target validation.
+See the [root README](../README.md) for the feature overview, tested hardware,
+compatible-GPU table, and installation/recovery instructions. An INF match or
+successful build is not evidence that a GPU or feature has been validated.
 
-The IddCx driver watches DWORD values under its UMDF framework key:
+## Projects and ownership
 
-```text
-HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\WUDF\Services\nv-iddcx\Parameters
+| Area | Role |
+| --- | --- |
+| [iddcx](iddcx/nv-iddcx.vcxproj) | UMDF device lifecycle, PCI resources, IddCx adapter/monitor callbacks, frame acquisition, presentation, hardware cursor, and DDC/CI. |
+| [modeset](modeset/nvkms-user.vcxproj) | User-mode NVKMS and the Windows KAPI facade for connectors, modesets, surfaces, color, and flips. |
+| [common/kernel](common/kernel/nvcommon-kernel.vcxproj), [common/user](common/user/nvcommon-user.vcxproj) | Shared upstream status/SHA support and a versioned host-services interface for allocation, clocks, context safety, and logging. |
+| [nvport/kernel](nvport/kernel/nvport-kernel.vcxproj), [nvport/user](nvport/user/nvport-user.vcxproj) | NvPort source selections and Windows memory, synchronization, thread, time, CPU, and utility backends. |
+| [platform/kernel](platform/kernel/nvplatform-kernel.vcxproj), [platform/user](platform/user/nvplatform-user.vcxproj) | OS-specific services, PCI/MMIO, allocation, synchronization, interrupts, and execution-context contracts. |
+| [rm/core](rm/core), [rm/kernel](rm/kernel) | Upstream RM/generated sources and WDK-free RM OS-service adapters, with separate user/kernel targets. |
+| [rm/diagnostic](rm/diagnostic/nvrm-diagnostic.vcxproj) | Separate kernel RM diagnostic harness; not the production IddCx path. |
+| [kmdod](kmdod/nv-kmdod.vcxproj) | Experimental WDDM display-only miniport and kernel resource ownership. |
+| [tests](tests) | Standalone native host regressions, not driver binaries. |
+| [tools](tools) | Control application and monitor diagnostics. |
+
+Windows adaptations live at explicit sidecar boundaries. Upstream source
+selections are recorded in [manifests](manifests) and project items; generated
+Windows RM customizations are owned by
+[Generate-WindowsRmProfile.ps1](rm/Generate-WindowsRmProfile.ps1).
+Do not import Unix kernel backends or hand-edit generated output to satisfy
+unresolved contracts. Unsupported services must fail explicitly rather than
+publish success, handles, or capabilities they cannot provide. In particular,
+privileged CPU facilities, IOMMU SVA, guest-MSI injection, and per-process PCI
+user mappings are not general Windows capabilities of this harness.
+
+Each device owns its PCI identity, BARs, DMA, interrupt, RM/NVKMS state, and
+outputs. Initialization failures unwind in reverse ownership order. IddCx
+creates a device-owned adapter asynchronously; ordinary D0 transitions do not
+create duplicate adapters, and no monitor is announced before a real
+RM/NVKMS connector/mode snapshot exists. Parent teardown clears callback
+ownership before deleting the adapter.
+
+## Prerequisites and build
+
+- Visual Studio 2026 (18.x), Desktop development with C++, WDK integration,
+  and the bundled ClangCL toolset.
+- Matching Windows SDK and WDK **10.0.28000.0**.
+- A target with the required **Windows 11 Insider build 28000** runtime:
+  UMDF **2.35**, IddCx **1.11** with a **1.10** minimum, and the native
+  D3D12/common-buffer APIs. Installing the SDK does not provide these runtime
+  features on an older retail OS.
+- Matching NVIDIA GSP firmware for [version.mk](../version.mk). The current
+  loader expects `%ProgramData%\nv-iddcx\gsp_ga10x.bin`; the build does not
+  download or install it.
+- A test-signing environment and a separate rendering-capable adapter with
+  a recovery display. Driver replacement can interrupt output.
+
+From the repository root, build IddCx and its RM/NVKMS dependencies:
+
+```powershell
+& .\build-windows-iddcx.ps1 -Configuration Debug -Platform x64
 ```
 
-This is **not** the PnP `WUDFRd` service key. Missing values retain their
-documented defaults. Malformed, incomplete, or unsupported candidates do not
-replace the last running configuration. Accepted changes retire the source
-swapchain through IddCx and recreate it without restarting the device. Buffer
-count or cache-policy changes also stage a replacement scanout pool. The old
-front allocation stays owned until its replacement is latched.
+The [helper](../build-windows-iddcx.ps1) discovers 64-bit MSBuild, restores
+packages, and rebuilds the driver. Use `-MSBuildPath` to select an installation.
+The RM/NVKMS backend is intrinsic to the project, not an optional build switch.
 
-For grouped writes, set `ConfigRevision` to an odd DWORD, write the complete
-candidate, then commit with the next even revision. Odd or changing revisions
-are never applied. Unversioned edits are accepted only after two matching
-reads separated by a short settling interval. Normalized equivalent settings
-and settings belonging to an inactive source API do not recreate a swapchain.
-An explicitly committed new even revision can retry a latched native-source
-failure once; healthy equivalent configurations remain no-ops.
-The legacy D3D11 `ReadbackMode` key is watched as a fallback only when the
-framework `D3D11ReadbackMode` value is absent.
-
-The new demonstration controls are:
-
-| DWORD | Values | Default |
-| --- | --- | --- |
-| `MpoDemoMode` | 0 Off; 1 Alpha Orbit; 2 Geometry Compass; 3 CSC Color Lab; 4 Luminance Elevator; 5 LUT Gallery; 6 Live Showcase | 0 |
-| `MpoDemoConnectorIndex` | Physical connector index 0-15; required while enabled | Absent |
-| `MpoDemoPlaneCount` | 1-7 additional planes, subject to the active head's layer budget | 1 |
-| `MpoDemoCadenceHz` | 15, 30, or 60, not above the active refresh rate | 30 |
-| `MpoDemoSpeedPercent` | 25-200 | 100 |
-
-The software renderer produces animated source cards; NVKMS performs the
-actual plane composition, supported rotation/reflection, CSC/color gain,
-and independent input LUT. No software composition or head-wide gamma is
-substituted for an unsupported plane feature. The desktop counts as one
-hardware layer. Each additional layer retains separate buffer and LUT
-ownership and is retired using that layer's own pending/timestamp queries.
-Disabling a layer uses a null surface and resubmits the active primary in
-the same atomic non-tearing update. Its actual primary completion witnesses
-disabled-layer retirement; old leases remain held until that completion.
-Overlay-only animation explicitly reuses unchanged desktop content and does
-not invent an IddCx frame completion.
-
-Live Showcase includes only capability-supported chapters and a supported
-combination. Skipped chapters are reported explicitly; selecting an
-unsupported standalone mode still rejects the candidate.
-Geometry Compass is an approved exception: it cycles only supported
-transformations and scales that pass finite test-only validation, with
-omissions reported in the trace and an adaptation warning in status.
-On the tested RTX 4070, mask `0x55` supports 0/180-degree rotations and
-their reflected-X variants, not 90/270 degrees. Only unity scale passed;
-0.5x and 1.5x were explicitly omitted. `rotation=false` means full
-quarter-turn support is unavailable, not that every rotation is unavailable.
-Cropping reduces source extents from the origin: the overlay KAPI does not
-translate source offsets, and nonzero offsets are rejected. The combined
-Showcase chapter keeps native size when CSC/gain uses the scaling pipeline;
-validated geometric scaling is demonstrated separately where available.
-
-`VrrPreference` remains best effort, not proof that VRR is active. Live changes
-use a same-head modeset and verify the actual NVKMS reply. An unavailable
-enable preference leaves VRR off and reports a warning while other valid
-settings can apply. Failed rollback blocks further presentation and retains
-scanout leases for recovery. The control app displays effective VRR separately
-from the requested preference.
-
-Both D3D11 and D3D12 use the shared presentation coordinator. Mode 0 retains
-normal presentation; demonstrations are experimental and require actual
-capability and test-only NVKMS validation on the selected active output.
-**Current experimental hardware status (October 12, 2026): all six modes
-activate and retire live on the tested two-layer RTX 4070 head.** The desktop
-uses one layer, leaving one demo plane; requesting two demo planes rejects
-the candidate without disturbing the current scene. Invalid types, odd
-revisions, and equivalent valid commits also passed retention/no-op checks.
-The earlier coarse-clock/full-interval scheduling under-delivered requested
-cadences. QPC-based absolute deadlines and a high-resolution waitable timer
-now exclude rendering time from the next frame budget, skip missed slots
-instead of bursting, and preserve immediate stop/source wakeups. Three
-36-second Showcase windows measured unique layer retirements at
-15.000/29.9997/58.804 Hz for requests of 15/30/60 Hz, with median intervals
-67/33/17 ms. These are observed rates, not a guarantee of exact 60 Hz.
-Private memory returned near the native baseline, but handle-class audits
-identified three additional `DxgkSharedSyncObject` handles per source
-recreation: 3 to 45 across 14 changes. Read-only status polls did not explain
-the growth. No borrowed/opaque GPU handles are closed speculatively; allocation
-ownership and long-run behavior remain open before claiming reliability.
-Packed layers now use an explicit neutral input LUT unless a custom LUT is
-requested. This prevents the earlier default-LUT activation stall on this
-target without claiming the underlying upstream allocation defect is proven.
-The six-mode trace decoded 643,930 events with zero losses, format errors,
-or unknowns; its 36 software flip rejections matched intentional unsupported
-scale probes. The later deadline trace decoded 446,120 events with the same
-zero-loss/error result. Neither showed Xid, retirement timeout, assertion,
-fail-fast, or the guarded nested-RPC warning. That is not runtime acceptance
-of the unexercised GSP timeout guard. The final deployed deadline candidate
-was OEM45/DLL `D6B437A94DD3D29D3AE36FD46327E60ED123A1CB88B101A63D7D000BF5E43211`.
-Defaults and native D3D12/Off were restored at October 12 05:25:36 PDT before
-the verified AMD coordination release; demos remain opt-in. This is a
-timestamped result, not a claim about later runtime state.
-See [the approved experiment plan](../PLAN-WINDOWS.md#11a-live-parameters-internal-mpo-demos-and-a-control-app)
-for the visual designs and validation requirements.
-
-The compact [IddCx Control application](tools/iddcx-control/README.md) exposes
-these settings and reads driver-reported accepted/applied generations from
-the local `NvIddCx.Status` pipe. A registry write is not proof of application.
-Publish and copy the complete NativeAOT output folder, not just its executable.
-
-## Projects
-
-- `common/kernel/nvcommon-kernel.vcxproj` builds the initial NVIDIA common-code
-  slice for kernel mode with Clang-CL.
-- `common/user/nvcommon-user.vcxproj` builds the same slice for user mode with
-  Clang-CL.
-- `nvport/kernel/nvport-kernel.vcxproj` builds the first kernel NvPort slice
-  with Clang-CL. It compiles upstream core and generic time conversion code
-  with upstream string support and sidecar Windows memory, debug,
-  synchronization, and time backends.
-- `platform/kernel/nvplatform-kernel.vcxproj` provides Windows kernel platform
-  primitives for the future RM host layer. Its first contract owns physical
-  MMIO mappings, checked register access, and adapter-scoped PCI configuration
-  access. It also owns opaque WDK spinlock, mutex, semaphore, reader/writer
-  lock, and execution-level operations for NvPort. Its public headers retain C
-  linkage and C-compatible declarations so upstream RM C translation units can
-  consume them later.
-- `kmdod/nv-kmdod.vcxproj` is the WDDM display-only miniport scaffold.
-- `iddcx/nv-iddcx.vcxproj` is the UMDF 2 and IddCx scaffold.
-
-The common projects compile upstream `nvstatus.c` and `nvSha256.c` in both
-address spaces. They also compile the sidecar `nvcommon_host.c`, which validates
-and wraps a versioned host-services table for allocation, Unix-epoch time,
-monotonic uptime, execution-context allocation safety, and logging. KMDOD
-supplies pool, kernel time, IRQL, and debugger callbacks; IddCx supplies
-process-heap, user-mode time, and debugger callbacks. Each device owns its
-device-specific resources and tears them down with the adapter or WDF object
-lifecycle.
-
-For PCI-enumerated IddCx devices, hardware preparation retains authoritative
-segment, bus, device, and function properties, validates NVIDIA PCI identity,
-and catalogs the first three valid memory BARs in the same register,
-framebuffer, and instance-memory order as KMDOD and upstream. It matches the
-register BAR through corresponding raw/translated resources and maps it
-noncached through UMDF before creating DMA and interrupt objects. Ordinary
-and `MEMORY_LARGE` descriptors share checked 64-bit decoding. BAR0 and BAR2
-remain eagerly mapped; BAR1 retains its full translated resource and provides
-bounded on-demand RM mappings (see below). Framework-mediated reads
-collect `PMC_BOOT_0` and `PMC_BOOT_42`; an all-ones response fails preparation
-as a missing device. Release and every failure path unwind interrupt, DMA,
-MMIO, and bus-interface state in reverse ownership order. The root-enumerated
-development device retains its resource-free software path.
-
-The first D0 entry creates one device-owned IddCx adapter asynchronously with
-conservative endpoint capabilities. Adapter completion and mode-commit
-callbacks resolve through an adapter-object context, while ordinary D0 exits
-only mark the adapter unpowered so a resume cannot create a duplicate WDDM
-adapter. Parent teardown clears the callback owner before deleting the adapter.
-No monitor is reported until RM/NVKMS provides a real connector and mode
-snapshot.
-
-KMDOD binds one driver-owned common host context to NvPort before registering
-with Dxgkrnl and unbinds it from the driver unload callback. Adapter start and
-stop only manage device-owned PCI, MMIO, interrupt, and display state, so
-multiple GPU instances share NvPort without reinitializing or tearing down its
-global services. The current NvPort profile
-enables core, atomic, CPU discovery, debug, memory, pseudorandom generation,
-safe arithmetic, string, synchronization, thread, time, and utility. CPU
-identity and performance-counter time are implemented; privileged MSR, PMU,
-and integrated-memory-controller operations report that they are unsupported.
-The xorshift generator is available for RM jitter and identifiers but is not a
-cryptographic entropy source.
-The kernel platform layer retains the driver service registry key for the
-driver lifetime and provides typed DWORD reads from the root or a relative
-subkey. This gives global RM initialization one immutable settings source shared
-by every adapter. The RM-facing entry point accepts bounded ASCII parameter
-names and imports DWORD values from the service `Parameters` subkey; RM runtime
-writes remain in its own in-memory registry and do not modify service settings.
-The RM OS-services library exports both `osReadRegistryDwordBase` and the public
-`osReadRegistryDword` entry point with their upstream signatures. They keep
-`OBJGPU` opaque and translate Windows query results through a WDK-free
-`NV_STATUS` ABI.
-The RM OS library also exports wall-clock seconds/microseconds and Windows
-performance-counter timestamps with their decoding frequency. The latter uses
-`KeQueryPerformanceCounter`, matching the upstream requirement that RM and
-DirectX timestamps share a clock domain.
-Monotonic and high-resolution counters are exposed in nanoseconds. Millisecond
-delays yield the thread when the current IRQL permits and otherwise use bounded
-processor stalls; microsecond and nanosecond delays stall directly. As on
-Linux, hard-interrupt waits longer than 20 ms are rejected.
-RM CPU discovery now has exact CPUID, frequency, possible-processor-count, and
-current-processor hooks. Processor counts span every Windows processor group,
-and the current processor is flattened through preceding groups using maximum
-group sizes so RM thread-state indices remain stable.
-RM thread-state initialization now has exact maximum-core, current-thread,
-current-process-flags, and scheduler-yield hooks. Kernel and terminating thread
-flags come from WDK thread state, and scheduling fails explicitly when the
-current IRQL cannot yield instead of silently continuing.
-The first RM core target compiles the upstream `locks.c`, `locks_common.c`, and
-`thread_state.c` sources unchanged with ClangCL. Windows supplies only the
-NvPort profile, generated-header customization boundary, and required upstream
-include roots; warning exceptions are scoped to known generated/upstream C
-constructs.
-The RM core target now also owns the upstream system constructor, RM API cache
-and stub initialization, resource descriptors, event log, binary-data registry,
-and generated HAL registration path. The Windows `osRmInitRm` export registers
-those HALs and applies the upstream thread-state defaults; registry lifetime
-remains driver-global and is initialized before RM construction.
-The first generated NVOC object graph now includes the upstream runtime,
-`Object`, `OBJTRACEABLE`, `OBJSYS`, `OBJHALMGR`, `OBJHAL`, and `OBJOS` class
-bodies. Windows constructs `OBJOS` with generated property defaults instead of
-inheriting Unix reset, ACPI-cache, or vblank policy.
-The generated resource, GPU, memory, and FINN foundations are now followed by
-the next mandatory system child, `OBJPFM`. Its generated class, common platform
-implementation, and NBSI table owner compile unchanged, preserving per-system
-NBSI state and the later ACPI/VBIOS discovery path without introducing a
-Windows-only data-layout fork.
-The following mandatory child, `OBJHYPERVISOR`, also compiles from its generated
-class and common Xen, KVM, Hyper-V, and VMware backends. x64 detection uses the
-Windows `osNv_cpuid` export; ARM64 retains the upstream `osGetSmbiosTable`
-dependency as an explicit OS-service boundary to close before RM is linked into
-KMDOD.
-`OBJCL` is the next compiled mandatory system child. Its generated class,
-common chipset policy, PCIe topology/configuration implementation, and chipset
-information table compile unchanged for x64 and ARM64. The independent PCI PBI
-helper remains deferred until a caller enters the startup graph.
-The already-present `OBJGPUMGR` is followed by `OBJGSYNCMGR`, whose generated
-class and common manager now compile unchanged. Construction initializes each
-slot with the common null provider; hardware-specific G-Sync providers remain
-deferred until GPU/device discovery requires them.
-The generated `GpuAccounting` class and common accounting implementation now
-compile unchanged as the next mandatory child. Construction initializes the
-per-GPU live and retired process stores through the existing intrusive map and
-list layer; sampling and timer activity remain deferred until GPU startup.
-`PlatformRequestHandler` now includes its generated class, common lifecycle,
-and control/sensor implementation. Both architectures compile the upstream
-sources unchanged; target-local forced inclusion supplies the Unix control
-parameter declarations exposed by the shared generated client-resource header,
-without importing Unix control behavior.
-The generated `OBJRCDB` class and common robust-error journal now compile
-unchanged. Construction owns its journal, assertion, debugger, and diagnostic
-ring buffers; the project supplies the generated `NV_VERSION_STRING` header
-using the same target-local version metadata pattern as other RM sources.
-The data-only `OBJVMM` child was already present. `KernelVgpuMgr` now follows it
-with generated metadata, common profile helpers, the kernel manager, and its
-lazy embedded `OBJEHEAP` implementation. Construction initializes driver-global
-vGPU version ranges and list ownership without creating per-GPU state.
-`OBJGPUBOOSTMGR` now compiles with its generated manager class and the generated
-`SyncGpuBoost` RM resource that shares the common implementation unit. The
-driver-global manager starts empty and uses the existing btree layer to track
-GPU membership only when clients create boost groups.
-The generated `Fabric` system class and common fabric cache implementation now
-compile unchanged. Construction initializes driver-global event/cache containers
-and NvPort RW locks with an invalid node ID; fabric memory resources and GPU
-probe behavior remain deferred until their startup callers are imported.
-The generated `GpuDb` class now closes the already-compiled common GPU database
-implementation. It constructs an empty driver-global GPU list protected by an
-NvPort mutex; per-GPU registration remains deferred to device startup.
-Generated RM configuration predicates and the shared `OBJENGSTATE` and
-`IntrService` NVOC ancestors now compile unchanged. A direct `coreInitializeRm`
-link probe resolves those families and is being used to drive the remaining
-resource-catalog and GPU HAL closure without weakening the production path.
-The Windows RM core now compiles NVIDIA's complete generated NVOC and protobuf
-catalog unchanged. Existing per-file metadata remains authoritative, while the
-remaining generated units share their upstream control, GSP metadata, CrashCat,
-and NVLink declaration headers. This makes every registered class contract
-visible to the standalone probe so missing implementation owners cannot remain
-hidden behind absent class definitions.
-The matching portable implementation catalog is now complete for the upstream
-GPU, memory manager, RMAPI, diagnostics, core, compute, display, platform,
-Hyper-V virtualization, vGPU, NVLink, libspdm, CrashCat, CPER, MMU, and support
-library families. Recursive project items preserve unique object paths and
-exclude files already carrying per-source build metadata. Unix, DCE-only,
-NvSwitch, Xen, KVM, and VMware policy implementations remain excluded. With
-portable owners and the NVLink OS adapter present, the standalone probe has no
-remaining active portable implementation symbol; its remaining 282 unique
-contracts are Windows OS and cryptographic providers or deliberately excluded
-platform controls.
-Windows NVPort user-buffer copies validate arguments and delegate to guarded
-WDK `ProbeForRead`/`ProbeForWrite` operations in the platform layer, returning
-an address error on access exceptions. Test-only IOMMU SVA allocation reports
-unsupported without publishing a handle or PASID, and Windows identifies
-itself as neither a VGX hypervisor nor a provider of guest-MSI injection. These
-are explicit capability boundaries rather than successful placeholder paths.
-The generated `GpuManagementApi` and complete `GSyncApi` resource layers now
-close their catalog entries. GSync notification traversal intentionally leaves
-Windows event delivery as an explicit OS-service boundary rather than using a
-placeholder notification implementation.
-That boundary now has a native provider: user event handles are type- and
-access-checked with `ObReferenceObjectByHandle`, held for the RM event lifetime,
-signaled with `KeSetEvent`, and released through the matching object-reference
-ABI. Kernel callbacks, index filtering, and subdevice filtering remain in the
-thin RM sidecar while WDK types stay in the platform layer.
-The generated `MpsApi` resource and its upstream constructor/destructor now
-close the MPS catalog entry unchanged. The class adds no Windows OS boundary or
-hardware dependency; its policy remains in the existing resource-server access
-and parent-class checks.
-The generated `KernelWatchdog` resource and its upstream implementation also
-compile unchanged. Registry overrides use the existing Windows registry ABI;
-its remaining MIG predicate is shared with the wider pending MIG manager
-closure rather than introducing a new startup dependency.
-RM's allocation-free system semaphore ABI now uses a driver-global Windows
-kernel semaphore initialized with the platform-system lifetime. Blocking
-acquisition is limited to wait-safe IRQL, conditional acquisition is
-nonblocking, and teardown remains ordered after RM has released its locks.
-The complete upstream `Intr` owner and vector container now provide RM's
-interrupt state and mask bookkeeping. Windows lock hooks preserve the upstream
-PCI-GPU behavior by disabling and restoring hardware interrupts through the
-`Intr` HAL; unsupported Tegra SoC display IRQ control is asserted explicitly.
-PCI configuration access now has an allocation-free platform registry keyed by
-the complete domain, bus, device, and function tuple. Stable handles retain the
-owning adapter's configuration callbacks, while a WDK-free sidecar supplies
-RM's byte, word, and dword PCI ABI without introducing global-adapter policy.
-KMDOD registers each callback set during adapter start using the PDO's packed
-PCI segment/bus and slot properties, and unregisters it before clearing the
-DXGK interface during stop. The stored location is available to construct RM's
-eventual attach argument without assuming segment zero.
-Kernel PCI mappings now preserve RM's requested cache and protection modes
-through `MmMapIoSpaceEx`. Nonpaged platform metadata retains each aligned
-Windows mapping so both generic kernel-space and PCI-specific RM unmaps release
-the exact region even when the physical address begins within a page.
-The unchanged upstream GPU mapping and OS register owners now select BAR0 from
-`OBJGPU`, retain vGPU PCI-mirror routing, and perform bounded Windows
-`READ_REGISTER_*`/`WRITE_REGISTER_*` accesses. Complete upstream NBSI and FNV
-owners preserve firmware-backed registry override lookup on this path.
-Upstream GPU register access and its generated `IoAperture` and
-`RegisterAperture` classes now construct the per-GPU MMIO access object during
-`gpuPostConstruct`. The standalone RM probe reaches the deeper user-register
-permission and GPU-loss policy boundaries without substituting Windows policy
-or weakening register checks.
-The complete upstream user-register permission bitmap owner now enforces the
-per-register allowlist. Windows evaluates administrator access against the
-effective subject token, captures assertion stacks without allocation, maps RM
-fatal codes to a deliberate kernel bugcheck, and handles lost GPUs by emitting
-Xid 79, notifying RM subdevices, setting upstream disconnected properties, and
-latching loss in the adapter-owned context.
-Kernel-privileged GPU mappings now return bounded aliases into that existing
-BAR0 mapping, while lower-privilege requests remain delegated to the explicit
-per-process PCI user-mapping boundary. Kernel unmaps therefore preserve the
-adapter's BAR ownership rather than releasing device memory prematurely.
-KMDOD now owns a nonpaged opaque RM GPU context from successful BAR validation
-until adapter stop. RM's DPC attach reserves the context, normal attach publishes
-the `OBJGPU`, and detach withdraws it before GPU destruction; failed publication
-can roll back the reservation. Creating this context does not invoke RM or wire
-interrupt dispatch into KMDOD.
-That context now retains full BDF identity, the first three valid PCI memory
-BARs in upstream register/framebuffer/instance order, translated aperture
-lengths, BAR0's volatile kernel mapping, and interrupt-vector metadata. A
-WDK-free RM wrapper converts it to `GPUATTACHARG` and transactionally performs
-GPU-ID registration, instance allocation, attach, and failure unwind under the
-RMAPI lock. The wrapper is probe-link complete but remains disconnected from
-KMDOD while the wider RM probe is unresolved.
-RM execution-context queries now distinguish wait-safe, DPC, and interrupt
-IRQLs through the Windows kernel. Spin polling uses the architecture's processor
-pause primitive, write-combined register ordering uses `KeFlushWriteBuffer`,
-and whole-cache invalidation reports unsupported where the WDK has no portable
-ARM64 operation instead of silently claiming completion.
-Cross-process unmapping now references the target `EPROCESS`, retains a
-nonpaged `KAPC_STATE` for the synchronous attach, and releases both in reverse
-order after unmapping. Direct RM parameter buffers are classified with
-overflow-safe `MmSystemRangeStart` bounds rather than probing arbitrary kernel
-addresses or treating user pointers as trusted.
-RM wait queues use nonpaged Windows synchronization events. A wake remains
-pending until one waiter consumes it, DPC-level producers can signal safely,
-and RM's interruptible and uninterruptible waits map to alertable and
-nonalertable kernel waits at wait-safe IRQL.
-Upstream `platform/cpu.c` now supplies `RmInitCpuInfo` unchanged on x64 and
-ARM64. Its x64 capability detection reads CR4 and XCR0 through architecture-
-guarded platform intrinsics, while the existing CPUID, frequency, and processor
-count services remain shared with the RM OS sidecar.
-Static system configuration queries Windows power capabilities and marks a
-system as a notebook when a system battery is present, matching one of the
-upstream notebook criteria. Confidential-compute flags remain clear until a
-Windows guest-isolation provider can report the active technology explicitly.
-The optional service `Parameters\BugCheckOnTimeout` DWORD controls RM's timeout
-bugcheck property. Missing, invalid, and zero values leave bugchecks disabled;
-any nonzero DWORD enables the existing RM timeout policy.
-RM system callbacks use driver-object-owned `IO_WORKITEM` storage and execute on
-the delayed system worker queue. Rundown protection rejects new callbacks once
-RM teardown starts and makes `osSyncWithRmDestroy` wait for every accepted
-callback before global state is released. Work storage is nonpaged and retains
-the platform's zero-initialization policy.
-Its raw allocation header retains the pool type needed by the host free callback;
-kernel allocations remain zero-initialized through the default `ExAllocatePool2`
-behavior. Upstream counter-only memory tracking reports aggregate and
-per-allocator usage without allocation staging overhead. Clang C11 atomics are
-used unchanged. Debug strings route through the
-common host logger, formatted output uses WDK `vDbgPrintEx`, and opaque
-synchronization handles keep WDK types out of the Clang library. Utility
-intrinsics come from upstream, with sidecar interrupt-context, spin, and delay
-operations. Thread, CPU, and crypto modules remain disabled until their Windows
-backends or portable source selections are added.
-
-The thread sidecar implements invalid-handle constants, current thread/process
-identity, ID lookup and comparison, scheduler yield, and kernel thread create,
-exit, join, and destroy over a narrow WDK platform contract. Created threads
-retain their kernel object and completion status in a registry owned by the
-NvPort binding lifecycle. Priority and processor-group affinity operations are
-also implemented. Process create/exit notification registration preserves the
-NvPort callback replacement contract over the WDK process-notify routine.
-
-Add upstream files to the manifests under `manifests/` only after they compile
-in both address spaces or after their mode-specific dependencies are understood.
-Sidecar import implementations remain explicit project items rather than
-upstream manifest entries.
-
-## Prerequisites
-
-- Visual Studio 2026 Insiders (18.x) with Desktop development with C++
-- The bundled `ClangCL` platform toolset (currently LLVM 22)
-- Windows Driver Kit 10.0.28000.0
-- A test-signing and deployment environment for loading either driver
-
-Open `nv-windows-drivers.slnx` and build `Debug|x64`. The driver projects retain
-the WDK platform toolsets because those targets provide driver linking, INF
-stamping, signing, and packaging. The common libraries use `ClangCL` now.
-Clang-CL integration for the driver binaries will be enabled separately after
-the installed WDK toolset path is validated.
-
-For command-line builds, use the 64-bit MSBuild from Visual Studio 2026
-Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
+Alternatively, open [nv-windows-drivers.slnx](nv-windows-drivers.slnx).
+From this directory, a full solution build with 64-bit MSBuild is:
 
 ```powershell
 & 'C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\amd64\MSBuild.exe' `
@@ -443,503 +85,292 @@ Insiders. WDK 28000 installs the INF verification task for x64 MSBuild:
   /p:Configuration=Debug /p:Platform=x64 /m
 ```
 
-The real user-mode RM/NVKMS backend is intrinsic to the IddCx project. The IDE
-and build helper always link it; no backend-enablement property is needed.
-Kernel-mode RM activation gates are unchanged.
+Projects expose Debug/Release and x64/ARM64 configurations. These are build
+targets, not equivalent hardware-validation claims; full ARM64 driver linking
+and hardware operation remain unvalidated. Driver binaries retain WDK
+toolsets for linking, INF stamping, catalog generation, signing, and packaging;
+the portability/RM/NVKMS libraries use ClangCL. The NVKMS x64 shader-pack
+custom build explicitly selects `x86_64-pc-windows-msvc`; custom commands must
+not rely on the compiler's default architecture.
 
-### Build macro policy
+WIL uses a pinned native NuGet `PackageReference` in the IddCx project, with
+`EnableNativePackageReferenceSupport=true`. Use `/restore` for command-line
+builds instead of hand-written package-cache paths. Prefer MSBuild for
+automated restores/builds; IDE background NuGet errors are not a substitute
+for the command's exit status.
 
-The former `NV_RM_USER_LINK_PROBE` / `NvRmUserLinkProbe` umbrella is retired.
-Its responsibilities are separated as follows:
+WDK builds normally test-sign the DLL and catalog. If changing project
+settings, retain **Driver Signing > Sign Mode = Test Sign** and
+**Inf2Cat > Run Inf2Cat = Yes**. Follow the root README's certificate-trust,
+test-mode, and installation instructions; do not weaken system security
+settings without understanding the recovery implications. Copy the whole
+generated driver package, not just the DLL, and do not modify signed files or
+the INF after catalog generation.
 
-| Macro | Meaning | Default |
-| --- | --- | --- |
-| `NV_WINDOWS_IDDCX` | Windows IddCx integration and Windows-only common-code adaptations. | Defined by IddCx, user-mode RM, and NVKMS projects. |
-| `NV_DOWNSTREAM_BUGFIXES` | Portable downstream correctness fixes, currently preserving the owning virtual-memory reservation after a failed reserved unmap. | On in Windows builds through `NvDownstreamBugfixes=true`; non-Windows builds must explicitly opt in. |
-| `NV_RM_VERBOSE_DIAGNOSTICS` | Detailed RM engine/FIFO lifecycle and VA allocation/lifetime breadcrumbs. Windows trace calls additionally require `NV_WINDOWS_IDDCX`. | Off; enable with `NvRmVerboseDiagnostics=true` or the helper's `-VerboseRmDiagnostics` switch. |
-
-`NV_USER_MODE` still identifies the execution environment; it does not select
-these policies. Assertion/error reporting and physical-removal cancellation
-logs do not depend on verbose diagnostics. The redundant 4 KiB DMA smoke test
-and duplicate pre-attach BOOT_1 reads have been removed; actual DMA allocation,
-firmware initialization, and error checking remain active.
-
-The Windows profile retains its GSP thread-state timeout adaptation, global
-CeUtils suppression, BAR2 shutdown cleanup/leak checks, and legacy CE timeout
-fallback. These are not advertised as portable Linux fixes. In particular, the
-legacy CE timeout path can advance completion and invoke callbacks; confirmed
-physical removal instead uses the separate cancellation path without claiming
-completion. Verbose diagnostics never select either policy.
-
-The downstream-fix switch is independent of the Windows integration. Setting
-`NvDownstreamBugfixes=false` reproduces upstream reserved-unmap ownership,
-including the known double-free failure, and is intended only for comparison
-tests. The focused removal runner verifies Windows/native policy, verbose
-diagnostics on/off, and downstream-fix on/off combinations against production
-bodies. Non-Windows coverage is not a full Linux build or runtime validation.
-
-WIL is pinned as a `PackageReference` in
-[iddcx/nv-iddcx.vcxproj](iddcx/nv-iddcx.vcxproj). The project's
-`EnableNativePackageReferenceSupport=true` property enables native C++ support
-in Visual Studio and MSBuild. Command-line builds should include `/restore`;
-NuGet supplies the package's native build imports without hand-written paths
-or a solution-local `packages` directory.
-
-For automated builds, use the 64-bit MSBuild `/restore` command above or the
-[repository build helper](../build-windows-iddcx.ps1). Visual Studio 18.10.3
-can report `ProjectNotNominatedException` from its background NuGet service
-when starting `devenv /Build` on a WDK project, even though compilation and
-linking succeed. This was also reproduced with an isolated WDK project.
-MSBuild restores native `PackageReference` dependencies directly and reports
-restore failures through its exit code; changing to `packages.config` is not
-required.
-
-Both INFs retain root-enumerated development hardware IDs and also match every
-NVIDIA PCI device listed in the repository's top-level compatible-GPU table.
-Generic rows generate `PCI\VEN_10DE&DEV_xxxx` matches; subsystem-specific rows
-generate the more specific Windows `SUBSYS_<device><vendor>` form. Device
-Manager therefore displays the corresponding product name from that table.
-
-The NVKMS x64 shader-pack custom build explicitly selects Clang's
-`x86_64-pc-windows-msvc` target. Custom commands do not inherit the normal
-`ClCompile` architecture selection; using the compiler's default target can
-produce an ARM64 shader object inside an x64 intermediate directory. If an
-older build left that object behind, rebuild `nvkms-user` in the selected
-x64 configuration rather than disabling optimization or forcing the
-librarian to accept mixed architectures.
-
-The generated model and string blocks are authoritative output. Regenerate
-both INFs after the compatible-GPU table changes instead of editing those
-blocks by hand:
+Both INFs retain root-enumerated development IDs and generated NVIDIA PCI
+matches from the root compatible-GPU table. Regenerate their model/string
+blocks after changing that table. From this directory:
 
 ```powershell
 & .\Generate-SupportedDeviceInfs.ps1
 ```
 
-KMDOD and IddCx are alternative function drivers for the same PCI function.
-Install only one package on a given GPU at a time.
+### Build macro policy
 
-The next NvPort expansion should follow the first thread and allocator call
-sites reached while importing the selected RM core. Keep using sidecar Windows
-backends and explicit module definitions; do not modify the published NvPort
-headers or compile Unix kernel backend files.
+| Macro | Purpose | Default |
+| --- | --- | --- |
+| `NV_WINDOWS_IDDCX` | Windows IddCx integration and Windows-only common-code adaptations. | Defined by IddCx, user-mode RM, and NVKMS projects. |
+| `NV_DOWNSTREAM_BUGFIXES` | Portable downstream correctness fixes, including preserving the owning VA reservation after a failed reserved unmap. | On through `NvDownstreamBugfixes=true` in Windows builds; non-Windows builds explicitly opt in. |
+| `NV_RM_VERBOSE_DIAGNOSTICS` | Detailed RM engine/FIFO and VA allocation/lifetime breadcrumbs. Windows trace calls also require `NV_WINDOWS_IDDCX`. | Off; set `NvRmVerboseDiagnostics=true` or use the helper's `-VerboseRmDiagnostics`. |
+
+These policies are independent of **Debug/Release** and of `NV_USER_MODE`,
+which identifies the execution environment. Assertions, error reporting, and
+physical-removal cancellation diagnostics do not require verbose tracing.
+Verbose diagnostics never select correctness or recovery behavior.
+
+The Windows profile retains its GSP thread-state timeout adaptation, global
+CeUtils suppression, BAR2 shutdown cleanup, and legacy CE timeout fallback.
+These are not advertised as portable Linux fixes. The legacy timeout path
+can advance completion and invoke callbacks; confirmed physical removal uses
+separate cancellation without claiming completion.
+
+`NvDownstreamBugfixes=false` is for upstream-policy comparison tests, not
+normal operation: it restores the known reserved-unmap double-free behavior.
+Native-policy host tests do not constitute a Linux build or runtime test.
+
+## Live IddCx parameters and hardware-plane experiments
+
+The driver watches DWORD values under its **UMDF framework** key, not the
+PnP `WUDFRd` service key:
+
+```text
+HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\WUDF\Services\nv-iddcx\Parameters
+```
+
+Missing values use defaults. Malformed, incomplete, or unsupported candidates
+leave the last running configuration intact. The current schema is defined in
+[driver_parameters.hpp](iddcx/driver_parameters.hpp).
+
+| DWORD | Values | Default |
+| --- | --- | --- |
+| `SwapChainApi` | 0 automatic; 11 D3D11; 12 D3D12 | 0 |
+| `D3D12Mode` | 0 off; 1 direct WDF; 2 readback reference; 3 alternating experiment | 1 |
+| `D3D11ReadbackMode` | 0 staging/default; 1 experimental `ReadFromSubresource`; 2 alternating experiment | 0 |
+| `SurfaceCachePolicy` | 0 automatic (honor for D3D12, not D3D11); 1 ignore; 2 honor | 0 |
+| `DirtyRects` | 0 off; 1 damage tracking | 1 |
+| `D3D12Debug` | 0 off; 1 D3D12 debug layer | 0 |
+| `RealtimeGpuPriority` | 0 off; 1 request realtime scheduling | 1 |
+| `MmcssDisplayPostProcessing` | 0 off; 1 display post-processing scheduling | 1 |
+| `VrrPreference` | 0 off; 1 prefer VRR when available | 1 |
+| `FlipMode` | 0 synchronized/non-tearing; 1 interval-zero/non-tearing, latest ready | 1 |
+| `FramePipeline` | 0 serial; 1 overlap producer and CE consumer | 1 |
+| `ScanoutBufferCount` | 2-4 | 3 |
+| `MpoDemoMode` | 0 Off; 1 Alpha Orbit; 2 Geometry Compass; 3 CSC Color Lab; 4 Luminance Elevator; 5 LUT Gallery; 6 Live Showcase | 0 |
+| `MpoDemoConnectorIndex` | Physical connector index 0-15, required while a demo is enabled; not a GDI display number | Absent |
+| `MpoDemoPlaneCount` | 1-7 additional planes, subject to the active head's layer budget | 1 |
+| `MpoDemoCadenceHz` | 15, 30, or 60, not above the active refresh rate | 30 |
+| `MpoDemoSpeedPercent` | 25-200 | 100 |
+| `ConfigRevision` | Odd while editing; stable even value commits | 0 |
+
+Explicit D3D11 overrides `D3D12Mode`. Explicit D3D12 with mode 0 resolves to
+direct WDF; automatic API with mode 0 selects D3D11. The legacy
+`HKLM\SOFTWARE\NVIDIA Corporation\nv-iddcx\ReadbackMode` is a fallback only
+when the framework `D3D11ReadbackMode` value is absent.
+
+For grouped writes, set `ConfigRevision` odd, write the complete candidate,
+then commit with the next even revision. Odd or changing revisions are never
+applied. Unversioned edits require two matching reads separated by a settling
+interval. Normalized equivalent settings and settings for an inactive source
+API do not recreate the source. An explicitly committed new even revision can
+retry a latched native-source failure once; healthy equivalent commits remain
+no-ops.
+
+Accepted changes retire/recreate the source swapchain through IddCx without
+restarting the device. Buffer-count or cache-policy changes stage a replacement
+scanout pool, retaining the old front allocation until its replacement latches.
+Acceptance is not proof of application: the
+[IddCx Control application](tools/iddcx-control/README.md) reads accepted and
+per-output applied generations from the local `NvIddCx.Status` pipe.
+It starts read-only; Apply uses a guarded, elevated registry transaction.
+Publish/copy the complete NativeAOT output folder, not only the executable.
+
+`VrrPreference` is best effort. Live changes use a same-head modeset and
+check the actual NVKMS reply. An unavailable enable preference keeps VRR off
+and reports a warning while other valid settings can apply. Failed rollback
+blocks presentation and retains scanout leases for recovery. Requested and
+effective VRR are reported separately.
+
+### Demo capability and retirement rules
+
+Both source APIs share the presentation coordinator. Off retains normal
+presentation; demos are opt-in and require actual capabilities and test-only
+NVKMS validation on the selected active output.
+
+- Software generates source cards; NVKMS performs the real plane composition,
+  supported transforms, CSC/gain, and independent input LUT. Unsupported
+  features do not fall back to software composition or head-wide gamma.
+- The desktop consumes one hardware layer. Each extra layer has independent
+  buffer/LUT ownership and uses its own pending/timestamp queries for
+  retirement. Packed layers use a neutral input LUT unless a custom one is
+  requested.
+- Disabling a layer submits a null surface and the active primary together in
+  an atomic non-tearing update. Actual primary completion witnesses retirement;
+  leases remain held until then. Overlay-only updates reuse desktop content
+  without inventing an IddCx frame completion.
+- Live Showcase skips unsupported chapters and reports omissions. Unsupported
+  standalone modes reject the candidate. Geometry Compass adapts to supported
+  transforms and finite test-only-validated scales, reporting an adaptation
+  warning and omitted states. `rotation=false` means full quarter-turn support
+  is unavailable, not that every rotation is unavailable.
+- Cropping reduces source extents from the origin; nonzero source offsets are
+  rejected. Combined CSC/gain chapters keep native size when the scaling
+  pipeline is occupied; geometric scaling is demonstrated separately.
+- QPC absolute deadlines and a high-resolution waitable timer skip missed slots
+  rather than burst. Requested cadence is not a guaranteed displayed rate.
 
 ## Hardware cursor and frame-upload synchronization
 
-The Windows NVKMS backend uses
-[`PresentationLocks`](modeset/presentation_locks.hpp) to separate device lifetime,
-CE transfers, display programming, and complete presentation transactions:
+[`PresentationLocks`](modeset/presentation_locks.hpp) separates device
+lifetime, CE transfers, display programming, and presentation transactions:
 
-- Uploads, cursor updates, presentations, scanout-buffer lookups, and flip
-  notifier reads take shared device-lifetime protection. Initialization,
-  shutdown, external surface allocation/destruction, modesets, and monitor
-  control retain exclusive protection.
-- All backend CE transfers serialize separately because common KAPI caches one
-  copy-channel handle. A position-only cursor update does not acquire this lock.
-- Cursor programming, flip programming, and flip-notifier reads exclude one
-  another, but the display-programming lock is not held across ordinary frame
-  uploads. Cursor image uploads finish before acquiring programming exclusion.
-- Complete presentations serialize across preflight, upload, and flip phases,
-  without excluding cursor programming during the upload phase. The pipeline's
-  existing RAM/VRAM leases still prevent uploads into front/pending storage.
+- Uploads, cursor updates, presentations, buffer lookups, and notifier reads
+  hold shared lifetime protection. Initialization, shutdown, external surface
+  allocation/destruction, modesets, and monitor control use exclusive
+  protection.
+- CE transfers serialize because KAPI caches one copy-channel handle.
+  Position-only cursor updates do not acquire that lock.
+- Cursor programming, flip programming, and notifier reads exclude each other,
+  but programming exclusion is not held across ordinary frame uploads.
+  Cursor-image uploads finish before programming exclusion is acquired.
+- Presentations serialize across preflight, upload, and flip; RAM/VRAM leases
+  prevent writing front or pending storage. Cursor programming may overlap
+  the upload phase.
 
-Acquire device lifetime first, then the presentation transaction when needed,
-then programming or copy exclusion. Infrequent LUT/gamma operations may take
-copy exclusion while holding programming exclusion; the reverse nesting is
-not permitted. Common NVKMS ioctl/timer synchronization remains unchanged.
-The hot paths read the allocated KAPI device's immutable head/layer counts
-instead of issuing a redundant RM resource query on every cursor update/flip.
-
-Cursor shape changes still share the CE channel with frame uploads, and surface
-allocation or modeset work still requires exclusive lifetime protection. This
-change does not make those infrequent operations asynchronous.
-
-The retained cursor API wraps a timed entry point. Verbose `Hardware cursor
-timing` events report the attempt's status, QPC begin, lifetime/programming lock
-wait ticks, image upload ticks, and programming start/end. These use the same
-clock as pipeline upload intervals; failures/retries are traced too.
-
-Run the presentation regressions with:
-
-```powershell
-& .\windows-open\iddcx\tests\run-dirty-regions-tests.ps1
-```
-
-The runner includes 24,054 production-header checks for cursor/copy overlap,
-cursor/flip exclusion, CE/presenter serialization, lifecycle teardown, moved
-guard ownership, and 12,000 concurrent copy/program operations.
-
-Additional production backend and platform diagnostic checks are available:
-
-```powershell
-& .\windows-open\modeset\tests\run_mpo_request_tests.ps1
-& .\windows-open\platform\tests\run_debug_log_tests.ps1
-```
-
-The IDDCX WPP provider mirrors RM platform debugger output, including Xid
-messages, assertion frame addresses, and fail-fast bug codes. Enable the
-`TRACE_DRIVER` flag at informational level or higher to capture these messages;
-their original platform level is included in the payload. Resolve stack
-addresses with the exact deployed DLL's PDB. These diagnostics do not bypass
-hardware completion, interlocks, or recovery checks.
-
-**RTX 4070 assessment (2026-10-08):** signed x64 package `oem200.inf`, loaded DLL
-SHA-256 `8BA7FC24C991FCF2C526AE0742A098BDD6FD04EC11513C4FF2EB16B0A112333C`,
-initialized and passed a deliberate warm restart. The restarted host remained
-healthy through the subsequent tests. Immediate post-restart desktop enumeration
-temporarily differed and a physical-monitor lookup failed; a later recheck
-returned the baseline layout with the AMD-connected BenQ primary, without
-this session changing display settings. The coordinated AMD session separately
-reported an AMD-only install/rollback, so the transient is not attributed to
-the NVIDIA changes. Read-only brightness 80 and MCCS capabilities-string
-retrieval passed; the known MCCS 2.2 `GetMonitorCapabilities` error remains.
-
-The user's 60-second workload reproduction decoded with zero lost events,
-unknowns, or format errors. Its 58.668-second analysis interval contained 1,149
-uploads/latches, including 589 complete 66,355,200-byte 3840x2160 FP16 uploads.
-Of 2,554 successful position-only cursor attempts, **759 programming intervals
-were entirely inside complete-frame upload intervals**. Cursor lock-wait p95
-was 0.0011 ms; total backend cursor duration median/p95 was 0.0699/0.2094 ms.
-Complete-frame upload median/p95 was 18.2555/18.3834 ms. No cursor failures or
-retries were recorded. Cursor event gaps include periods without mouse movement
-and are not an input-latency measurement.
-
-Earlier automated window tests confirmed full-frame transfers but did not
-produce sustained hardware-cursor updates, so they are not cursor-concurrency
-proof or a valid before/after cursor benchmark. The reproduction verifies backend
-overlap, not physical-panel input latency or camera-measured smoothness.
-The final NVIDIA check retained problem code 0 and the verified loaded DLL,
-with no new WER reports or owned test tasks/loggers left running.
+Acquire lifetime first, then the presentation transaction when needed, then
+programming or copy exclusion. LUT/gamma operations may take copy exclusion
+while holding programming exclusion; the reverse nesting is prohibited.
+Common NVKMS ioctl/timer locking is unchanged. Cursor-image uploads still
+share CE bandwidth, and allocation/modeset work remains exclusive; these
+operations are not made asynchronous by the lock split.
 
 ## BAR1 resources and bounded mappings
 
-The earlier UMDF code filtered out `CmResourceTypeMemoryLarge` in both BAR
-mapping and RM attach discovery. Its descriptor-order fallback could then
-misidentify BAR2 as BAR1; an "unassigned BAR1" trace was not reliable evidence
-that Windows had left the framebuffer aperture unassigned.
+`ConfigSpace` owns PCI configuration/address discovery; `PciBar`/`PciBars`
+resolve assigned resources and own mappings; `RegisterAperture` supplies WDF
+mapping/access callbacks. The first three valid memory BARs are indexed in
+register/framebuffer/instance-memory order, not PCI configuration-DWORD order.
 
-The source now:
+- Ordinary memory and `MEMORY_LARGE` 40/48/64-bit lengths use checked 64-bit
+  decoding. PCI addresses match raw resources and the corresponding translated
+  resource; absent, inconsistent, or ambiguous assignments fail explicitly.
+- BAR0 is eagerly mapped noncached; BAR2 is eagerly mapped write-combined.
+  BAR1 retains its full physical address/length and is demand-mapped
+  write-combined.
+- UMDF allows **one active mapping per assigned CM resource**, not one per
+  disjoint subrange. BAR1 aliases share a page-aligned CPU window covering the
+  initial request, capped at `0xFFFFF000` bytes and rounded down for the system
+  page size. Contained requests reuse it.
+- A request outside a leased window returns `NV_ERR_STATE_IN_USE`. After the
+  last alias is released, another window may be selected, including at high
+  offsets or across a 4-GiB boundary. Oversized, out-of-resource, incompatible
+  cache requests and exhausted registry slots fail explicitly. The mapping
+  registry has 32 slots shared with fixed mappings.
+- Noncopyable owners, smart-owned mappings, and RAII registration handles keep
+  registrations alive only while their backing resources exist. Hardware
+  release stops RM/NVKMS before draining mappings and releasing BARs.
+  Startup recovery suspends/restores demand providers without rebuilding fixed
+  mappings, WDF DMA, or interrupt objects.
 
-- Owns the RM-visible memory BARs in an indexed `PciBars` collection, using
-  the same `PciBar` owner and a mapping/cache policy table for each entry.
-  These indices identify the first three memory BARs (register/framebuffer/
-  instance-memory), not PCI configuration DWORD positions; 64-bit BAR pairs
-  are consumed by `ConfigSpace` during address discovery.
-- Keeps PCI configuration access/address discovery in `ConfigSpace`, assigned
-  resource resolution and registration in `PciBar`, and generic WDF mapping/
-  access callbacks in `RegisterAperture`. The latter no longer probes BAR0
-  identity or resolves CM resources; `PciBars` performs the GPU identity check.
-- Uses noncopyable/nonmovable owners, `std::unique_ptr` mappings and WIL RAII
-  registration handles. Provider unmap receives its owner context, so mappings
-  remain smart-owned instead of transferring raw allocation ownership through
-  the callback ABI. Registrations are removed before their mappings are freed.
-  Preparation failures use one scope-exit hardware cleanup path, stopping
-  RM/NVKMS before releasing BARs. Startup recovery suspends/restores only
-  demand providers; fixed mappings, DMA, and WDF interrupts stay intact.
-- Decodes ordinary memory and all `MEMORY_LARGE` 40/48/64-bit length encodings
-  without truncating the complete BAR size.
-- Matches each PCI BAR address against the raw resource list, then uses the
-  corresponding translated address and length for WDF and RM. Missing,
-  inconsistent, or ambiguous resources fail explicitly; there is no
-  next-memory-descriptor fallback.
-- Supplies RM with the complete BAR1 physical address and 64-bit length,
-  independently of the size of any individual CPU mapping.
-- Registers BAR1 as a write-combined, demand-mapped resource. Existing RM
-  physical-mapping hooks obtain aliases into a single shared CPU window.
-  The first request maps a page-aligned window covering the request, up to
-  `0xFFFFF000` bytes (4 GiB minus 4 KiB, rounded down for the system page size).
-  Later contained requests reuse that window without another WDF mapping.
-- Enforces UMDF's **one active mapping per assigned CM resource** restriction.
-  A request outside a leased window returns `NV_ERR_STATE_IN_USE`, rather than
-  triggering the framework verifier with a second mapping. After the last
-  lease ends, another window can be selected, including above 4 GiB or across
-  a 4-GiB boundary. Simultaneous windows spanning the full large BAR are not
-  supported. Oversized, out-of-resource, and cache-incompatible requests also
-  fail explicitly.
-- Reference-counts aliases, releases the backing window after the final unmap,
-  and drains remaining mappings after RM/NVKMS teardown in
-  hardware release. The existing global registry has 32 mapped-aperture slots,
-  shared with eager BAR0/BAR2 mappings; exhaustion is an explicit error.
-
-The WDF backend retains both the framework pseudo address and the process
-address from `WdfDeviceGetHardwareRegisterMappedAddress`. Register access stays
-framework-mediated. BAR0 remains noncached and BAR2 remains write-combined.
-No new per-frame BAR1 mapping is introduced in the existing common-buffer/CE
-presentation path. Future CPU-copy clients should retain an allocation-lifetime
-mapping rather than map/unmap every frame; an idle mapping cache is not added.
-
-Microsoft's [map](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfdevice/nf-wdfdevice-wdfdevicemapiospace)
+The WDF backend retains framework pseudo addresses and mapped process
+addresses; register access remains framework-mediated. Demand maps are
+permitted only while the assigned-resource provider is registered, at
+`PASSIVE_LEVEL`; see the WDF
+[map](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfdevice/nf-wdfdevice-wdfdevicemapiospace)
 and [unmap](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfdevice/nf-wdfdevice-wdfdeviceunmapiospace)
-references specify `PASSIVE_LEVEL` and describe startup/release usage. They do
-not list a startup-only DDI restriction or document the user-mode 4-GiB limit.
-This backend permits demand maps only while its assigned-resource provider is
-registered between hardware preparation and release. Actual runtime mapping of
-the target's large BAR has now been tested. The
-[framework implementation](https://github.com/microsoft/Windows-Driver-Frameworks/blob/master/src/framework/shared/support/um/fxresourcecollectionum.cpp)
-explicitly rejects multiple active mappings within one assigned resource;
-disjoint subranges are not an exception.
+contracts.
 
-Local validation covers **over 200,000 resource/mapping checks and 8,000 concurrent
-map/unmap cycles**, using the production decoder and mapping registry:
-
-```powershell
-& .\windows-open\iddcx\tests\run-bar-resource-tests.ps1
-```
-
-The same runner executes **333 production `PciBar`/`PciBars` ownership/lifecycle
-checks** with mock PCI config and WDF mapping backends. These cover partial
-initialization cleanup, destruction with live aliases, demand-provider
-suspension/restoration while fixed mappings stay unchanged, reinitialization,
-and rejection of invalid restoration without draining existing leases.
-
-The x64 IddCx and experimental KMDOD compatibility builds pass, as do DDC and
-presentation regressions. ARM64 kernel/user platform libraries also build;
-the IddCx sources compile for ARM64, but full ARM64 driver linking and ARM64
-hardware remain untested. Unit tests use a mock
-backend, now enforcing one active mapping, not the real WDF mapping APIs.
-
-**Ownership-refactor reassessment (2026-10-07):** signed x64 package
-`oem199.inf`, DLL SHA-256
-`AF01BA5A96C82177E850D19D7D336E43F79477F95D66AF4BBFF4AC8AB06C83EC`,
-initialized and passed a deliberate warm restart. Each startup hit a real GSP
-`NV_ERR_TIMEOUT` and recovered within its own original host after one in-place
-reset/retry, without external recovery commands. The restarted host remained
-stable for 60 seconds with problem code 0; the loaded DLL hash was verified.
-Mode/layout matched the baseline, including the unchanged AMD primary.
-Read-only DDC returned brightness 80 and the capabilities string. A 12-second
-animation produced 374 application paints; ETW recorded 547 uploads and 547
-latches. No new UMDF host/verifier WER reports or owned test tasks/loggers
-remained. These are pipeline/runtime observations, not camera verification
-or proof of uninterrupted physical output.
-
-**RTX 4070 deployment assessment (2026-10-07):**
-
-- Windows assigned BAR1 at `0x2C00000000`, length `0x400000000` (**16 GiB**).
-  RM receives the full address and size.
-- The initial candidate successfully mapped 64 KiB, but its second submapping
-  caused `WUDFVerifierFailure` in `ValidateRegisterPhysicalAddressRange` and
-  repeated host restarts. The shared-window correction fixes that violation
-  without disabling verification or bypassing framework register access.
-- Corrected package `oem193.inf` (DLL SHA-256 prefix `27E5BDFE`) successfully
-  maps the window at `0x2C00000000`, length `0xFFFFF000`. The host stayed stable
-  through initial activation, animation, DDC tests, and recovered activation.
-- The AMD display remains primary. NVIDIA's reported 3840x2160, 32-bpp,
-  integer-60-Hz mode, orientation, and desktop layout match the baseline.
-  Logical bounds remain 2560x1440; do not equate these DPI-virtualized bounds
-  with physical timing. Exact fractional refresh and HDR state were not queried.
-- Twelve-second animation tests produced 370 and 375 application paints
-  (baseline: 372). ETW confirms D3D12 common-buffer pixel verification, CE
-  uploads, and scanout latch observations. Application paints are not displayed
-  frames; the baseline trace lacks frame events, so no before/after FPS claim
-  is made. No capture-device or physical-panel verification was available.
-- DDC capabilities-string retrieval and brightness **80 -> 105 -> 80** pass,
-  with exact restoration. `GetMonitorCapabilities` retains the known MCCS 2.2
-  `0xC02625DC` error; it is not reported as a passing API.
-- A scoped warm restart released the BAR1 window, then hit GSP
-  `NV_ERR_TIMEOUT` (`0x65`) before another BAR1 mapping. Disable/enable recovered
-  normal operation in that initial assessment. The later reset/startup retry
-  below removes that manual recovery requirement for the tested timeout.
-
-Only the tested window has hardware evidence; high-offset windows and
-cross-4-GiB requests remain software-tested.
-
-This is **not yet direct CPU-to-VRAM presentation**. `osMapPciMemoryUser` and
-`osMapPciMemoryAreaUser` remain unsupported, and allocation-aware RM aperture
-translation, WC visibility ordering, and readback/image validation remain
-necessary. Do not derive a CPU pointer as `BAR1 base + VRAM allocation offset`
-or assume the aperture is a permanently linear view of all VRAM.
+This is **not direct CPU-to-VRAM presentation**. `osMapPciMemoryUser` and
+`osMapPciMemoryAreaUser` remain unsupported. BAR1 is not a permanently linear
+view of VRAM: never derive an allocation pointer as aperture base plus VRAM
+offset. Allocation-aware translation, WC ordering, and image validation remain
+required. The common-buffer/CE presentation path introduces no per-frame BAR1
+mapping.
 
 ## PCI reset and startup recovery
 
-The reset-only startup path previously returned a failure even when Windows
-successfully reset the device. A deliberate RTX 4070 restart reproduced
-**Code 10 / `CM_PROB_FAILED_START`**, no UMDF host, and no NVIDIA desktop monitor
-for 60 seconds without external intervention. The GSP result was
-`NV_ERR_TIMEOUT` (`0x65`), not `NV_ERR_RESET_REQUIRED`.
+The driver queries the versioned Windows
+[device reset interface](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_device_reset_interface_standard)
+and attempts only advertised reset capabilities.
 
-The driver now queries the versioned
-[device reset interface](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_device_reset_interface_standard),
-including bus-specific capabilities and reset status. On this USB4 RTX 4070:
+A firmware-startup `NV_ERR_TIMEOUT` on a present device tears down failed RM
+state and BAR1 leases, requests an in-place function reset with `KeepStackReset`,
+and reattaches/reinitializes RM **once**, only after that reset completes.
+Fixed BAR0/BAR2 mappings, the DMA enabler, and WDF interrupt object remain
+intact; RM-owned allocations/context are rebuilt. If in-place reset is
+unsupported, standard function-level reset is a stack-changing fallback,
+not successful in-process recovery. Reset, reattach, and retry failures remain
+explicit, and removed devices are never reset.
 
-- Standard reset mask `0x1`: function-level reset only.
-- PCI bus-specific mask `0x31`: function-level reset, no-op, and function-level
-  reset in place. Platform-level, secondary-bus, and power-controller resets
-  are not advertised and are not attempted.
-
-After a firmware startup timeout, the driver tears down failed RM state and
-its BAR1 leases, requests the advertised in-place function reset with
-`KeepStackReset`, and **reattaches/reinitializes RM once**. WDF's interrupt
-object, DMA enabler, and fixed BAR0/BAR2 mappings remain intact; RM-owned DMA
-allocations and context are rebuilt. Recreating the WDF interrupt during the
-same preparation callback caused a verifier failure in an earlier experiment;
-the corrected retry avoids that invalid lifecycle.
-
-The retry requires a completed in-place reset, does not loop indefinitely,
-and reports reset/reattach/firmware failures explicitly. If in-place reset is
-unavailable, the existing standard function-level reset remains the fallback;
-that stack-changing path is not treated as an in-process recovery.
-
-**Hardware verification (2026-10-07):** package `oem197.inf`, DLL SHA-256
-`BA95F22DF1A898737E4DD7C9DA9FF49A2DAC47BE5523ADE619EA23C52E5E5AC1`,
-recovered three actual GSP startup timeouts (activation and two deliberate
-restarts). Each trace records timeout, successful in-place reset, RM rebuild,
-and successful firmware retry in the same host, without external recovery.
-Both restart assessments retained a healthy host for 60 seconds; no new WER
-host/verifier reports occurred with the corrected candidate.
-
-The final desktop layout/mode, animation uploads/latches, read-only brightness
-(80), and DDC capabilities string pass. This is automatic recovery, **not
-uninterrupted display output**: a deliberate restart still removes/reannounces
-the monitor and takes several seconds. No camera-based blanking measurement
-was available. This recovery covers firmware startup timeouts, not arbitrary
-runtime GPU hangs; other GPUs, unsupported reset paths, and a second failed
-firmware attempt remain hardware-unverified.
+This covers startup timeout recovery, not arbitrary runtime GPU hangs or
+uninterrupted output. Restart can remove/reannounce monitors. Other reset
+paths and repeated-cycle reliability require hardware-specific validation.
 
 ## USB4 enclosure surprise removal
 
-IddCx now registers `EvtDeviceSurpriseRemoval` and latches a terminal,
-per-device removal flag. The callback does not wait for workers, take the
-lifecycle lock, or dereference hardware owners: WDF may invoke it concurrently
-with preparation or release, including after resources have been released.
-It cancels initialization and prevents subsequent D0 entry.
+`EvtDeviceSurpriseRemoval` latches terminal per-device removal and cancels
+initialization/subsequent D0 entry. It does not wait for workers, take the
+lifecycle lock, or dereference hardware owners: WDF may call it concurrently
+with preparation/release or after resources have been released.
 
-After removal, PCI configuration requests return `STATUS_DEVICE_REMOVED`;
-register reads return all ones and register writes are suppressed. Interrupt
-disable acknowledges the absent hardware without calling RM, and pending
-interrupt callbacks no longer service it. Interface dereferences, mappings,
-DMA allocations, and worker handles still follow their normal cleanup paths.
-Firmware-startup recovery does not request a reset for a removed device.
+- PCI requests return `STATUS_DEVICE_REMOVED`; register reads return all ones
+  and writes are suppressed. Interrupt disable/callbacks no longer call RM
+  for absent hardware. Interface references, mappings, DMA, and workers still
+  follow normal software cleanup.
+- Release marks RM disconnected under its normal locks before output cleanup.
+  Plane-disable/retirement waits, all-heads-off modesets, cursor hides, and
+  native notifier waits cancel only with explicit physical-removal proof.
+  The predicate stays registered through RM detach and is cleared before
+  its device context is released.
+- Resource-tree, memory, and VA cleanup may accept firmware-free
+  `NV_ERR_GPU_IS_LOST` on confirmed removal while releasing local objects and
+  preserving the error. A fault on a present GPU, an unavailable predicate,
+  unrelated errors, and software-ownership assertions remain strict.
+- Failed reserved unmaps preserve the owning virtual-memory reservation for
+  its destructor. Cleanup must not double-free client-owned VA.
+- CE/channel teardown discards pending callbacks without invoking them or
+  advancing completion. PMA invalidates the scrubber but preserves scrub-on-free
+  policy: abandoned work is not certified clean and no clean-page list is
+  published. Local descriptors, lists, and locks are still released.
+- Graphics teardown releases local buffers without cache eviction on absent
+  hardware. Healthy eviction and non-removal error checks remain unchanged.
 
-Before output cleanup, release marks the RM GPU disconnected under its normal
-locks. Presentation shutdown then skips hardware-plane disable/flip-retirement
-waits for the physically absent GPU, without fabricating a completion on a live
-GPU or bypassing its ordinary retirement rules. Successful device opens remain
-owned for cleanup even if cancellation arrives immediately afterward.
-Adapter cleanup also skips the all-heads-off modeset after removal, and cursor
-shutdown does not submit a hardware hide for the absent GPU.
-NVKMS registers the same per-device terminal-removal predicate with its GPU
-record. Native display notifier waits abort with `FALSE` after removal, before
-reading or modifying the notifier; an RM fault alone does not bypass waits for
-a still-present device. GPU unregistration clears the predicate before the
-device context is released. Non-Windows notifier behavior is unchanged.
-The removal predicate remains registered through RM detach. During confirmed
-physical removal, RM resource-tree, memory, and VA-space cleanup accept a
-firmware-free
-`NV_ERR_GPU_IS_LOST`, log it, and still destroy local objects, mappings, and
-references. The error is preserved, not converted to successful firmware
-completion. An RM fault on a still-present GPU, an unavailable predicate, and
-unrelated free errors retain their assertion checks; non-Windows free-status
-rules are unchanged.
-
-The focused runner exercises production callback, interrupt, PCI/MMIO,
-RM-disconnect, and presentation-stop bodies with instrumented backends:
-
-```powershell
-& .\windows-open\iddcx\tests\run-device-removal-tests.ps1 -VerifyBaseline
-```
-
-`-VerifyBaseline` uses the pinned pre-fix commit `955ba86c`, so checking in the
-fix does not change its reproductions. It also demonstrates that the prior
-committed interrupt-disable path still calls RM after surprise removal.
-An initial physical unplug test
-reached the new callback, but Windows terminated the host after a 60-second
-teardown timeout. That build still attempted an all-heads-off modeset after
-the GPU was disconnected. A second test isolated another wait inside native
-surface unregistration: VRR teardown waited for a notifier from the absent GPU.
-The additional adapter/cursor guards and native notifier cancellation address
-these paths. A third test confirmed immediate notifier cancellation, then
-isolated a fail-fast RM assertion when firmware-free returned GPU-lost during
-cursor destruction. The removal-scoped software-cleanup change addresses that
-path. A fourth test progressed through cursor cleanup but found a separate
-firmware-free assertion in memory destruction; memory and VA-space destructors
-now use the same removal-scoped status policy. A fifth test passed those checks
-but found a missing local VA-heap block during CE-utils virtual-memory
-destruction. This software-ownership assertion remains enabled; it is not an
-expected firmware-free error. Windows diagnostic tracing now records virtual
-memory allocation/duplication/destruction and VA heap allocation, reference,
-free, and space-destruction identities to establish the mismatched lifetime.
-A sixth diagnostic test identified the double free: a failed NV50 unmap freed
-the owning virtual-memory object's reservation before that object's destructor
-freed it again. The DMA unmapper now preserves client-owned reservations when
-PTE invalidation fails and returns the original error; internal allocation
-cleanup and the missing-block assertion are unchanged. The focused runner also
-reproduces this double free with the committed production unmapper and checks
-the fixed unmapper together with the production virtual-memory destructor,
-including multi-GPU, peer, alignment, and error cases.
-The seventh unplug confirmed this ownership fix: the reservation was freed once
-by its owner and its VA space was destroyed. Teardown then failed in the memory
-scrubber's CE interrupt polling during RM unload. Channel waits and inline
-interrupt servicing now cancel on explicit physical-removal proof; CE teardown
-discards pending completion callbacks without invoking them or advancing the
-completion payload. Scrubber teardown skips GPU polling and page-cleanliness
-certification while still releasing local resources. Regression tests compile
-these production bodies, reproduce the committed scrubber failure, and check
-entry/read/service races, callback cancellation, cleanup, and healthy/non-Windows
-behavior. The eighth unplug confirmed truthful CE progress and channel
-cancellation, but exposed an earlier PMA free path still submitting VRAM scrub
-work and asserting on the canceled submission. PMA now invalidates its scrubber
-on confirmed physical removal, preserving scrub-on-free policy so ordinary
-clean allocations are rejected while CPU-side allocation bookkeeping can be
-released. It does not unregister the scrubber prematurely, disable scrubbing,
-or mark abandoned work complete. Submission and wait races propagate GPU-lost,
-release temporary descriptors/lists and locks, and publish no clean-page list;
-unrelated submission failures retain their assertion policy. Production-body
-regressions cover the PMA-to-scrub handoff and reproduce the committed failure.
-The ninth unplug passed those earlier failure points: PMA invalidation,
-CE cancellation, scrubber-destructor cancellation, and owning VA destruction
-all ran before a later graphics pre-unload assertion. Global graphics-context
-cleanup had released its local buffer descriptors, then tried to evict cache
-lines on the absent GPU. That final cache operation now skips confirmed
-physical removal; a removal race accepts only actual GPU-lost with the same
-proof. Healthy eviction, full-chip-reset handling, software ownership checks,
-and unrelated/non-Windows errors remain strict. The production-body regression
-also reproduces this committed graphics-cleanup failure.
-
-The tenth physical test on the RTX 4070 USB4 target passed a complete
-unplug/replug cycle on 2026-10-18. RM unload and detach returned success,
-finishing about 144 ms after the surprise-removal callback. The host exited
-naturally, the NVIDIA device and its ROG PG27U monitor disappeared, and no
-assertion, host-crash event, or watchdog termination was observed. Reconnecting
-restored the same installed driver without a reinstall, restart, or PnP
-intervention. Two independent health snapshots more than 30 seconds apart
-confirmed the same new host, native D3D12/VRR configuration, and reappeared ROG
-monitor parented to the NVIDIA device. The user reported that the image
-returned; this was not camera-verified. Exact-PDB unplug/replug trace decodes
-contained 8,031/13,146 events respectively, with no lost events, format errors,
-or unknown formats. The original AMD device, service/packages, typed settings,
-firmware, and trust state were preserved, and all owned diagnostic tasks and
-loggers were stopped. This validates one complete cycle on this target, not
-other GPUs or repeated-cycle soak reliability.
+Cancellation is not successful hardware completion. These rules do not relax
+live-device retirement, timeout, or assertion policy, and do not establish
+general hotplug/power or soak reliability.
 
 ## Monitor control (I2C/DDC/CI)
 
-IddCx now registers monitor I2C transmit, receive, and availability-gated
-combined transmit/receive callbacks. The shared NVKMS facade resolves the
-current display/connector on every request and permits only the DDC/CI endpoint
-`0x37`. Windows' directional `0x6E`/`0x6F` addresses are normalized at the
-IddCx boundary; arbitrary board, EDID, and HDCP bus access is not exposed.
+IddCx exposes transmit, receive, and availability-gated combined callbacks.
+NVKMS resolves the current display/connector per request and permits only
+DDC/CI endpoint `0x37`; Windows directional `0x6E`/`0x6F` addresses normalize
+at the IddCx boundary. Arbitrary board, EDID, and HDCP bus access is excluded.
 
-- **DisplayPort/USB-C:** RM I2C-over-AUX with 16-byte chunks, repeated-start/MOT
-  handling, terminal STOP, bounded DEFER/write-status retries, and staged
-  receive-buffer publication. Length-prefixed replies are supported.
-- **HDMI/DVI/VGA:** published RM indexed I2C, fixed-length transmit/receive,
-  and combined requests with at most four transmit/index bytes. Length-prefixed
-  native receives and larger combined prefixes return `NOT_SUPPORTED` before
-  bus traffic. This path is software-tested, not hardware-validated.
-- **Limits:** 64 transmit bytes and 256 receive bytes per callback. Internal
-  displays and DP MST are unsupported. KMDOD's OS-facing I2C interface is
-  still pending.
+- **DisplayPort/USB-C:** RM I2C-over-AUX, 16-byte chunks, repeated-start/MOT,
+  terminal STOP, bounded DEFER/write-status retries, staged receive publication,
+  and length-prefixed replies.
+- **HDMI/DVI/VGA:** RM indexed I2C, fixed-length transmit/receive, and combined
+  requests with at most four transmit/index bytes. Unsupported length-prefixed
+  receives or larger prefixes fail before bus traffic.
+- **Limits:** 64 transmit and 256 receive bytes per callback. Internal displays
+  and DP MST are unsupported; KMDOD's OS-facing I2C interface is not implemented.
 
-Transactions retain a WDF power reference and serialize with NVKMS EDID,
-hotplug, link training, and other NVKMS users through the existing device and
-recursive NVKMS locks. This is conservative global serialization, not
-independent per-connector concurrency. Lifecycle/lock acquisition and AUX
-software retries are bounded; synchronous RM calls still use RM's own hardware
-timeouts. Disconnect, power loss, and teardown return explicit errors.
+Transactions retain a WDF power reference and serialize with EDID, hotplug,
+link training, and other NVKMS operations through existing device/recursive
+locks. This is global, not per-connector concurrency. Lock acquisition and
+software retries are bounded; synchronous RM calls retain RM hardware timeouts.
+Disconnect, power loss, and teardown return explicit errors.
 
-### Build and run the Win32 test tool
-
-From the repository root:
+From the repository root, build and run the Win32 diagnostic tool:
 
 ```powershell
 & .\windows-open\tools\build-monitor-ddc.ps1
@@ -948,54 +379,118 @@ $ddc = '.\windows-open\out\x64\monitor-ddc\monitor-ddc.exe'
 & $ddc --display '\\.\DISPLAYn' --capabilities-string
 ```
 
-Replace `DISPLAYn` with the NVIDIA-connected display shown by `--list`;
-display numbers can change after a driver restart. Run the executable in the
-logged-in **interactive desktop**, not directly through SSH/session 0 or RDP.
-Listing shows the actual GPU and monitor paths to avoid testing another GPU.
-The tool is read-only by default and exercises `GetMonitorCapabilities` and
-`GetMonitorBrightness`; `--capabilities-string` also retrieves the MCCS text.
+Replace `DISPLAYn` with the intended NVIDIA-connected display from `--list`;
+numbers may change after restart. Run in the logged-in interactive desktop,
+not session 0, SSH, or RDP. Default operation is read-only. Windows may reject
+an advertised MCCS version through `GetMonitorCapabilities` even when brightness
+and capabilities-string operations work; do not rewrite monitor data or report
+that API as passing.
 
-For manual monitor-OSD observation:
+An explicit write exercise for manual OSD observation is:
 
 ```powershell
 & $ddc --display '\\.\DISPLAYn' --brightness-only --exercise --hold-ms 10000
 ```
 
-This changes brightness by approximately 5% of its reported range, checks exact
-readback, holds it for ten seconds, then restores and verifies the original.
-Let the tool finish; killing it or unplugging the monitor can prevent
-restoration. Writes require an explicit display; `--physical N` selects a
-physical monitor index (default `0`). Hold time is limited to 60 seconds.
-`--brightness-only` explicitly skips the capabilities API, rather than hiding
-its failure. Exit codes are `0` for success, `1` for API/verification failure,
-and `2` for invalid command-line arguments.
+It changes brightness by about 5% of the reported range, checks readback, then
+restores/verifies the original. Killing the tool or unplugging can prevent
+restoration. Writes require an explicit display; `--physical N` selects the
+physical-monitor index (default 0), and hold time is capped at 60 seconds.
+`--brightness-only` explicitly skips the capabilities API. Exit codes are
+0 success, 1 API/verification failure, and 2 invalid arguments.
 
-### Validation and remaining work
+## Native host tests
 
-RTX 4070 / ROG PG27U DisplayPort testing successfully read brightness
-`min=0, current=80, max=500`, changed **80 -> 105 -> 80**, verified restoration,
-and retrieved the full MCCS capabilities string. The monitor advertises MCCS
-2.2; Windows `GetMonitorCapabilities` returns
-`0xC02625DC` (`ERROR_GRAPHICS_MCA_UNSUPPORTED_MCCS_VERSION`). Default tool mode
-therefore reports failure even when the independent brightness operations
-succeed; the monitor's version and capability data are not rewritten.
+The 16 standalone console `.vcxproj` projects under [tests](tests) appear in
+the solution's **Host tests** group. They do not link into drivers or require
+a GPU. A normal solution `Build` builds default profiles but never runs tests,
+installs drivers, or performs hardware operations.
 
-The final scoped `--brightness-only --exercise` test passed, as did a separate
-post-restoration read. All 46 monitor-I2C callbacks in that final trace succeeded;
-the maximum recorded callback time was 16 ms, below IddCx's five-second
-deadline. There were no lost ETW events or runtime errors during those tests.
-These observations do not certify the untested failure/power scenarios below.
+[host-test.props](tests/host-test.props) pins the official
+`Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn` **1.8.1.8** native
+`PackageReference`. Despite its historical name, it supports MSVC **v145** and
+x64/ARM64 Debug/Release libraries; ClangCL projects use its force-enable
+property. NuGet supplies headers, `gtest`, and `gtest_main`, with no vendored
+sources or hard-coded package-cache paths. Fixtures using WDF/WIL restore
+the pinned WIL package as needed.
 
-The production framing, AUX, and native-indexed helpers have **67,411 counted
-software cases** covering bounds, addresses, chunking, partial ACKs,
-DEFER/write-status polling, cleanup, and error propagation:
+From the repository root:
 
 ```powershell
-& .\windows-open\iddcx\tests\run-monitor-i2c-tests.ps1
+& .\windows-open\tests\run-host-tests.ps1 -Configuration Debug -VerifyBaseline
+& .\windows-open\tests\run-host-tests.ps1 -Configuration Release -VerifyBaseline
 ```
 
-This runner uses the production Clang-CL toolchain. Native HDMI/DVI/VGA,
-positive length-prefixed/combined hardware requests, unplug during a
-transaction, forced timeouts, power transitions, and HLK certification remain
-unvalidated. No capture device was connected for these DDC tests; physical
-brightness/OSD confirmation remains a manual step.
+Select `-Suite Presentation`, `BarResources`, `MonitorI2c`, `Removal`, `Modeset`,
+or `Platform`; `-Filter` accepts a GoogleTest filter. The six focused runner
+scripts in the IddCx/modeset/platform test directories remain compatibility
+entrypoints to this shared runner. Tool discovery supports `-VisualStudio`
+or `-VcVarsPath`, plus `-WdfIncludePath` and `-WilIncludePath` overrides.
+
+Each project has an explicit MSBuild `Test` target:
+
+```powershell
+MSBuild.exe .\windows-open\tests\dirty-regions-tests.vcxproj /restore /t:Test /p:Configuration=Release /p:Platform=x64
+```
+
+Executables and XML reports are under
+`windows-open\out\<Platform>\<Configuration>\tests\<profile>\` (reports in
+`results`). Per-project intermediates, generated snippets, and NuGet assets
+are isolated under `windows-open\out\obj`. Executables accept
+`--gtest_list_tests` and `--gtest_filter`; the MSBuild target also accepts
+`/p:NvTestFilter=...`. Use `-Platform ARM64 -BuildOnly` to cross-compile
+without executing ARM64 tests on an x64 host.
+
+The removal matrix preserves Windows/native policy, verbose diagnostics
+on/off, and downstream-fix on/off profiles. Applicable projects accept
+`/p:NvTestProfile=diagnostics`, `native-policy`, `native-diagnostics`,
+`downstream-disabled`, or `native-downstream-disabled`. GSP timeout tests
+also retain a native-policy variant. `-VerifyBaseline` adds `baseline` and,
+where applicable, `dma-baseline` profiles using the generator's pinned
+pre-fix sources. They positively assert reproduction; a nonzero process exit
+is never a successful baseline test. Profile outputs/assets do not share
+incompatible objects.
+
+These are white-box unit/component regressions, not GPU emulation. Production
+headers/full files are used where practical; lifecycle/firmware body extraction
+is an explicit generated step with checked boundaries. Deterministic loops
+and fake-boundary fault injection do not establish hardware behavior, and
+looped assertions are not independent GoogleTest case counts. Control-app
+model tests remain separate; see its README.
+
+## Diagnostics and limitations
+
+The IddCx WPP provider mirrors RM platform output, including Xid, assertion
+frames, and fail-fast codes. Enable `TRACE_DRIVER` at informational level or
+higher; payloads retain the original platform level. Decode with matching
+build symbols and resolve addresses with the exact binary's PDB. Optional
+verbose RM tracing works in either build configuration and does not bypass
+interlocks, hardware completion, or recovery checks.
+
+Cursor timing events include QPC begin/end, lifetime/programming waits, image
+upload time, and result. Compare them with pipeline upload/latch intervals;
+event gaps without cursor motion are not an input-latency measurement.
+For reports, include the source revision, build/profile, OS/kit, GPU/output
+topology, requested settings and driver-reported applied/effective state,
+reproduction steps, matching-symbol diagnostics, and trace loss/decode errors.
+Separate API/readback observations from physical-output verification.
+
+Important limits remain:
+
+- Source recreation can grow shared synchronization-handle usage; allocation
+  ownership and long-run reliability remain unresolved. Do not close borrowed
+  or opaque GPU handles speculatively.
+- Full-frame high-resolution/FP16 transfers remain bandwidth-sensitive.
+  Upload/latch counts, application paints, and requested demo cadence do not
+  prove displayed FPS, panel latency, or uninterrupted output.
+- VRR is capability-gated, not generally hardware-certified. HDR absolute
+  luminance/cursor calibration, broad GPU compatibility, sleep/resume,
+  repeated hotplug, long-run reliability, and HLK certification remain open.
+- High-offset/cross-4-GiB BAR1 mapping tests use software backends, not general
+  hardware validation. Full-aperture simultaneous CPU windows and direct
+  CPU-to-VRAM presentation are unsupported.
+- Native HDMI/DVI/VGA DDC, positive combined/length-prefixed hardware requests,
+  transaction-time unplug/timeout/power behavior, and physical OSD changes
+  need separate hardware validation. Host tests do not certify these paths.
+- KMDOD does not inherit IddCx functionality or acceptance, and native-policy
+  tests on Windows are not Linux runtime validation.

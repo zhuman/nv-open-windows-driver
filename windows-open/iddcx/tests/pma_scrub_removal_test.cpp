@@ -1,7 +1,7 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -28,13 +28,6 @@ constexpr NvU64 _PMA_2MB = 1ull << 21, _PMA_512MB = 1ull << 29, SCRUB_MAX_BYTES_
 constexpr unsigned ADDR_FBMEM = 0, MEMDESC_FLAGS_NONE = 0, MEMDESC_FLAGS_ALLOC_AS_LOCALIZED = 1;
 constexpr unsigned NV_MEMORY_DEFAULT = 0, NV0050_CTRL_MEMSET_FLAGS_ASYNC = 1;
 constexpr unsigned NV0050_CTRL_MEMSET_FLAGS_PIPELINED = 2;
-unsigned checks = 0;
-void Check(bool value, int line)
-{
-    ++checks;
-    if (!value) { std::fprintf(stderr, "PMA scrub check %u failed at line %d\n", checks, line); std::exit(1); }
-}
-#define CHECK(value) Check((value), __LINE__)
 struct Assertion {};
 void Assert(bool value) { if (!value) throw Assertion{}; }
 #define NV_ASSERT(value) Assert(value)
@@ -88,17 +81,18 @@ void portMemFree(void* pointer)
 {
     if (!pointer) return;
     auto found = std::find(m.live.begin(), m.live.end(), pointer);
-    CHECK(found != m.live.end()); m.live.erase(found);
+    ASSERT_NE(found, m.live.end());
+    m.live.erase(found);
 }
 void portMemCopy(void* dst, size_t capacity, const void* src, size_t size)
-{ CHECK(size <= capacity); std::memcpy(dst, src, size); }
+{ EXPECT_TRUE(size <= capacity); std::memcpy(dst, src, size); }
 void portMemSet(void* dst, int value, size_t size) { std::memset(dst, value, size); }
 void portSyncMutexAcquire(void*) { ++m.mutexLocks; Fire(Point::Mutex); }
-void portSyncMutexRelease(void*) { CHECK(m.mutexLocks > 0); --m.mutexLocks; }
+void portSyncMutexRelease(void*) { EXPECT_TRUE(m.mutexLocks > 0); --m.mutexLocks; }
 void portSyncSpinlockAcquire(void*) { ++m.spinLocks; }
-void portSyncSpinlockRelease(void*) { CHECK(m.spinLocks > 0); --m.spinLocks; }
+void portSyncSpinlockRelease(void*) { EXPECT_TRUE(m.spinLocks > 0); --m.spinLocks; }
 void portSyncRwLockAcquireRead(void*) { ++m.readerLocks; ++m.readerAcquires; }
-void portSyncRwLockReleaseRead(void*) { CHECK(m.readerLocks > 0); --m.readerLocks; }
+void portSyncRwLockReleaseRead(void*) { EXPECT_TRUE(m.readerLocks > 0); --m.readerLocks; }
 unsigned portAtomicGetSize(unsigned* value) { return *value; }
 void portAtomicSetSize(unsigned* value, unsigned replacement) { *value = replacement; }
 struct MemoryManager { unsigned localizedMask = 3; };
@@ -116,7 +110,7 @@ NV_STATUS memdescCreate(MEMORY_DESCRIPTOR** out, OBJGPU*, NvU64, unsigned, bool,
 { ++m.creates; *out = &descriptor; return NV_OK; }
 void memdescDescribe(MEMORY_DESCRIPTOR*, unsigned, NvU64, NvU64) { Fire(Point::Describe); }
 void memdescSetFlag(MEMORY_DESCRIPTOR*, unsigned, bool) {}
-void memdescDestroy(MEMORY_DESCRIPTOR* value) { CHECK(value == &descriptor); ++m.destroys; }
+void memdescDestroy(MEMORY_DESCRIPTOR* value) { EXPECT_TRUE(value == &descriptor); ++m.destroys; }
 struct MemsetParams
 {
     MEMORY_DESCRIPTOR* pMemDesc = nullptr;
@@ -127,7 +121,7 @@ using CEUTILS_MEMSET_PARAMS = MemsetParams;
 using SEC2UTILS_MEMSET_PARAMS = MemsetParams;
 NV_STATUS Memset(MemsetParams* params)
 {
-    CHECK(params->pMemDesc == &descriptor && params->length != 0);
+    EXPECT_TRUE(params->pMemDesc == &descriptor && params->length != 0);
     ++m.nativeCalls;
     if (m.submittedBeforeRemoval)
     {
@@ -168,7 +162,7 @@ struct Map
 void ChangeState(void* pointer, NvU64 frame, unsigned state, unsigned mask)
 {
     auto& map = *static_cast<Map*>(pointer);
-    CHECK(m.spinLocks == 1 && frame < map.frames.size());
+    EXPECT_TRUE(m.spinLocks == 1 && frame < map.frames.size());
     map.frames[frame] = (map.frames[frame] & ~mask) | (state & mask);
     Fire(Point::Map);
 }
@@ -231,12 +225,12 @@ struct Metrics
     NV_STATUS status = NV_OK;
 } g;
 bool gpumgrGetBcEnabledStatus(OBJGPU*) { return g.broadcast; }
-void memdescFree(MEMORY_DESCRIPTOR* desc) { CHECK(!desc->freed && !desc->destroyed); desc->freed = true; ++g.frees; }
-void memdescDestroy(MEMORY_DESCRIPTOR* desc) { CHECK(desc->freed && !desc->destroyed); desc->destroyed = true; ++g.destroys; }
+void memdescFree(MEMORY_DESCRIPTOR* desc) { EXPECT_TRUE(!desc->freed && !desc->destroyed); desc->freed = true; ++g.frees; }
+void memdescDestroy(MEMORY_DESCRIPTOR* desc) { EXPECT_TRUE(desc->freed && !desc->destroyed); desc->destroyed = true; ++g.destroys; }
 NV_STATUS kmemsysCacheOp_HAL(OBJGPU*, KernelMemorySystem*, void*, unsigned space, unsigned op)
 {
-    CHECK(space == FB_CACHE_VIDEO_MEMORY && op == FB_CACHE_EVICT);
-    CHECK(g.frees != 0 && g.frees == g.destroys);
+    EXPECT_TRUE(space == FB_CACHE_VIDEO_MEMORY && op == FB_CACHE_EVICT);
+    EXPECT_TRUE(g.frees != 0 && g.frees == g.destroys);
     ++g.cacheCalls;
     if (g.removeInCache) m.removed = true;
     return g.status;
@@ -257,12 +251,12 @@ struct Fixture
     }
     void CheckReleased(unsigned ctx)
     {
-        CHECK(!contexts[ctx].bAllocated && g.frees == BufferCount && g.destroys == BufferCount);
+        EXPECT_TRUE(!contexts[ctx].bAllocated && g.frees == BufferCount && g.destroys == BufferCount);
         for (unsigned buf = 0; buf != BufferCount; ++buf)
         {
-            CHECK(contexts[ctx].memDesc[buf] == nullptr && !contexts[ctx].bInitialized[buf]);
-            CHECK(descriptors[ctx][buf].destroyed);
-            CHECK(!descriptors[1 - ctx][buf].destroyed && contexts[1 - ctx].bAllocated);
+            EXPECT_TRUE(contexts[ctx].memDesc[buf] == nullptr && !contexts[ctx].bInitialized[buf]);
+            EXPECT_TRUE(descriptors[ctx][buf].destroyed);
+            EXPECT_TRUE(!descriptors[1 - ctx][buf].destroyed && contexts[1 - ctx].bAllocated);
         }
     }
 };
@@ -291,37 +285,45 @@ struct Fixture
     }
     void CheckReleased()
     {
-        CHECK(m.readerLocks == 0 && m.spinLocks == 0 && m.mutexLocks == 0);
-        CHECK(m.live.empty() && m.creates == m.destroys);
-        CHECK(pma.pScrubObj == &scrubber && pma.bScrubOnFree);
+        EXPECT_TRUE(m.readerLocks == 0 && m.spinLocks == 0 && m.mutexLocks == 0);
+        EXPECT_TRUE(m.live.empty() && m.creates == m.destroys);
+        EXPECT_TRUE(pma.pScrubObj == &scrubber && pma.bScrubOnFree);
     }
     void CheckInvalid()
     {
+        // Invalidate capability, not scrub policy or ownership; disabling the
+        // policy could let later allocations treat unscrubbed pages as clean.
         unsigned config = ~0u;
-        CHECK(pmaQueryConfigs(&pma, &config) == NV_OK);
-        CHECK((config & PMA_QUERY_SCRUB_ENABLED) != 0 && (config & PMA_QUERY_SCRUB_VALID) == 0);
-        CHECK(m.certificates == 0);
+        EXPECT_TRUE(pmaQueryConfigs(&pma, &config) == NV_OK);
+        EXPECT_TRUE((config & PMA_QUERY_SCRUB_ENABLED) != 0 && (config & PMA_QUERY_SCRUB_VALID) == 0);
+        EXPECT_TRUE(m.certificates == 0);
     }
 };
 template<typename Function> void ExpectAssert(Function function)
 {
     bool asserted = false;
     try { function(); } catch (const Assertion&) { asserted = true; }
-    CHECK(asserted);
+    EXPECT_TRUE(asserted);
 }
-void TestGraphicsCleanup()
-{
-    using namespace GraphicsCleanup;
 #if defined(NV_PMA_TEST_BASELINE) || !defined(NV_WINDOWS_IDDCX)
+TEST(GraphicsCleanup, BaselineOrNativeRemovalReproducesCacheEvictionAfterDescriptorRelease)
+{
+    // Comparison profiles must detect the old post-removal hardware operation,
+    // even though its preceding CPU descriptor cleanup already succeeded.
+    using namespace GraphicsCleanup;
     {
         GraphicsCleanup::Fixture f;
         m.removed = true; g.status = NV_ERR_GPU_IS_LOST;
         ExpectAssert([&] { kgraphicsFreeGlobalCtxBuffers_IMPL(&f.gpu, &f.graphics, 0); });
-        CHECK(g.cacheCalls == 1);
+        EXPECT_TRUE(g.cacheCalls == 1);
         f.CheckReleased(0);
     }
+}
 #endif
 #if !defined(NV_PMA_TEST_BASELINE)
+TEST(GraphicsCleanup, ReleasesDescriptorsBeforeCacheEvictionAcrossStatuses)
+{
+    using namespace GraphicsCleanup;
     for (unsigned ctx : {0u, 1u})
     {
         for (NV_STATUS status : {NV_OK, NV_ERR_GPU_IN_FULLCHIP_RESET, NV_ERR_GPU_IS_LOST, 99})
@@ -332,9 +334,14 @@ void TestGraphicsCleanup()
                 kgraphicsFreeGlobalCtxBuffers_IMPL(&f.gpu, &f.graphics, ctx);
             else
                 ExpectAssert([&] { kgraphicsFreeGlobalCtxBuffers_IMPL(&f.gpu, &f.graphics, ctx); });
-            CHECK(g.cacheCalls == 1); f.CheckReleased(ctx);
+            EXPECT_TRUE(g.cacheCalls == 1); f.CheckReleased(ctx);
         }
     }
+}
+
+TEST(GraphicsCleanup, EmptyOrUnallocatedContextsNeedNoCleanup)
+{
+    using namespace GraphicsCleanup;
     for (unsigned mode : {0u, 1u, 2u})
     {
         GraphicsCleanup::Fixture f;
@@ -342,48 +349,70 @@ void TestGraphicsCleanup()
         if (mode == 1) f.contexts[0].bAllocated = false;
         if (mode == 2) f.contexts[0].memDesc.fill(nullptr);
         kgraphicsFreeGlobalCtxBuffers_IMPL(&f.gpu, &f.graphics, 0);
-        CHECK(g.frees == 0 && g.destroys == 0 && g.cacheCalls == 0);
+        EXPECT_TRUE(g.frees == 0 && g.destroys == 0 && g.cacheCalls == 0);
     }
+}
+
+TEST(GraphicsCleanup, BroadcastModeRejectsCleanupBeforeFreeing)
+{
+    using namespace GraphicsCleanup;
     {
         GraphicsCleanup::Fixture f;
         g.broadcast = true; m.removed = true;
         ExpectAssert([&] { kgraphicsFreeGlobalCtxBuffers_IMPL(&f.gpu, &f.graphics, 0); });
-        CHECK(g.frees == 0 && g.cacheCalls == 0);
+        EXPECT_TRUE(g.frees == 0 && g.cacheCalls == 0);
     }
+}
 #if defined(NV_WINDOWS_IDDCX)
+TEST(GraphicsCleanup, RemovedGpuReleasesDescriptorsWithoutCacheEviction)
+{
+    // Removal skips only the absent-hardware operation, not local ownership cleanup.
+    using namespace GraphicsCleanup;
     {
         GraphicsCleanup::Fixture f;
         m.removed = true;
         kgraphicsFreeGlobalCtxBuffers_IMPL(&f.gpu, &f.graphics, 1);
-        CHECK(g.cacheCalls == 0 && m.traces != 0); f.CheckReleased(1);
+        EXPECT_TRUE(g.cacheCalls == 0 && m.traces != 0); f.CheckReleased(1);
     }
+}
+
+TEST(GraphicsCleanup, RemovalInsideCacheEvictionHonorsStatusPolicy)
+{
+    // A disconnect can race the call; GPU-lost becomes expected, unrelated
+    // errors still assert after the descriptors have been released.
+    using namespace GraphicsCleanup;
     for (NV_STATUS status : {NV_OK, NV_ERR_GPU_IN_FULLCHIP_RESET, NV_ERR_GPU_IS_LOST, 99})
     {
         GraphicsCleanup::Fixture f;
         g.status = status; g.removeInCache = true;
         if (status == 99) ExpectAssert([&] { kgraphicsFreeGlobalCtxBuffers_IMPL(&f.gpu, &f.graphics, 0); });
         else kgraphicsFreeGlobalCtxBuffers_IMPL(&f.gpu, &f.graphics, 0);
-        CHECK(g.cacheCalls == 1); f.CheckReleased(0);
-        if (status == NV_ERR_GPU_IS_LOST) CHECK(m.traces != 0);
+        EXPECT_TRUE(g.cacheCalls == 1); f.CheckReleased(0);
+        if (status == NV_ERR_GPU_IS_LOST) EXPECT_TRUE(m.traces != 0);
     }
-#endif
-#endif
 }
-int main()
-{
+#endif
+#endif
 #if defined(NV_PMA_TEST_BASELINE)
+TEST(PmaScrubRemoval, BaselineFreeReproducesSubmissionAfterRemovalAndGpuLostAssertion)
+{
+    // The pinned source must exhibit the unsafe submission and interrupted
+    // cleanup; a passing reproduction is not a successful removal path.
     Fixture f;
     m.removed = true;
     ExpectAssert([&] { pmaFreePages(&f.pma, &f.page, 1, _PMA_64KB, 0); });
-    CHECK(m.checks == 1 && m.nativeCalls == 1 && m.creates == 1 && m.destroys == 0);
-    CHECK(f.pma.scrubberValid == PMA_SCRUBBER_VALID);
+    EXPECT_TRUE(m.checks == 1 && m.nativeCalls == 1 && m.creates == 1 && m.destroys == 0);
+    EXPECT_TRUE(f.pma.scrubberValid == PMA_SCRUBBER_VALID);
+}
 #else
+TEST(PmaScrubRemoval, SubmitsLocalizedWorkAndAssertsUnexpectedBackendErrors)
+{
     for (bool sec2 : {false, true})
     {
         Fixture f;
         f.scrubber.bIsEngineTypeSec2 = sec2;
-        CHECK(_scrubMemory(&f.scrubber, 0, _PMA_64KB, 0, 1, SCRUBBER_SUBMIT_FLAGS_LOCALIZED_SCRUB) == NV_OK);
-        CHECK(m.commands == 1 && f.scrubber.lastSubmittedWorkId == 1 && descriptor.localizedMask == 3);
+        EXPECT_TRUE(_scrubMemory(&f.scrubber, 0, _PMA_64KB, 0, 1, SCRUBBER_SUBMIT_FLAGS_LOCALIZED_SCRUB) == NV_OK);
+        EXPECT_TRUE(m.commands == 1 && f.scrubber.lastSubmittedWorkId == 1 && descriptor.localizedMask == 3);
         f.CheckReleased();
         for (NV_STATUS status : {NV_ERR_GPU_IS_LOST, 99})
         {
@@ -392,39 +421,59 @@ int main()
             ExpectAssert([&] { _scrubMemory(&bad.scrubber, 0, _PMA_64KB, 0, 1, 0); });
         }
     }
+}
+
+TEST(PmaScrubRemoval, FreePreservesEvictionBlacklistAndOptionalScrubState)
+{
     for (bool skip : {false, true})
     {
         Fixture f;
         pmaFreePages(&f.pma, &f.page, 1, _PMA_128KB, skip ? PMA_FREE_SKIP_SCRUB : 0);
-        CHECK(m.stats == 1 && m.blacklists == 1 && m.nativeCalls == (skip ? 0u : 1u));
-        CHECK(f.pma.scrubberValid == PMA_SCRUBBER_VALID && m.certificates == 0);
+        EXPECT_TRUE(m.stats == 1 && m.blacklists == 1 && m.nativeCalls == (skip ? 0u : 1u));
+        EXPECT_TRUE(f.pma.scrubberValid == PMA_SCRUBBER_VALID && m.certificates == 0);
         for (unsigned i = 0; i != 2; ++i)
-            CHECK(f.map.frames[i] == (ATTRIB_EVICTING | ATTRIB_BLACKLIST | (skip ? 0 : ATTRIB_SCRUBBING)));
+            EXPECT_TRUE(f.map.frames[i] == (ATTRIB_EVICTING | ATTRIB_BLACKLIST | (skip ? 0 : ATTRIB_SCRUBBING)));
         f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, InvalidScrubberSkipsNativeSubmission)
+{
     {
         Fixture f;
         f.pma.scrubberValid = PMA_SCRUBBER_INVALID;
         pmaFreePages(&f.pma, &f.page, 1, _PMA_64KB, 0);
-        CHECK(m.nativeCalls == 0 && m.checks == 0 && m.stats == 1);
+        EXPECT_TRUE(m.nativeCalls == 0 && m.checks == 0 && m.stats == 1);
         f.CheckInvalid(); f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, FailedPageCheckInvalidatesScrubber)
+{
     {
         Fixture f;
         m.checkStatus = 99;
         pmaFreePages(&f.pma, &f.page, 1, _PMA_64KB, 0);
-        CHECK(m.nativeCalls == 0 && m.checks == 1 && m.stats == 1);
+        EXPECT_TRUE(m.nativeCalls == 0 && m.checks == 1 && m.stats == 1);
         f.CheckInvalid(); f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, NumaAndDisabledScrubbingBypassSubmission)
+{
     for (bool numa : {false, true})
     {
         Fixture f;
         f.pma.bNuma = numa;
         if (!numa) f.pma.bScrubOnFree = false;
         pmaFreePages(&f.pma, &f.page, 1, _PMA_64KB, 0);
-        CHECK(m.nativeCalls == 0 && m.checks == 0 && m.numa == (numa ? 1u : 0u));
-        CHECK(m.readerLocks == 0 && m.spinLocks == 0);
+        EXPECT_TRUE(m.nativeCalls == 0 && m.checks == 0 && m.numa == (numa ? 1u : 0u));
+        EXPECT_TRUE(m.readerLocks == 0 && m.spinLocks == 0);
     }
+}
+
+TEST(PmaScrubRemoval, FullScrubListReturnsCompletedPagesBeforeSubmittingMore)
+{
     {
         Fixture f;
         f.scrubber.scrubListSize = MAX_SCRUB_ITEMS;
@@ -432,21 +481,30 @@ int main()
         for (unsigned i = 0; i != MAX_SCRUB_ITEMS; ++i) f.work[i] = {i + 1u, i * _PMA_64KB, _PMA_64KB};
         m.progress = MAX_SCRUB_ITEMS; m.nextId = MAX_SCRUB_ITEMS + 1;
         SCRUB_NODE* output = nullptr; NvU64 count = 0;
-        CHECK(scrubSubmitPages(&f.scrubber, _PMA_64KB, &f.page, 1, &output, &count, 0) == NV_OK);
-        CHECK(output != nullptr && count == 1 && output[0].id == 1);
+        EXPECT_TRUE(scrubSubmitPages(&f.scrubber, _PMA_64KB, &f.page, 1, &output, &count, 0) == NV_OK);
+        EXPECT_TRUE(output != nullptr && count == 1 && output[0].id == 1);
         portMemFree(output); f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, PayloadWaitHandlesEmptyIncompleteAndCompleteWork)
+{
     {
         Fixture f;
-        CHECK(_waitForPayload(&f.scrubber, 0, _PMA_64KB - 1) == NV_OK);
+        EXPECT_TRUE(_waitForPayload(&f.scrubber, 0, _PMA_64KB - 1) == NV_OK);
         f.work[0] = {1, 0, _PMA_64KB};
         f.scrubber.lastSubmittedWorkId = 1; f.scrubber.scrubListSize = 1;
-        CHECK(_waitForPayload(&f.scrubber, 0, _PMA_64KB - 1) == NV_ERR_TIMEOUT);
+        EXPECT_TRUE(_waitForPayload(&f.scrubber, 0, _PMA_64KB - 1) == NV_ERR_TIMEOUT);
         m.progress = 1;
-        CHECK(_waitForPayload(&f.scrubber, 0, _PMA_64KB - 1) == NV_OK);
+        EXPECT_TRUE(_waitForPayload(&f.scrubber, 0, _PMA_64KB - 1) == NV_OK);
         f.CheckReleased();
     }
+}
 #if defined(NV_WINDOWS_IDDCX)
+TEST(PmaScrubRemoval, RemovalDuringSubmissionPreservesLastSubmittedId)
+{
+    // Publish an ID only for a successful submission. A late disconnect keeps
+    // the prior ID even if the backend already received the command.
     for (bool sec2 : {false, true})
     {
         for (Point point : {Point::None, Point::Describe, Point::Memset})
@@ -454,9 +512,9 @@ int main()
             Fixture f;
             f.scrubber.bIsEngineTypeSec2 = sec2; f.scrubber.lastSubmittedWorkId = 17;
             m.removed = point == Point::None; m.point = point;
-            CHECK(_scrubMemory(&f.scrubber, 0, _PMA_64KB, 0, 18, 0) == NV_ERR_GPU_IS_LOST);
-            CHECK(f.scrubber.lastSubmittedWorkId == 17 && m.commands == 0);
-            CHECK(m.nativeCalls == (point == Point::Memset ? 1u : 0u));
+            EXPECT_TRUE(_scrubMemory(&f.scrubber, 0, _PMA_64KB, 0, 18, 0) == NV_ERR_GPU_IS_LOST);
+            EXPECT_TRUE(f.scrubber.lastSubmittedWorkId == 17 && m.commands == 0);
+            EXPECT_TRUE(m.nativeCalls == (point == Point::Memset ? 1u : 0u));
             f.CheckReleased();
         }
         Fixture f;
@@ -465,38 +523,54 @@ int main()
         Fixture late;
         late.scrubber.bIsEngineTypeSec2 = sec2; late.scrubber.lastSubmittedWorkId = 17;
         m.submittedBeforeRemoval = true; m.point = Point::Memset;
-        CHECK(_scrubMemory(&late.scrubber, 0, _PMA_64KB, 0, 18, 0) == NV_ERR_GPU_IS_LOST);
-        CHECK(m.commands == 1 && late.scrubber.lastSubmittedWorkId == 17);
+        EXPECT_TRUE(_scrubMemory(&late.scrubber, 0, _PMA_64KB, 0, 18, 0) == NV_ERR_GPU_IS_LOST);
+        EXPECT_TRUE(m.commands == 1 && late.scrubber.lastSubmittedWorkId == 17);
         late.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, RemovedFreeSkipsChecksAndSubmission)
+{
     for (bool skip : {false, true})
     {
         Fixture f;
         m.removed = true;
         pmaFreePages(&f.pma, &f.page, 1, _PMA_128KB, skip ? PMA_FREE_SKIP_SCRUB : 0);
-        CHECK(m.nativeCalls == 0 && m.checks == 0 && m.stats == 1);
-        CHECK(m.creates == 0 && m.progressReads == 0);
-        CHECK(f.map.frames[0] == (ATTRIB_EVICTING | ATTRIB_BLACKLIST));
+        EXPECT_TRUE(m.nativeCalls == 0 && m.checks == 0 && m.stats == 1);
+        EXPECT_TRUE(m.creates == 0 && m.progressReads == 0);
+        EXPECT_TRUE(f.map.frames[0] == (ATTRIB_EVICTING | ATTRIB_BLACKLIST));
         f.CheckInvalid(); f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, RemovalAtEachFreeStageClearsLocalizationWithoutCertifyingPages)
+{
     for (Point point : {Point::Map, Point::Mutex, Point::Alloc, Point::Describe, Point::Memset})
     {
         Fixture f;
         m.point = point;
         f.map.localization.status = LOCALIZATION_STATE_IS_LOCALIZED;
         pmaFreePages(&f.pma, &f.page, 1, _PMA_64KB, 0);
-        CHECK(m.stats == 1 && m.localizationClears == 1);
-        CHECK(m.commands == 0 && m.nativeCalls == (point == Point::Memset ? 1u : 0u));
-        CHECK(f.scrubber.lastSubmittedWorkId == 0 && f.scrubber.scrubListSize == 0);
+        EXPECT_TRUE(m.stats == 1 && m.localizationClears == 1);
+        EXPECT_TRUE(m.commands == 0 && m.nativeCalls == (point == Point::Memset ? 1u : 0u));
+        EXPECT_TRUE(f.scrubber.lastSubmittedWorkId == 0 && f.scrubber.scrubListSize == 0);
         f.CheckInvalid(); f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, RemovalDuringProgressInvalidatesAlreadySubmittedWork)
+{
     {
         Fixture f;
         m.point = Point::Progress;
         pmaFreePages(&f.pma, &f.page, 1, _PMA_64KB, 0);
-        CHECK(m.commands == 1 && f.scrubber.lastSubmittedWorkId == 1 && f.scrubber.scrubListSize == 1);
+        EXPECT_TRUE(m.commands == 1 && f.scrubber.lastSubmittedWorkId == 1 && f.scrubber.scrubListSize == 1);
         f.CheckInvalid(); f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, FullListRemovalClearsOutputsWithoutAdvancingSubmission)
+{
     for (Point point : {Point::None, Point::Progress, Point::Timeout, Point::Memset})
     {
         Fixture f;
@@ -506,31 +580,39 @@ int main()
         if (point == Point::Memset) m.progress = MAX_SCRUB_ITEMS;
         SCRUB_NODE sentinel;
         SCRUB_NODE* output = &sentinel; NvU64 count = 99;
-        CHECK(scrubSubmitPages(&f.scrubber, _PMA_64KB, &f.page, 1, &output, &count, 0) == NV_ERR_GPU_IS_LOST);
-        CHECK(output == nullptr && count == 0 && m.commands == 0 && m.certificates == 0);
-        CHECK(f.scrubber.lastSubmittedWorkId == MAX_SCRUB_ITEMS);
+        EXPECT_TRUE(scrubSubmitPages(&f.scrubber, _PMA_64KB, &f.page, 1, &output, &count, 0) == NV_ERR_GPU_IS_LOST);
+        EXPECT_TRUE(output == nullptr && count == 0 && m.commands == 0 && m.certificates == 0);
+        EXPECT_TRUE(f.scrubber.lastSubmittedWorkId == MAX_SCRUB_ITEMS);
         f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, PartialSubmissionOnRemovalKeepsOnlyAcceptedWork)
+{
+    // Keep the first accepted command when the second fails, but return no
+    // completed-page list or clean-page certificate from that partial batch.
     {
         Fixture f;
         NvU64 pages[]{0, 4 * _PMA_64KB};
         m.point = Point::Memset; m.fireOnMemset = 2;
         SCRUB_NODE* output = nullptr; NvU64 count = 99;
-        CHECK(scrubSubmitPages(&f.scrubber, _PMA_64KB, pages, 2, &output, &count, 0) == NV_ERR_GPU_IS_LOST);
-        CHECK(m.commands == 1 && f.scrubber.lastSubmittedWorkId == 1 && f.scrubber.scrubListSize == 1);
-        CHECK(output == nullptr && count == 0); f.CheckReleased();
+        EXPECT_TRUE(scrubSubmitPages(&f.scrubber, _PMA_64KB, pages, 2, &output, &count, 0) == NV_ERR_GPU_IS_LOST);
+        EXPECT_TRUE(m.commands == 1 && f.scrubber.lastSubmittedWorkId == 1 && f.scrubber.scrubListSize == 1);
+        EXPECT_TRUE(output == nullptr && count == 0); f.CheckReleased();
     }
+}
+
+TEST(PmaScrubRemoval, RemovedPayloadWaitDoesNotAdvanceClientProgress)
+{
     for (Point point : {Point::None, Point::Progress, Point::Timeout})
     {
         Fixture f;
         f.work[0] = {1, 0, _PMA_64KB}; f.scrubber.scrubListSize = 1; f.scrubber.lastSubmittedWorkId = 1;
         m.removed = point == Point::None; m.point = point;
-        CHECK(_waitForPayload(&f.scrubber, 0, _PMA_64KB - 1) == NV_ERR_GPU_IS_LOST);
-        CHECK(f.scrubber.lastSeenIdByClient == 0 && m.certificates == 0);
+        EXPECT_TRUE(_waitForPayload(&f.scrubber, 0, _PMA_64KB - 1) == NV_ERR_GPU_IS_LOST);
+        EXPECT_TRUE(f.scrubber.lastSeenIdByClient == 0 && m.certificates == 0);
         f.CheckReleased();
     }
-#endif
-#endif
-    TestGraphicsCleanup();
-    std::printf("PMA/scrub production checks passed: %u\n", checks);
 }
+#endif
+#endif

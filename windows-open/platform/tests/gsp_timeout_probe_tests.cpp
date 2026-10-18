@@ -1,8 +1,8 @@
+#include <gtest/gtest.h>
+
 #include "nvtypes.h"
 #include "nvstatus.h"
 
-#include <cstdio>
-#include <cstdlib>
 #include <initializer_list>
 
 struct OBJGPU;
@@ -20,7 +20,7 @@ struct OBJGPU
     KernelBus bus;
 };
 
-static unsigned checks = 0, probes = 0, warnings = 0, errors = 0;
+static unsigned probes = 0, warnings = 0, errors = 0;
 static NV_STATUS probeResult = NV_OK;
 
 NV_STATUS kbusSendSysmembarSingle_KERNEL(OBJGPU*, KernelBus*) { return NV_OK; }
@@ -44,18 +44,11 @@ NV_STATUS kgmmuCheckMemSubsysError_HAL(OBJGPU*, KernelGmmu*)
 #define portDbgPrintf(...) (++warnings)
 #include "gsp_timeout_probe.inc"
 
-static void Check(bool value)
-{
-    ++checks;
-    if (!value)
-    {
-        std::fprintf(stderr, "GSP timeout probe check %u failed\n", checks);
-        std::exit(1);
-    }
-}
 
-int main()
+TEST(GspTimeoutProbe, HonorsPlatformPollingAndMembarPolicy)
 {
+    // A GSP-backed membar would re-enter RPC while already polling. Windows
+    // rejects that path before probing, but must not suppress a local membar.
     for (NvBool enabled : {NV_FALSE, NV_TRUE})
         for (NvBool polling : {NV_FALSE, NV_TRUE})
             for (Membar membar : {LocalMembar, kbusSendSysmembarSingle_KERNEL})
@@ -72,16 +65,19 @@ int main()
 #else
                     false;
 #endif
-                Check(status == (unsupported ? NV_ERR_NOT_SUPPORTED : probeResult));
-                Check(probes == (unsupported ? 0U : 1U));
-                Check(warnings == (unsupported ? 1U : 0U));
-                Check(errors == (unsupported ? 0U : 1U));
+                EXPECT_TRUE(status == (unsupported ? NV_ERR_NOT_SUPPORTED : probeResult));
+                EXPECT_TRUE(probes == (unsupported ? 0U : 1U));
+                EXPECT_TRUE(warnings == (unsupported ? 1U : 0U));
+                EXPECT_TRUE(errors == (unsupported ? 0U : 1U));
             }
+}
+
+TEST(GspTimeoutProbe, SuccessfulProbeDoesNotLog)
+{
     OBJGPU gpu{NV_TRUE, {NV_TRUE}, {}, {LocalMembar}};
     OBJRPC rpc{};
     probes = warnings = errors = 0;
     probeResult = NV_OK;
-    Check(_kgspCheckIfMemsysError(&gpu, &rpc, 1, 2) == NV_OK);
-    Check(probes == 1 && warnings == 0 && errors == 0);
-    std::printf("%u production GSP timeout probe checks passed\n", checks);
+    EXPECT_TRUE(_kgspCheckIfMemsysError(&gpu, &rpc, 1, 2) == NV_OK);
+    EXPECT_TRUE(probes == 1 && warnings == 0 && errors == 0);
 }

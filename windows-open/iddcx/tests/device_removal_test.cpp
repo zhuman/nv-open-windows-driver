@@ -4,12 +4,12 @@
 #include <winternl.h>
 #undef WIN32_NO_STATUS
 #include <ntstatus.h>
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <climits>
 #include <string>
@@ -47,7 +47,6 @@ constexpr ULONG PCI_WHICHSPACE_CONFIG = 0;
 constexpr ULONG PciCommandOffset = 4;
 constexpr USHORT PciCommandMemorySpace = 2;
 
-unsigned cases = 0;
 std::vector<std::string> calls;
 unsigned hardwareCalls = 0;
 unsigned dereferences = 0;
@@ -58,16 +57,6 @@ NV_STATUS visibilityStatus = NV_OK;
 NV_STATUS publishedStatus = NV_OK;
 NV_STATUS gpuLockStatus = NV_OK;
 
-void Check(bool condition, int line)
-{
-    ++cases;
-    if (!condition)
-    {
-        std::fprintf(stderr, "Device removal case %u failed at line %d\n", cases, line);
-        std::exit(1);
-    }
-}
-#define CHECK(condition) Check((condition), __LINE__)
 
 template<typename... Args>
 void TraceEvents(int, int, const char*, Args...) {}
@@ -171,7 +160,7 @@ NV_STATUS rmGpuLocksAcquire(int, int) { calls.emplace_back("gpu-lock"); return g
 void rmGpuLocksRelease(int, void*) { calls.emplace_back("gpu-unlock"); }
 NV_STATUS osHandleGpuLost(OBJGPU*, bool emitXid)
 {
-    CHECK(!emitXid);
+    EXPECT_TRUE(!emitXid);
     calls.emplace_back("disconnected");
     return NV_OK;
 }
@@ -308,7 +297,7 @@ struct Mapping
     unsigned unmaps = 0;
     void Unmap(unsigned, const D3D12_RANGE* written)
     {
-        CHECK(written->Begin == 0 && written->End == 0);
+        EXPECT_TRUE(written->Begin == 0 && written->End == 0);
         ++unmaps;
     }
 };
@@ -322,7 +311,7 @@ struct Handle
     {
         if (value != nullptr)
         {
-            CHECK(CloseHandle(value));
+            EXPECT_TRUE(CloseHandle(value));
             value = nullptr;
             ++closes;
         }
@@ -362,12 +351,12 @@ NV_STATUS NvKmsWindowsGetFlipPending(unsigned, NvBool* pending)
 }
 void NvKmsWindowsSetDisplayModes(void* outputs, unsigned count)
 {
-    CHECK(outputs == nullptr && count == 0);
+    EXPECT_TRUE(outputs == nullptr && count == 0);
     ++hardwareCalls;
 }
 void WdfObjectDelete(Output* output)
 {
-    CHECK(output->monitorControlStopped && !output->monitorDestroyed);
+    EXPECT_TRUE(output->monitorControlStopped && !output->monitorDestroyed);
     output->monitorDestroyed = true;
 }
 NV_STATUS NvKmsWindowsPresentLayersTimed(unsigned, unsigned, Layer*, unsigned, NvBool, void*)
@@ -401,7 +390,7 @@ NV_STATUS NvRmUnloadGpuState(NV_PLATFORM_RM_GPU_CONTEXT*)
 }
 NV_STATUS NvRmDetachGpuContext(NV_PLATFORM_RM_GPU_CONTEXT*, NvU32, NvU32, NvU32)
 {
-    CHECK(gpuRegistered && gpuRemovedCallback != nullptr && gpuRemovedContext != nullptr);
+    EXPECT_TRUE(gpuRegistered && gpuRemovedCallback != nullptr && gpuRemovedContext != nullptr);
     calls.emplace_back("detach");
     return NV_OK;
 }
@@ -412,7 +401,7 @@ void NvPlatformRmGpuMarkShutdown(NV_PLATFORM_RM_GPU_CONTEXT* context)
 }
 void NvPlatformRmGpuContextDestroy(NV_PLATFORM_RM_GPU_CONTEXT*)
 {
-    CHECK(!gpuRegistered && gpuRemovedCallback == nullptr && gpuRemovedContext == nullptr);
+    EXPECT_TRUE(!gpuRegistered && gpuRemovedCallback == nullptr && gpuRemovedContext == nullptr);
     calls.emplace_back("context-destroy");
 }
 
@@ -497,7 +486,7 @@ void memdescFree(MEMORY_DESCRIPTOR* descriptor) { descriptor->freed = true; }
 void memdescDestroy(MEMORY_DESCRIPTOR* descriptor) { descriptor->destroyed = true; }
 NV_STATUS FreeMemoryRpc(OBJGPU* gpu, NvU32 client, NvU32 parent, NvU32 memory)
 {
-    CHECK(gpu != nullptr && client == 1 && parent == 2 && memory == 3);
+    EXPECT_TRUE(gpu != nullptr && client == 1 && parent == 2 && memory == 3);
     ++memoryRpcCalls;
     return rpcStatus;
 }
@@ -527,7 +516,7 @@ struct OBJEHEAP
     EMEMBLOCK* block = nullptr;
     static EMEMBLOCK* eheapGetBlock(OBJEHEAP* heap, NvU64 address, NvU32 flags)
     {
-        CHECK(address == 0x120000000ULL && flags == 0);
+        EXPECT_TRUE(address == 0x120000000ULL && flags == 0);
         return heap->block;
     }
 };
@@ -541,7 +530,7 @@ template<typename... Args>
 int nvDbgSnprintf(char* message, size_t size, const char* format, Args... args)
 {
     int written = std::snprintf(message, size, format, args...);
-    CHECK(written >= 0 && static_cast<size_t>(written) < size);
+    EXPECT_TRUE(written >= 0 && static_cast<size_t>(written) < size);
     return written;
 }
 NV_STATUS _gvaspaceInternalFree(OBJGVASPACE* vas, NvU64, EMEMBLOCK* block)
@@ -583,7 +572,7 @@ struct VirtualMemory : Memory
 constexpr int AT_GPU = 0;
 NvU64 memdescGetPhysAddr(MEMORY_DESCRIPTOR* descriptor, int addressType, int offset)
 {
-    CHECK(addressType == AT_GPU && offset == 0);
+    EXPECT_TRUE(addressType == AT_GPU && offset == 0);
     return descriptor->address;
 }
 using GMMU_APERTURE = NvU32;
@@ -637,7 +626,7 @@ MemoryManager* GetMemoryManager(OBJGPU*) { return &memoryManager; }
 NvU32 gpuGetDeviceInstance(OBJGPU*) { return 7; }
 OBJGPU* gpumgrGetGpuFromSubDeviceInst(NvU32 device, NvU32 source)
 {
-    CHECK(device == 7 && source < sliGpus.size());
+    EXPECT_TRUE(device == 7 && source < sliGpus.size());
     return sliGpus[source];
 }
 MEMORY_DESCRIPTOR* memdescGetMemDescFromGpu(MEMORY_DESCRIPTOR* descriptor, OBJGPU*) { return descriptor; }
@@ -647,7 +636,7 @@ NvU32 vaspaceGetFlags(OBJVASPACE* vas) { return vas->flags; }
 void LogUnmapError() { ++unmapErrors; }
 void kmemsysCacheOp_HAL(OBJGPU*, KernelMemorySystem*, void*, GMMU_APERTURE aperture, NvU32 flags)
 {
-    CHECK((aperture == FB_CACHE_PEER_MEMORY || aperture == FB_CACHE_SYSTEM_MEMORY) &&
+    EXPECT_TRUE((aperture == FB_CACHE_PEER_MEMORY || aperture == FB_CACHE_SYSTEM_MEMORY) &&
         flags == FB_CACHE_INVALIDATE);
     ++cacheInvalidations;
 }
@@ -657,12 +646,12 @@ NV_STATUS dmaUpdateVASpace_HAL(OBJGPU* gpu, VirtMemAllocator*, OBJVASPACE*,
     NvBool isVolatile, NvU32 target, NvU64 fabric, NvU32 defer, NvBool sparse, NvU64 pageSize)
 {
     ++updates;
-    CHECK(low == 0x120000000ULL);
-    CHECK(high == low + ((0x123ULL + 0x2345 + pageSize - 1) & ~(pageSize - 1)) - 1);
-    CHECK(flags == DMA_UPDATE_VASPACE_FLAGS_UPDATE_VALID && valid == NV_MMU_PTE_VALID_FALSE);
-    CHECK(aperture == GMMU_APERTURE_INVALID && defer == expectedDefer && pageSize == expectedPageSize);
-    CHECK(reserved == nullptr && pages == nullptr && compression == nullptr);
-    CHECK(kind == 0 && !isVolatile && target == 0 && !sparse && fabric == NVLINK_INVALID_FABRIC_ADDR);
+    EXPECT_TRUE(low == 0x120000000ULL);
+    EXPECT_TRUE(high == low + ((0x123ULL + 0x2345 + pageSize - 1) & ~(pageSize - 1)) - 1);
+    EXPECT_TRUE(flags == DMA_UPDATE_VASPACE_FLAGS_UPDATE_VALID && valid == NV_MMU_PTE_VALID_FALSE);
+    EXPECT_TRUE(aperture == GMMU_APERTURE_INVALID && defer == expectedDefer && pageSize == expectedPageSize);
+    EXPECT_TRUE(reserved == nullptr && pages == nullptr && compression == nullptr);
+    EXPECT_TRUE(kind == 0 && !isVolatile && target == 0 && !sparse && fabric == NVLINK_INVALID_FABRIC_ADDR);
     return gpu->updateStatus;
 }
 NV_STATUS gvaspaceFree_IMPL(OBJGVASPACE*, NvU64);
@@ -672,7 +661,7 @@ void memdescDestroy(MEMORY_DESCRIPTOR* descriptor) { descriptor->destroyed = tru
 NV_STATUS memmgrFree(OBJGPU*, MemoryManager*, void*, NvHandle client, NvHandle parent,
     NvHandle vas, NvU32 owner, MEMORY_DESCRIPTOR* descriptor)
 {
-    CHECK(client == 1 && parent == 2 && vas == 4 && owner == 0x1234);
+    EXPECT_TRUE(client == 1 && parent == 2 && vas == 4 && owner == 0x1234);
     ++ownerFrees;
     NV_STATUS status = gvaspaceFree_IMPL(descriptor->ownerVas, descriptor->address);
     memdescDestroy(descriptor);
@@ -712,7 +701,7 @@ using NVDevEvoPtr = NVDevEvoRec*;
 struct NVDispEvoRec { NVDevEvoPtr pDevEvo; NvU32 displayOwner = 0; };
 constexpr NvU32 NV_EVO_NOTIFIER_SHORT_TIMEOUT_USEC = 3000000;
 constexpr int EVO_LOG_WARN = 0;
-#define nvAssert(condition) CHECK(condition)
+#define nvAssert(condition) EXPECT_TRUE(condition)
 #define DRF_SHIFTMASK(range) \
     ((~NvU32{0} >> (31 - ((1 ? range) - (0 ? range)))) << (0 ? range))
 unsigned evoYields = 0;
@@ -728,7 +717,7 @@ NvU32 EvoCoreReadGet(NVDmaBufferEvoPtr buffer)
 }
 NvBool nvExceedsTimeoutUSec(NVDevEvoPtr, NvU64*, NvU32 timeout)
 {
-    CHECK(timeout == NV_EVO_NOTIFIER_SHORT_TIMEOUT_USEC);
+    EXPECT_TRUE(timeout == NV_EVO_NOTIFIER_SHORT_TIMEOUT_USEC);
     return evoTimeout;
 }
 template<typename... Args> void nvEvoLogDisp(const NVDispEvoRec*, int, const char*, Args...)
@@ -737,7 +726,7 @@ template<typename... Args> void nvEvoLogDisp(const NVDispEvoRec*, int, const cha
 }
 void nvkms_yield()
 {
-    CHECK(++evoYields <= 4);
+    EXPECT_TRUE(++evoYields <= 4);
     if (removeOnEvoYield)
         InterlockedExchange(&static_cast<DeviceContext*>(gpuRemovedContext)->surpriseRemoved, 1);
     if (completeOnEvoYield)
@@ -759,26 +748,79 @@ ULONG WriteConfig(void*, ULONG, void*, ULONG, ULONG length)
 }
 void Dereference(void*) { ++dereferences; }
 
-void TestInterrupts()
+class DeviceRemoval : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        calls.clear();
+        hardwareCalls = dereferences = bulkReads = freeStatusWarnings = 0;
+        removeDuringBulk = false;
+        apiStatus = visibilityStatus = publishedStatus = gpuLockStatus = NV_OK;
+        gpuRegistered = false;
+        gpuRemovedCallback = nullptr;
+        gpuRemovedContext = nullptr;
+        registeredGpu = {};
+        evoYields = evoWarnings = 0;
+        evoTimeout = removeOnEvoYield = completeOnEvoYield = false;
+        evoNotifier = nullptr;
+        ResourceFree::rpcStatus = NV_OK;
+        ResourceFree::rpcCalls = ResourceFree::mappingCalls = ResourceFree::referenceFrees = 0;
+        ResourceFree::memoryFrees = ResourceFree::memoryRpcCalls = 0;
+#if !defined(NV_REMOVAL_TEST_BASELINE)
+        VaOwnership::sliGpus.clear();
+        VaOwnership::messages.clear();
+        VaOwnership::internalFrees = 0;
+        VaOwnership::freeResult = NV_OK;
+        VaOwnership::updates = VaOwnership::cacheInvalidations = VaOwnership::unmapErrors = 0;
+        VaOwnership::commonDestructions = VaOwnership::ownerFrees = 0;
+#endif
+    }
+};
+
+#if defined(NV_REMOVAL_TEST_BASELINE)
+TEST_F(DeviceRemoval, BaselineInterruptsUnsafelyTouchSurpriseRemovedHardware)
+{
+    // Passing this pinned reproduction means observing the old unsafe access,
+    // not accepting hardware access after removal as correct behavior.
+    DeviceContext context;
+    context.surpriseRemoved = 1;
+    EXPECT_EQ(Interrupt::Disable(&context, &context), STATUS_SUCCESS);
+    EXPECT_EQ(hardwareCalls, 1U);
+    EXPECT_EQ(Interrupt::Enable(&context, &context), STATUS_SUCCESS);
+    EXPECT_EQ(hardwareCalls, 2U);
+    EXPECT_TRUE(Interrupt::Isr(&context, 0));
+    EXPECT_EQ(hardwareCalls, 3U);
+    Interrupt::Dpc(&context, &context);
+    EXPECT_EQ(hardwareCalls, 4U);
+}
+#else
+TEST_F(DeviceRemoval, InterruptsDoNotTouchSurpriseRemovedHardware)
 {
     DeviceContext context;
     context.surpriseRemoved = 1;
     hardwareCalls = 0;
-    CHECK(Interrupt::Disable(&context, &context) == STATUS_SUCCESS);
-    CHECK(hardwareCalls == 0);
-    CHECK(Interrupt::Enable(&context, &context) == STATUS_DEVICE_REMOVED);
-    CHECK(!Interrupt::Isr(&context, 0));
+    EXPECT_TRUE(Interrupt::Disable(&context, &context) == STATUS_SUCCESS);
+    EXPECT_TRUE(hardwareCalls == 0);
+    EXPECT_TRUE(Interrupt::Enable(&context, &context) == STATUS_DEVICE_REMOVED);
+    EXPECT_TRUE(!Interrupt::Isr(&context, 0));
     Interrupt::Dpc(&context, &context);
-    CHECK(hardwareCalls == 0);
-    context.surpriseRemoved = 0;
-    CHECK(Interrupt::Enable(&context, &context) == STATUS_SUCCESS);
-    CHECK(Interrupt::Disable(&context, &context) == STATUS_SUCCESS);
-    CHECK(Interrupt::Isr(&context, 0));
+    EXPECT_TRUE(hardwareCalls == 0);
+}
+#endif
+
+TEST_F(DeviceRemoval, InterruptsOperateOnPresentHardware)
+{
+    DeviceContext context;
+    EXPECT_TRUE(Interrupt::Enable(&context, &context) == STATUS_SUCCESS);
+    EXPECT_TRUE(Interrupt::Disable(&context, &context) == STATUS_SUCCESS);
+    EXPECT_TRUE(Interrupt::Isr(&context, 0));
     Interrupt::Dpc(&context, &context);
-    CHECK(hardwareCalls == 4);
+    EXPECT_TRUE(hardwareCalls == 4);
 }
 
-void TestHardwareAccess()
+#if !defined(NV_REMOVAL_TEST_BASELINE)
+TEST_F(DeviceRemoval, HardwareAccessStopsAtRemovalAndReleasesConfigInterface)
 {
     DeviceContext context;
     ConfigSpace config;
@@ -790,44 +832,45 @@ void TestHardwareAccess()
     std::fill_n(registers, 128, 0x12345678UL);
     RegisterAperture aperture{&context, registers};
     ULONG value = 0;
-    CHECK(config.Read(0, &value, sizeof(value)) == STATUS_SUCCESS);
-    CHECK(config.Write(0, &value, sizeof(value)) == STATUS_SUCCESS);
-    CHECK(aperture.ReadRegister32(0) == 0x12345678);
-    CHECK(aperture.Read32(0, &value) == STATUS_SUCCESS && value == 0x12345678);
+    EXPECT_TRUE(config.Read(0, &value, sizeof(value)) == STATUS_SUCCESS);
+    EXPECT_TRUE(config.Write(0, &value, sizeof(value)) == STATUS_SUCCESS);
+    EXPECT_TRUE(aperture.ReadRegister32(0) == 0x12345678);
+    EXPECT_TRUE(aperture.Read32(0, &value) == STATUS_SUCCESS && value == 0x12345678);
     aperture.WriteRegister8(0, 0x78);
     aperture.WriteRegister16(0, 0x5678);
     aperture.WriteRegister32(0, 0x12345678);
-    CHECK(aperture.ReadRegister8(0) == 0x78);
-    CHECK(aperture.ReadRegister16(0) == 0x5678);
+    EXPECT_TRUE(aperture.ReadRegister8(0) == 0x78);
+    EXPECT_TRUE(aperture.ReadRegister16(0) == 0x5678);
 
     ULONG buffer[128] = {};
     aperture.ReadRegisterBuffer32(0, buffer, 128);
-    CHECK(std::equal(std::begin(buffer), std::end(buffer), std::begin(registers)));
+    EXPECT_TRUE(std::equal(std::begin(buffer), std::end(buffer), std::begin(registers)));
     bulkReads = 0;
+    // Remove between chunks: the unread tail becomes all-ones without more MMIO.
     removeDuringBulk = true;
     aperture.ReadRegisterBuffer32(0, buffer, 128);
-    CHECK(bulkReads == 1);
-    CHECK(buffer[0] == 0x12345678 && buffer[63] == 0x12345678);
-    CHECK(buffer[64] == MAXDWORD && buffer[127] == MAXDWORD);
+    EXPECT_TRUE(bulkReads == 1);
+    EXPECT_TRUE(buffer[0] == 0x12345678 && buffer[63] == 0x12345678);
+    EXPECT_TRUE(buffer[64] == MAXDWORD && buffer[127] == MAXDWORD);
     removeDuringBulk = false;
     hardwareCalls = 0;
-    CHECK(config.Read(0, &value, sizeof(value)) == STATUS_DEVICE_REMOVED);
-    CHECK(config.Write(0, &value, sizeof(value)) == STATUS_DEVICE_REMOVED);
-    CHECK(aperture.ReadRegister8(0) == MAXBYTE);
-    CHECK(aperture.ReadRegister16(0) == MAXWORD);
-    CHECK(aperture.ReadRegister32(0) == MAXDWORD);
-    CHECK(aperture.Read32(0, &value) == STATUS_DEVICE_REMOVED);
+    EXPECT_TRUE(config.Read(0, &value, sizeof(value)) == STATUS_DEVICE_REMOVED);
+    EXPECT_TRUE(config.Write(0, &value, sizeof(value)) == STATUS_DEVICE_REMOVED);
+    EXPECT_TRUE(aperture.ReadRegister8(0) == MAXBYTE);
+    EXPECT_TRUE(aperture.ReadRegister16(0) == MAXWORD);
+    EXPECT_TRUE(aperture.ReadRegister32(0) == MAXDWORD);
+    EXPECT_TRUE(aperture.Read32(0, &value) == STATUS_DEVICE_REMOVED);
     aperture.ReadRegisterBuffer32(0, buffer, 128);
-    CHECK(std::all_of(std::begin(buffer), std::end(buffer),
+    EXPECT_TRUE(std::all_of(std::begin(buffer), std::end(buffer),
         [](ULONG element) { return element == MAXDWORD; }));
     aperture.WriteRegister8(0, 0);
     aperture.WriteRegister16(0, 0);
     aperture.WriteRegister32(0, 0);
     config.Reset();
-    CHECK(hardwareCalls == 0);
-    CHECK(registers[0] == 0x12345678);
-    CHECK(dereferences == 1);
-    CHECK(!config.IsAvailable() && config.device_ == nullptr);
+    EXPECT_TRUE(hardwareCalls == 0);
+    EXPECT_TRUE(registers[0] == 0x12345678);
+    EXPECT_TRUE(dereferences == 1);
+    EXPECT_TRUE(!config.IsAvailable() && config.device_ == nullptr);
 
     context.surpriseRemoved = 0;
     config.device_ = &context;
@@ -836,9 +879,10 @@ void TestHardwareAccess()
     config.interface_.InterfaceDereference = Dereference;
     config.memorySpaceEnabledByDriver_ = true;
     config.Reset();
-    CHECK(hardwareCalls == 2);
-    CHECK(dereferences == 2);
+    EXPECT_TRUE(hardwareCalls == 2);
+    EXPECT_TRUE(dereferences == 2);
 }
+#endif
 
 NTSTATUS ResetDevice(void*, ULONG, ULONG, void*) { ++hardwareCalls; return STATUS_SUCCESS; }
 NTSTATUS ResetDeviceInPlace(void*, const GUID*, UmBusSpecificResetType,
@@ -848,7 +892,7 @@ NTSTATUS ResetDeviceInPlace(void*, const GUID*, UmBusSpecificResetType,
     return STATUS_SUCCESS;
 }
 
-void TestReset()
+TEST_F(DeviceRemoval, ResetRejectsRemovedHardware)
 {
     DeviceContext context;
     DeviceResetInterface reset;
@@ -856,89 +900,96 @@ void TestReset()
     reset.interface_.deviceReset = ResetDevice;
     reset.interface_.deviceBusSpecificReset = ResetDeviceInPlace;
     hardwareCalls = 0;
-    CHECK(reset.ResetDevice(0) == STATUS_SUCCESS);
-    CHECK(reset.ResetDeviceInPlace() == STATUS_SUCCESS);
-    CHECK(hardwareCalls == 2);
+    EXPECT_TRUE(reset.ResetDevice(0) == STATUS_SUCCESS);
+    EXPECT_TRUE(reset.ResetDeviceInPlace() == STATUS_SUCCESS);
+    EXPECT_TRUE(hardwareCalls == 2);
 #if !defined(NV_REMOVAL_TEST_BASELINE)
     SurpriseRemoval(&context);
-    CHECK(reset.ResetDevice(0) == STATUS_DEVICE_REMOVED);
-    CHECK(reset.ResetDeviceInPlace() == STATUS_DEVICE_REMOVED);
-    CHECK(hardwareCalls == 2);
+    EXPECT_TRUE(reset.ResetDevice(0) == STATUS_DEVICE_REMOVED);
+    EXPECT_TRUE(reset.ResetDeviceInPlace() == STATUS_DEVICE_REMOVED);
+    EXPECT_TRUE(hardwareCalls == 2);
 #endif
 }
 
 #if !defined(NV_REMOVAL_TEST_BASELINE)
-void TestNativeNotifierRemoval()
+#if defined(NV_WINDOWS_IDDCX)
+TEST_F(DeviceRemoval, NativeNotifierWaitCancelsAtRemovalWithoutTouchingMemory)
 {
     NV_PLATFORM_RM_GPU_CONTEXT gpu;
     DeviceContext context;
-    CHECK(NvKmsWindowsIsGpuRemoved());
-    CHECK(!NvKmsWindowsIsGpuSurpriseRemoved());
-    CHECK(NvKmsWindowsRegisterGpu(0, 0, 0, 0, 0, &gpu,
+    EXPECT_TRUE(NvKmsWindowsIsGpuRemoved());
+    EXPECT_TRUE(!NvKmsWindowsIsGpuSurpriseRemoved());
+    EXPECT_TRUE(NvKmsWindowsRegisterGpu(0, 0, 0, 0, 0, &gpu,
         IsNvKmsDeviceRemoved, &context) == NV_ERR_INVALID_ARGUMENT);
-    CHECK(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, nullptr,
+    EXPECT_TRUE(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, nullptr,
         IsNvKmsDeviceRemoved, &context) == NV_ERR_INVALID_ARGUMENT);
-    CHECK(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
+    EXPECT_TRUE(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
         nullptr, &context) == NV_ERR_INVALID_ARGUMENT);
-    CHECK(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
+    EXPECT_TRUE(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
         IsNvKmsDeviceRemoved, nullptr) == NV_ERR_INVALID_ARGUMENT);
-    CHECK(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
+    EXPECT_TRUE(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
         IsNvKmsDeviceRemoved, &context) == NV_OK);
-    CHECK(!NvKmsWindowsIsGpuRemoved());
+    EXPECT_TRUE(!NvKmsWindowsIsGpuRemoved());
     gpu.lost = true;
-    CHECK(!NvKmsWindowsIsGpuRemoved());
-    CHECK(NvKmsWindowsRegisterGpu(2, 0, 0, 0, 0, &gpu,
+    EXPECT_TRUE(!NvKmsWindowsIsGpuRemoved());
+    EXPECT_TRUE(NvKmsWindowsRegisterGpu(2, 0, 0, 0, 0, &gpu,
         IsNvKmsDeviceRemoved, &context) == NV_ERR_IN_USE);
     NvKmsWindowsUnregisterGpu(2);
-    CHECK(!NvKmsWindowsIsGpuRemoved());
+    EXPECT_TRUE(!NvKmsWindowsIsGpuRemoved());
     NvU32 notifier = 1;
     EvoCore core{{}, {&notifier}};
     NVDevEvoRec device{&core};
     NVDispEvoRec display{&device};
-    CHECK(EvoCheckNotifier(&display, 0, 0, 0, 1, false));
+    EXPECT_TRUE(EvoCheckNotifier(&display, 0, 0, 0, 1, false));
     notifier = 0;
-    CHECK(!EvoCheckNotifier(&display, 0, 0, 0, 1, false));
+    EXPECT_TRUE(!EvoCheckNotifier(&display, 0, 0, 0, 1, false));
     evoNotifier = &notifier;
     completeOnEvoYield = true;
-    CHECK(EvoCheckNotifier(&display, 0, 0, 0, 1, true));
-    CHECK(evoYields == 1 && evoWarnings == 0 && notifier == 1);
+    EXPECT_TRUE(EvoCheckNotifier(&display, 0, 0, 0, 1, true));
+    EXPECT_TRUE(evoYields == 1 && evoWarnings == 0 && notifier == 1);
     completeOnEvoYield = false;
     notifier = 0;
     evoYields = 0;
     removeOnEvoYield = true;
     hardwareCalls = 0;
     const ULONGLONG start = GetTickCount64();
-    CHECK(!EvoCheckNotifier(&display, 0, 0, 0, 1, true));
-    CHECK(GetTickCount64() - start < 250);
-    CHECK(context.surpriseRemoved == 1 && evoYields == 1 && evoWarnings == 1);
-    CHECK(NvKmsWindowsIsGpuSurpriseRemoved());
-    CHECK(notifier == 0 && hardwareCalls == 0);
+    EXPECT_TRUE(!EvoCheckNotifier(&display, 0, 0, 0, 1, true));
+    EXPECT_TRUE(GetTickCount64() - start < 250);
+    EXPECT_TRUE(context.surpriseRemoved == 1 && evoYields == 1 && evoWarnings == 1);
+    EXPECT_TRUE(NvKmsWindowsIsGpuSurpriseRemoved());
+    EXPECT_TRUE(notifier == 0 && hardwareCalls == 0);
     removeOnEvoYield = false;
     auto* inaccessible = static_cast<NvU32*>(VirtualAlloc(
         nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS));
-    CHECK(inaccessible != nullptr);
+    // Cancellation must precede even a CPU read of the stale notifier mapping.
+    ASSERT_NE(inaccessible, nullptr);
     core.notifierDma.cpuAddress = inaccessible;
-    CHECK(!EvoCheckNotifier(&display, 0, 0, 0, 1, false));
-    CHECK(!EvoCheckNotifier(&display, 0, 0, 0, 1, true));
-    CHECK(evoYields == 1 && hardwareCalls == 0);
-    CHECK(VirtualFree(inaccessible, 0, MEM_RELEASE));
+    EXPECT_TRUE(!EvoCheckNotifier(&display, 0, 0, 0, 1, false));
+    EXPECT_TRUE(!EvoCheckNotifier(&display, 0, 0, 0, 1, true));
+    EXPECT_TRUE(evoYields == 1 && hardwareCalls == 0);
+    EXPECT_TRUE(VirtualFree(inaccessible, 0, MEM_RELEASE));
     core.notifierDma.cpuAddress = &notifier;
     context.surpriseRemoved = 0;
     evoYields = 0;
+    // The retained present-GPU timeout fallback synthesizes completion;
+    // physical removal above must never take that path.
     evoTimeout = true;
     core.pb.get = core.pb.put_offset;
-    CHECK(EvoCheckNotifier(&display, 0, 0, 0, 1, true));
-    CHECK(notifier == 1 && hardwareCalls == 1 && evoYields == 0);
+    EXPECT_TRUE(EvoCheckNotifier(&display, 0, 0, 0, 1, true));
+    EXPECT_TRUE(notifier == 1 && hardwareCalls == 1 && evoYields == 0);
     evoTimeout = false;
     NvKmsWindowsUnregisterGpu(1);
-    CHECK(NvKmsWindowsIsGpuRemoved());
-    CHECK(!NvKmsWindowsIsGpuSurpriseRemoved());
-    CHECK(gpuRemovedCallback == nullptr && gpuRemovedContext == nullptr &&
+    EXPECT_TRUE(NvKmsWindowsIsGpuRemoved());
+    EXPECT_TRUE(!NvKmsWindowsIsGpuSurpriseRemoved());
+    EXPECT_TRUE(gpuRemovedCallback == nullptr && gpuRemovedContext == nullptr &&
         registeredGpu.os_device_ptr == nullptr);
 }
+#endif
 
-void TestNativeResourceFree()
+TEST_F(DeviceRemoval, ResourceFreeHonorsPlatformGpuLostPolicy)
 {
+    // An RM lost flag is not physical-removal proof. Only the registered
+    // Windows predicate can relax the assertion; the error status is preserved.
     for (bool registered : {false, true})
     {
         for (bool removed : {false, true})
@@ -948,7 +999,7 @@ void TestNativeResourceFree()
             DeviceContext context;
             context.surpriseRemoved = removed ? 1 : 0;
             if (registered)
-                CHECK(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
+                EXPECT_TRUE(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
                     IsNvKmsDeviceRemoved, &context) == NV_OK);
             for (NV_STATUS status : {NV_OK, NV_ERR_GPU_IN_FULLCHIP_RESET,
                 NV_ERR_GPU_IS_LOST, NV_ERR_INVALID_ARGUMENT, 99})
@@ -958,7 +1009,7 @@ void TestNativeResourceFree()
                 expected = expected || (status == NV_ERR_GPU_IS_LOST && registered && removed);
 #endif
                 freeStatusWarnings = 0;
-                CHECK(serverIsFreeRpcStatusExpected(status) == expected);
+                EXPECT_TRUE(serverIsFreeRpcStatusExpected(status) == expected);
                 ResourceFree::RsResource resource;
                 ResourceFree::RsResourceRef parent;
                 ResourceFree::RsResourceRef reference;
@@ -975,29 +1026,31 @@ void TestNativeResourceFree()
                 bool asserted = false;
                 try
                 {
-                    CHECK(ResourceFree::clientFreeResource_IMPL(&client, &server, &params) == status);
+                    EXPECT_TRUE(ResourceFree::clientFreeResource_IMPL(&client, &server, &params) == status);
                 }
                 catch (const ResourceFree::Assertion&) { asserted = true; }
-                CHECK(asserted == !expected);
-                CHECK(ResourceFree::rpcCalls == 1 && ResourceFree::mappingCalls == 4);
-                CHECK(resource.deleted == expected && reference.destroyed == expected);
-                CHECK((reference.pResource == nullptr) == expected);
-                CHECK(ResourceFree::referenceFrees == (expected ? 1U : 0U));
-                CHECK(freeStatusWarnings == (expected && status == NV_ERR_GPU_IS_LOST ? 2U : 0U));
+                EXPECT_TRUE(asserted == !expected);
+                EXPECT_TRUE(ResourceFree::rpcCalls == 1 && ResourceFree::mappingCalls == 4);
+                EXPECT_TRUE(resource.deleted == expected && reference.destroyed == expected);
+                EXPECT_TRUE((reference.pResource == nullptr) == expected);
+                EXPECT_TRUE(ResourceFree::referenceFrees == (expected ? 1U : 0U));
+                EXPECT_TRUE(freeStatusWarnings == (expected && status == NV_ERR_GPU_IS_LOST ? 2U : 0U));
             }
             if (registered) NvKmsWindowsUnregisterGpu(1);
         }
     }
 }
 
-void TestMemoryDestruction()
+TEST_F(DeviceRemoval, MemoryDestructionReleasesLocalOwnershipOnRpcErrors)
 {
+    // Even unexpected RPC errors must release CPU-owned descriptors while
+    // retaining the normal assertion policy for a still-present GPU.
     for (bool removed : {false, true})
     {
         DeviceContext context;
         NV_PLATFORM_RM_GPU_CONTEXT gpu;
         context.surpriseRemoved = removed ? 1 : 0;
-        CHECK(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
+        EXPECT_TRUE(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
             IsNvKmsDeviceRemoved, &context) == NV_OK);
         for (bool rpcAllocation : {false, true})
         {
@@ -1014,11 +1067,11 @@ void TestMemoryDestruction()
                 bool asserted = false;
                 try { ResourceFree::memDestruct_IMPL(&memory); }
                 catch (const ResourceFree::Assertion&) { asserted = true; }
-                CHECK(asserted == (rpcAllocation && !expected));
-                CHECK(ResourceFree::memoryFrees == 1 && !memory.bConstructed);
-                CHECK(descriptor.freed && descriptor.destroyed);
-                CHECK(ResourceFree::memoryRpcCalls == (rpcAllocation ? 1U : 0U));
-                CHECK(freeStatusWarnings ==
+                EXPECT_TRUE(asserted == (rpcAllocation && !expected));
+                EXPECT_TRUE(ResourceFree::memoryFrees == 1 && !memory.bConstructed);
+                EXPECT_TRUE(descriptor.freed && descriptor.destroyed);
+                EXPECT_TRUE(ResourceFree::memoryRpcCalls == (rpcAllocation ? 1U : 0U));
+                EXPECT_TRUE(freeStatusWarnings ==
                     (rpcAllocation && expected && status == NV_ERR_GPU_IS_LOST ? 1U : 0U));
             }
         }
@@ -1026,8 +1079,9 @@ void TestMemoryDestruction()
     }
 }
 
-void TestVaOwnershipDiagnostics()
+TEST_F(DeviceRemoval, VaOwnershipDiagnosticsTrackReferencesWithoutChangingOwnership)
 {
+    // Verbosity changes observation only, never reference counts or free policy.
     using namespace VaOwnership;
     EMEMBLOCK block;
     OBJEHEAP heap{&block};
@@ -1038,38 +1092,38 @@ void TestVaOwnershipDiagnostics()
         freeResult = status;
         internalFrees = 0;
         messages.clear();
-        CHECK(gvaspaceFree_IMPL(&vas, block.begin) == status);
-        CHECK(internalFrees == 1 && heap.block == (status == NV_OK ? nullptr : &block) && block.refCount == 1);
+        EXPECT_TRUE(gvaspaceFree_IMPL(&vas, block.begin) == status);
+        EXPECT_TRUE(internalFrees == 1 && heap.block == (status == NV_OK ? nullptr : &block) && block.refCount == 1);
 #if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
-        CHECK(messages.size() == 1 && messages[0].find("RM VA free:") == 0);
-        CHECK(messages[0].find("va=0x120000000") != std::string::npos);
-        CHECK(messages[0].find("refs=1") != std::string::npos);
+        EXPECT_TRUE(messages.size() == 1 && messages[0].find("RM VA free:") == 0);
+        EXPECT_TRUE(messages[0].find("va=0x120000000") != std::string::npos);
+        EXPECT_TRUE(messages[0].find("refs=1") != std::string::npos);
 #else
-        CHECK(messages.empty());
+        EXPECT_TRUE(messages.empty());
 #endif
     }
     heap.block = &block;
     messages.clear();
-    CHECK(gvaspaceIncAllocRefCnt_IMPL(&vas, block.begin) == NV_OK && block.refCount == 2);
+    EXPECT_TRUE(gvaspaceIncAllocRefCnt_IMPL(&vas, block.begin) == NV_OK && block.refCount == 2);
 #if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
-    CHECK(messages.size() == 1 && messages[0].find("add-reference") != std::string::npos);
-    CHECK(messages[0].find("refs=2") != std::string::npos);
+    EXPECT_TRUE(messages.size() == 1 && messages[0].find("add-reference") != std::string::npos);
+    EXPECT_TRUE(messages[0].find("refs=2") != std::string::npos);
 #else
-    CHECK(messages.empty());
+    EXPECT_TRUE(messages.empty());
 #endif
     heap.block = nullptr;
     internalFrees = 0;
     messages.clear();
-    CHECK(gvaspaceIncAllocRefCnt_IMPL(&vas, block.begin) == NV_ERR_INVALID_ARGUMENT);
-    CHECK(messages.empty() && block.refCount == 2);
+    EXPECT_TRUE(gvaspaceIncAllocRefCnt_IMPL(&vas, block.begin) == NV_ERR_INVALID_ARGUMENT);
+    EXPECT_TRUE(messages.empty() && block.refCount == 2);
     bool asserted = false;
     try { gvaspaceFree_IMPL(&vas, block.begin); }
     catch (const ResourceFree::Assertion&) { asserted = true; }
-    CHECK(asserted && internalFrees == 0 && heap.block == nullptr);
+    EXPECT_TRUE(asserted && internalFrees == 0 && heap.block == nullptr);
 #if defined(NV_WINDOWS_IDDCX) && defined(NV_RM_VERBOSE_DIAGNOSTICS)
-    CHECK(messages.size() == 1 && messages[0].find("refs=0") != std::string::npos);
+    EXPECT_TRUE(messages.size() == 1 && messages[0].find("refs=0") != std::string::npos);
     _gvaspaceTraceAllocation("destroy-space", &vas, 0, nullptr);
-    CHECK(messages.size() == 2 && messages.back().find("destroy-space") != std::string::npos);
+    EXPECT_TRUE(messages.size() == 2 && messages.back().find("destroy-space") != std::string::npos);
     MEMORY_DESCRIPTOR descriptor;
     VirtualMemory memory{{&descriptor}};
     for (bool rpc : {false, true})
@@ -1077,23 +1131,25 @@ void TestVaOwnershipDiagnostics()
         memory.bRpcAlloc = rpc;
         _virtmemTraceLifetime("destroy", &memory);
         const auto& message = messages.back();
-        CHECK(message.find("RM virtual memory destroy:") == 0);
-        CHECK(message.find(rpc ? "rpc=1" : "rpc=0") != std::string::npos);
-        CHECK(message.find("va=0x120000000") != std::string::npos);
-        CHECK(memory.pMemDesc == &descriptor && memory.bConstructed);
-        CHECK(memory.bRpcAlloc == rpc && memory.bReserveVaOnAlloc);
-        CHECK(memory.hVASpace == 4 && memory.HeapOwner == 0x1234);
-        CHECK(descriptor.address == 0x120000000ULL && descriptor.Allocated == 0);
+        EXPECT_TRUE(message.find("RM virtual memory destroy:") == 0);
+        EXPECT_TRUE(message.find(rpc ? "rpc=1" : "rpc=0") != std::string::npos);
+        EXPECT_TRUE(message.find("va=0x120000000") != std::string::npos);
+        EXPECT_TRUE(memory.pMemDesc == &descriptor && memory.bConstructed);
+        EXPECT_TRUE(memory.bRpcAlloc == rpc && memory.bReserveVaOnAlloc);
+        EXPECT_TRUE(memory.hVASpace == 4 && memory.HeapOwner == 0x1234);
+        EXPECT_TRUE(descriptor.address == 0x120000000ULL && descriptor.Allocated == 0);
     }
     memory.pMemDesc = nullptr;
     _virtmemTraceLifetime("destroy", &memory);
-    CHECK(messages.back().find("va=0x0") != std::string::npos);
-    CHECK(memory.pMemDesc == nullptr && memory.bConstructed);
+    EXPECT_TRUE(messages.back().find("va=0x0") != std::string::npos);
+    EXPECT_TRUE(memory.pMemDesc == nullptr && memory.bConstructed);
 #endif
 }
 
-void TestReservedVaUnmapOwnership()
+TEST_F(DeviceRemoval, ReservedVaUnmapPreservesOwnerAcrossGpuErrors)
 {
+    // Sweep bare, ordinary, and reserved mappings. A failed reserved unmap
+    // must leave the VA allocation for its owning VirtualMemory destructor.
     using namespace VaOwnership;
     for (unsigned gpuCount : {1U, 2U})
     for (bool peer : {false, true})
@@ -1141,35 +1197,38 @@ void TestReservedVaUnmapOwnership()
                 if (expectedStatus != NV_OK) break;
             }
         }
-        CHECK(dmaFreeMapping_GM107(&first, &allocator, &vas,
+        EXPECT_TRUE(dmaFreeMapping_GM107(&first, &allocator, &vas,
             block.begin + (reserved ? 0x123 : 0), &physicalDescriptor,
             defer ? 1U : 0U, mappingKind == 0 ? nullptr : &info) == expectedStatus);
-        CHECK(updates == expectedUpdates && unmapErrors == (expectedStatus == NV_OK ? 0U : 1U));
+        EXPECT_TRUE(updates == expectedUpdates && unmapErrors == (expectedStatus == NV_OK ? 0U : 1U));
         const unsigned expectedCache = expectedStatus != NV_OK ? 0 :
             ((peer ? gpuCount : 0) + (defer && mappingKind != 0 ? 1U : 0));
-        CHECK(cacheInvalidations == expectedCache);
+        EXPECT_TRUE(cacheInvalidations == expectedCache);
         bool prematurelyFreed = false;
 #if defined(NV_REMOVAL_TEST_DMA_BASELINE) || !defined(NV_DOWNSTREAM_BUGFIXES)
+        // Comparison profiles must detect the premature free and later assertion.
         prematurelyFreed = reserved && expectedStatus != NV_OK;
 #endif
-        CHECK(internalFrees == (!reserved || prematurelyFreed ? 1U : 0U));
-        CHECK((heap.block == &block) == (reserved && !prematurelyFreed));
+        EXPECT_TRUE(internalFrees == (!reserved || prematurelyFreed ? 1U : 0U));
+        EXPECT_TRUE((heap.block == &block) == (reserved && !prematurelyFreed));
         if (mappingKind != 0)
         {
             bool asserted = false;
             try { virtmemDestruct_IMPL(&memory); }
             catch (const ResourceFree::Assertion&) { asserted = true; }
-            CHECK(asserted == prematurelyFreed);
-            CHECK(!memory.bConstructed && commonDestructions == 1);
-            CHECK(virtualDescriptor.destroyed == !prematurelyFreed);
-            CHECK(ownerFrees == (reserved ? 1U : 0U));
-            CHECK(internalFrees == 1 && heap.block == nullptr);
+            EXPECT_TRUE(asserted == prematurelyFreed);
+            EXPECT_TRUE(!memory.bConstructed && commonDestructions == 1);
+            EXPECT_TRUE(virtualDescriptor.destroyed == !prematurelyFreed);
+            EXPECT_TRUE(ownerFrees == (reserved ? 1U : 0U));
+            EXPECT_TRUE(internalFrees == 1 && heap.block == nullptr);
         }
     }
 }
 
-void TestGpuDetachLifetime()
+TEST_F(DeviceRemoval, GpuDetachRetainsRemovalCallbackUntilAfterDetach)
 {
+    // Firmware-free cleanup during detach still needs physical-removal proof;
+    // unregistering early would re-enable GPU-lost assertions mid-teardown.
     for (bool removed : {false, true})
     {
         DeviceContext context;
@@ -1178,25 +1237,25 @@ void TestGpuDetachLifetime()
         context.rmGpuContext = &gpu;
         context.rmGpuAttached = context.nvKmsInitialized = context.rmDeviceOpened = true;
         context.displayChangeWorkItem = &context;
-        CHECK(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
+        EXPECT_TRUE(NvKmsWindowsRegisterGpu(1, 0, 0, 0, 0, &gpu,
             IsNvKmsDeviceRemoved, &context) == NV_OK);
         calls.clear();
         DestroyRmGpuContextForTest(&context);
-        CHECK(!context.rmGpuAttached && !context.nvKmsInitialized && !context.rmDeviceOpened);
-        CHECK(!context.rmGpuStateLoaded && context.rmGpuContext == nullptr && gpu.shutdown);
-        CHECK(gpu.lost == removed);
-        CHECK(context.rmGpuInstance == UINT_MAX && context.rmDeviceInstance == UINT_MAX);
-        CHECK(context.rmGpuId == 0 && !NvKmsWindowsIsGpuSurpriseRemoved());
+        EXPECT_TRUE(!context.rmGpuAttached && !context.nvKmsInitialized && !context.rmDeviceOpened);
+        EXPECT_TRUE(!context.rmGpuStateLoaded && context.rmGpuContext == nullptr && gpu.shutdown);
+        EXPECT_TRUE(gpu.lost == removed);
+        EXPECT_TRUE(context.rmGpuInstance == UINT_MAX && context.rmDeviceInstance == UINT_MAX);
+        EXPECT_TRUE(context.rmGpuId == 0 && !NvKmsWindowsIsGpuSurpriseRemoved());
         const auto detach = std::find(calls.begin(), calls.end(), "detach");
         const auto destroy = std::find(calls.begin(), calls.end(), "context-destroy");
-        CHECK(detach != calls.end() && destroy != calls.end() && detach < destroy);
-        CHECK(std::count(calls.begin(), calls.end(), "modeset-shutdown") == 1);
-        CHECK(std::count(calls.begin(), calls.end(), "client-close") == 1);
-        CHECK(std::count(calls.begin(), calls.end(), "state-unload") == 1);
+        EXPECT_TRUE(detach != calls.end() && destroy != calls.end() && detach < destroy);
+        EXPECT_TRUE(std::count(calls.begin(), calls.end(), "modeset-shutdown") == 1);
+        EXPECT_TRUE(std::count(calls.begin(), calls.end(), "client-close") == 1);
+        EXPECT_TRUE(std::count(calls.begin(), calls.end(), "state-unload") == 1);
     }
 }
 
-void TestOutputReset()
+TEST_F(DeviceRemoval, OutputResetStopsControlBeforeDeletingMonitors)
 {
     for (unsigned stage = 0; stage < 4; ++stage)
     {
@@ -1214,57 +1273,59 @@ void TestOutputReset()
             adapter.outputs_[0] = adapter.outputs_[1] = nullptr;
         hardwareCalls = 0;
         adapter.ResetOutputs();
-        CHECK(adapter.outputCount_ == 0);
-        CHECK(adapter.outputs_[0] == nullptr && adapter.outputs_[1] == nullptr);
-        CHECK(first.monitorControlStopped == (stage != 3));
-        CHECK(second.monitorControlStopped == (stage != 3));
-        CHECK(first.monitorDestroyed == (stage != 3));
-        CHECK(second.monitorDestroyed == (stage != 3));
-        CHECK(hardwareCalls == (stage == 0 ? 1U : 0U));
+        EXPECT_TRUE(adapter.outputCount_ == 0);
+        EXPECT_TRUE(adapter.outputs_[0] == nullptr && adapter.outputs_[1] == nullptr);
+        EXPECT_TRUE(first.monitorControlStopped == (stage != 3));
+        EXPECT_TRUE(second.monitorControlStopped == (stage != 3));
+        EXPECT_TRUE(first.monitorDestroyed == (stage != 3));
+        EXPECT_TRUE(second.monitorDestroyed == (stage != 3));
+        EXPECT_TRUE(hardwareCalls == (stage == 0 ? 1U : 0U));
     }
 }
 
-void TestLifecycle()
+TEST_F(DeviceRemoval, LifecycleOrdersRemovalBeforeOutputsContextAndBars)
 {
+    // The callback must publish terminal state without taking the lifecycle
+    // lock: invoke it with that lock already held to expose reentrancy.
     DeviceContext context;
     AcquireSRWLockExclusive(&context.lifecycleLock);
     SurpriseRemoval(&context);
     ReleaseSRWLockExclusive(&context.lifecycleLock);
-    CHECK(IsHardwareRemoved(&context));
-    CHECK(context.nvKmsWorkCanceled == 1 && context.d0Active == 0);
+    EXPECT_TRUE(IsHardwareRemoved(&context));
+    EXPECT_TRUE(context.nvKmsWorkCanceled == 1 && context.d0Active == 0);
     calls.clear();
-    CHECK(EnterD0(&context, 0) == STATUS_DEVICE_REMOVED);
-    CHECK(calls.empty());
+    EXPECT_TRUE(EnterD0(&context, 0) == STATUS_DEVICE_REMOVED);
+    EXPECT_TRUE(calls.empty());
     NV_PLATFORM_RM_GPU_CONTEXT gpu;
     context.rmGpuContext = &gpu;
     context.rmGpuAttached = true;
-    CHECK(ReleaseHardware(&context, nullptr) == STATUS_SUCCESS);
-    CHECK(gpu.lost);
+    EXPECT_TRUE(ReleaseHardware(&context, nullptr) == STATUS_SUCCESS);
+    EXPECT_TRUE(gpu.lost);
     auto disconnected = std::find(calls.begin(), calls.end(), "disconnected");
     auto outputs = std::find(calls.begin(), calls.end(), "outputs");
     auto destroy = std::find(calls.begin(), calls.end(), "rm-destroy");
     auto bars = std::find(calls.begin(), calls.end(), "bars");
-    CHECK(disconnected < outputs && outputs < destroy && destroy < bars);
-    CHECK(context.rmGpuContext == nullptr);
+    EXPECT_TRUE(disconnected < outputs && outputs < destroy && destroy < bars);
+    EXPECT_TRUE(context.rmGpuContext == nullptr);
     SurpriseRemoval(&context);
-    CHECK(ReleaseHardware(&context, nullptr) == STATUS_SUCCESS);
+    EXPECT_TRUE(ReleaseHardware(&context, nullptr) == STATUS_SUCCESS);
 
     DeviceContext normal;
     normal.rmGpuContext = &gpu;
     normal.rmGpuAttached = true;
     calls.clear();
-    CHECK(EnterD0(&normal, 0) == STATUS_SUCCESS);
-    CHECK(ReleaseHardware(&normal, nullptr) == STATUS_SUCCESS);
-    CHECK(std::find(calls.begin(), calls.end(), "disconnected") == calls.end());
-    CHECK(normal.d0Active == 0);
+    EXPECT_TRUE(EnterD0(&normal, 0) == STATUS_SUCCESS);
+    EXPECT_TRUE(ReleaseHardware(&normal, nullptr) == STATUS_SUCCESS);
+    EXPECT_TRUE(std::find(calls.begin(), calls.end(), "disconnected") == calls.end());
+    EXPECT_TRUE(normal.d0Active == 0);
     SurpriseRemoval(&normal);
-    CHECK(IsHardwareRemoved(&normal));
+    EXPECT_TRUE(IsHardwareRemoved(&normal));
 }
 
-void TestRmErrors()
+TEST_F(DeviceRemoval, RmErrorsReleaseOnlyAcquiredLocks)
 {
     NV_PLATFORM_RM_GPU_CONTEXT gpu;
-    CHECK(NvRmMarkGpuLost(nullptr) == NV_ERR_INVALID_ARGUMENT);
+    EXPECT_TRUE(NvRmMarkGpuLost(nullptr) == NV_ERR_INVALID_ARGUMENT);
     for (unsigned stage = 0; stage < 4; ++stage)
     {
         apiStatus = stage == 0 ? 99 : NV_OK;
@@ -1272,26 +1333,28 @@ void TestRmErrors()
         publishedStatus = stage == 2 ? 99 : NV_OK;
         gpuLockStatus = stage == 3 ? 99 : NV_OK;
         calls.clear();
-        CHECK(NvRmMarkGpuLost(&gpu) == 99);
-        CHECK(gpu.lost);
-        CHECK(std::find(calls.begin(), calls.end(), "disconnected") == calls.end());
-        CHECK((std::count(calls.begin(), calls.end(), "api-unlock") == 1) == (stage != 0));
-        CHECK((std::count(calls.begin(), calls.end(), "visibility-end") == 1) == (stage >= 2));
-        CHECK(std::count(calls.begin(), calls.end(), "gpu-unlock") == 0);
+        EXPECT_TRUE(NvRmMarkGpuLost(&gpu) == 99);
+        EXPECT_TRUE(gpu.lost);
+        EXPECT_TRUE(std::find(calls.begin(), calls.end(), "disconnected") == calls.end());
+        EXPECT_TRUE((std::count(calls.begin(), calls.end(), "api-unlock") == 1) == (stage != 0));
+        EXPECT_TRUE((std::count(calls.begin(), calls.end(), "visibility-end") == 1) == (stage >= 2));
+        EXPECT_TRUE(std::count(calls.begin(), calls.end(), "gpu-unlock") == 0);
     }
     apiStatus = visibilityStatus = publishedStatus = gpuLockStatus = NV_OK;
 }
 
-void TestRetirement()
+TEST_F(DeviceRemoval, RetirementStopsAtEachRemovalStage)
 {
+    // Removal cancels the wait, not the hardware work. Keep submission state
+    // rather than treating cancellation as a witnessed layer retirement.
     DeviceContext context;
     Output output{&context};
     Scene scene{&context};
     SwapChainUploadPipeline pipeline{&output, &scene};
     hardwareCalls = 0;
-    CHECK(pipeline.DisableDemo() == S_OK);
-    CHECK(scene.retired == 2 && pipeline.refreshCount == 1);
-    CHECK(hardwareCalls == 3 && !pipeline.demoSubmitted_);
+    EXPECT_TRUE(pipeline.DisableDemo() == S_OK);
+    EXPECT_TRUE(scene.retired == 2 && pipeline.refreshCount == 1);
+    EXPECT_TRUE(hardwareCalls == 3 && !pipeline.demoSubmitted_);
     for (unsigned stage = 0; stage < 3; ++stage)
     {
         context.surpriseRemoved = stage == 0 ? 1 : 0;
@@ -1301,11 +1364,11 @@ void TestRetirement()
         pipeline.refreshCount = 0;
         pipeline.demoSubmitted_ = true;
         hardwareCalls = 0;
-        CHECK(pipeline.DisableDemo() == S_OK);
-        CHECK(context.surpriseRemoved == 1);
-        CHECK(scene.retired == (stage == 0 ? 0U : 1U));
-        CHECK(hardwareCalls == (stage == 2 ? 1U : 0U));
-        CHECK(pipeline.demoSubmitted_);
+        EXPECT_TRUE(pipeline.DisableDemo() == S_OK);
+        EXPECT_TRUE(context.surpriseRemoved == 1);
+        EXPECT_TRUE(scene.retired == (stage == 0 ? 0U : 1U));
+        EXPECT_TRUE(hardwareCalls == (stage == 2 ? 1U : 0U));
+        EXPECT_TRUE(pipeline.demoSubmitted_);
     }
 }
 
@@ -1314,7 +1377,7 @@ DWORD WINAPI WaitForStop(void* event)
     return WaitForSingleObject(event, 5000) == WAIT_OBJECT_0 ? 0 : 1;
 }
 
-void TestPipelineStop()
+TEST_F(DeviceRemoval, PipelineStopReleasesMappingsAndHandlesExactlyOnce)
 {
     for (bool removed : {false, true})
     {
@@ -1329,41 +1392,18 @@ void TestPipelineStop()
         pipeline.wake_.value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         pipeline.animationTimer_.value = CreateWaitableTimerW(nullptr, FALSE, nullptr);
         pipeline.thread_.value = CreateThread(nullptr, 0, WaitForStop, pipeline.stopEvent_, 0, nullptr);
-        CHECK(pipeline.stopEvent_ != nullptr && pipeline.wake_ &&
+        ASSERT_TRUE(pipeline.stopEvent_ != nullptr && pipeline.wake_ &&
             pipeline.animationTimer_ && pipeline.thread_);
         hardwareCalls = 0;
-        CHECK(pipeline.Stop() == S_OK);
-        CHECK(mapping.unmaps == 1 && pipeline.jobs_[0].mapped == nullptr);
-        CHECK(pipeline.thread_.closes == 1 && pipeline.animationTimer_.closes == 1);
-        CHECK(output.scanoutResets == 0);
-        CHECK(hardwareCalls == (removed ? 0U : 4U));
-        CHECK(pipeline.output_ == nullptr);
-        CHECK(pipeline.Stop() == S_OK && mapping.unmaps == 1);
-        CHECK(CloseHandle(pipeline.stopEvent_));
+        EXPECT_TRUE(pipeline.Stop() == S_OK);
+        EXPECT_TRUE(mapping.unmaps == 1 && pipeline.jobs_[0].mapped == nullptr);
+        EXPECT_TRUE(pipeline.thread_.closes == 1 && pipeline.animationTimer_.closes == 1);
+        EXPECT_TRUE(output.scanoutResets == 0);
+        EXPECT_TRUE(hardwareCalls == (removed ? 0U : 4U));
+        EXPECT_TRUE(pipeline.output_ == nullptr);
+        EXPECT_TRUE(pipeline.Stop() == S_OK && mapping.unmaps == 1);
+        EXPECT_TRUE(CloseHandle(pipeline.stopEvent_));
         pipeline.wake_.reset();
     }
 }
 #endif
-
-int main()
-{
-    TestInterrupts();
-    TestHardwareAccess();
-    TestReset();
-#if !defined(NV_REMOVAL_TEST_BASELINE)
-#if defined(NV_WINDOWS_IDDCX)
-    TestNativeNotifierRemoval();
-#endif
-    TestNativeResourceFree();
-    TestMemoryDestruction();
-    TestVaOwnershipDiagnostics();
-    TestReservedVaUnmapOwnership();
-    TestGpuDetachLifetime();
-    TestOutputReset();
-    TestLifecycle();
-    TestRmErrors();
-    TestRetirement();
-    TestPipelineStop();
-#endif
-    std::printf("Device removal: %u checks passed\n", cases);
-}

@@ -3,30 +3,19 @@
 #include <windows.h>
 #undef WIN32_NO_STATUS
 #include <ntstatus.h>
+#include <gtest/gtest.h>
 
 #include "../pci_bars.hpp"
 #include "../../platform/kernel/nvplatform_mmio_rm.h"
 #include "kernel/os/nv_memory_type.h"
-#include <cstdio>
-#include <cstdlib>
 #include <type_traits>
 
 namespace {
 
 using namespace nv::iddcx;
 
-unsigned cases = 0;
 unsigned traceErrors = 0;
 
-void Check(bool condition)
-{
-    ++cases;
-    if (!condition)
-    {
-        std::fprintf(stderr, "PCI BAR ownership case %u failed\n", cases);
-        std::abort();
-    }
-}
 
 struct ResourceList
 {
@@ -46,7 +35,7 @@ struct Mapping
     {
         if (address != nullptr)
         {
-            Check(VirtualFree(address, 0, MEM_RELEASE) != FALSE);
+            EXPECT_TRUE(VirtualFree(address, 0, MEM_RELEASE) != FALSE);
         }
     }
 };
@@ -69,7 +58,7 @@ struct Fixture
 
     Fixture()
     {
-        Check(current == nullptr);
+        EXPECT_TRUE(current == nullptr);
         current = this;
         const ULONGLONG bases[] = { 0x97000000, 0x2800000000, 0x2FFE000000 };
         const ULONG lengths[] = { 0x1000000, 4, 0x2000000 };
@@ -86,14 +75,14 @@ struct Fixture
         {
             descriptor.u.Memory.Start.QuadPart += 0x1000000000;
         }
-        Check(config.Initialize(Device()) == STATUS_SUCCESS);
+        EXPECT_TRUE(config.Initialize(Device()) == STATUS_SUCCESS);
     }
     ~Fixture()
     {
         for (ULONG index = 0; index < 3; ++index)
         {
-            Check(!mappings[index]);
-            Check(maps[index] == unmaps[index]);
+            EXPECT_TRUE(!mappings[index]);
+            EXPECT_TRUE(maps[index] == unmaps[index]);
         }
         current = nullptr;
     }
@@ -105,7 +94,7 @@ struct Fixture
     nv::platform::MemoryResource Resource(ULONG index) const
     {
         nv::platform::MemoryResource resource = {};
-        Check(nv::platform::DecodeMemoryResource(translated.descriptors[index], &resource) ==
+        EXPECT_TRUE(nv::platform::DecodeMemoryResource(translated.descriptors[index], &resource) ==
             STATUS_SUCCESS);
         return resource;
     }
@@ -125,6 +114,19 @@ PCM_PARTIAL_RESOURCE_DESCRIPTOR NTAPI ResourceDescriptor(
 
 std::array<WDFFUNC, WdfFunctionTableNumEntries> wdfFunctions = {};
 
+class PciBarsTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        traceErrors = 0;
+        wdfFunctions[WdfCmResourceListGetCountTableIndex] =
+            reinterpret_cast<WDFFUNC>(ResourceCount);
+        wdfFunctions[WdfCmResourceListGetDescriptorTableIndex] =
+            reinterpret_cast<WDFFUNC>(ResourceDescriptor);
+    }
+};
+
 UCHAR Read8(void*, SIZE_T) { return 0; }
 USHORT Read16(void*, SIZE_T) { return 0; }
 ULONG Read32(void*, SIZE_T) { return 0; }
@@ -140,66 +142,69 @@ NV_STATUS MapBar1(const Fixture& fixture, void** address)
         4096, NV_PROTECT_READ_WRITE, NV_MEMORY_WRITECOMBINED, address);
 }
 
-void TestOwnership()
+TEST_F(PciBarsTest, OwnsBarsAndDemandMappingLeases)
 {
+    // BAR destruction revokes the provider even if a client kept an alias;
+    // the underlying mapping must still be released exactly once.
     Fixture fixture;
     void* lease = nullptr;
     {
         PciBars bars;
-        Check(fixture.Initialize(bars) == STATUS_SUCCESS);
-        Check(bars.Count() == 3);
+        EXPECT_TRUE(fixture.Initialize(bars) == STATUS_SUCCESS);
+        EXPECT_TRUE(bars.Count() == 3);
         for (ULONG index = 0; index < bars.Count(); ++index)
         {
             const auto expected = fixture.Resource(index);
-            Check(bars[index].Resource().physicalAddress.QuadPart == expected.physicalAddress.QuadPart);
-            Check(bars[index].Resource().length == expected.length);
-            Check((bars[index].Address() != nullptr) == (index != 1));
+            EXPECT_TRUE(bars[index].Resource().physicalAddress.QuadPart == expected.physicalAddress.QuadPart);
+            EXPECT_TRUE(bars[index].Resource().length == expected.length);
+            EXPECT_TRUE((bars[index].Address() != nullptr) == (index != 1));
         }
-        Check(bars[1].Resource().length == 0x400000000ULL);
-        Check(MapBar1(fixture, &lease) == NV_OK);
-        Check(fixture.maps[1] == 1);
-        Check(bars[1].Aperture().Length() == NV_PLATFORM_MAX_USER_MMIO_MAPPING_LENGTH);
+        EXPECT_TRUE(bars[1].Resource().length == 0x400000000ULL);
+        EXPECT_TRUE(MapBar1(fixture, &lease) == NV_OK);
+        EXPECT_TRUE(fixture.maps[1] == 1);
+        EXPECT_TRUE(bars[1].Aperture().Length() == NV_PLATFORM_MAX_USER_MMIO_MAPPING_LENGTH);
         void* alias = nullptr;
-        Check(MapBar1(fixture, &alias) == NV_OK);
-        Check(alias == lease);
-        Check(fixture.maps[1] == 1);
+        EXPECT_TRUE(MapBar1(fixture, &alias) == NV_OK);
+        EXPECT_TRUE(alias == lease);
+        EXPECT_TRUE(fixture.maps[1] == 1);
         NvPlatformRmUnmapPhysical(lease);
-        Check(fixture.unmaps[1] == 0);
+        EXPECT_TRUE(fixture.unmaps[1] == 0);
     }
-    Check(fixture.unmaps[1] == 1);
-    Check(MapBar1(fixture, &lease) == NV_ERR_OBJECT_NOT_FOUND);
-    Check(lease == nullptr);
+    EXPECT_TRUE(fixture.unmaps[1] == 1);
+    EXPECT_TRUE(MapBar1(fixture, &lease) == NV_ERR_OBJECT_NOT_FOUND);
+    EXPECT_TRUE(lease == nullptr);
 }
 
-void TestRecovery()
+TEST_F(PciBarsTest, SuspendsRestoresAndReinitializesMappings)
 {
+    // Demand-provider suspension must preserve fixed BAR0/BAR2 addresses.
     Fixture fixture;
     PciBars bars;
-    Check(fixture.Initialize(bars) == STATUS_SUCCESS);
+    EXPECT_TRUE(fixture.Initialize(bars) == STATUS_SUCCESS);
     const auto bar0Address = bars[PciBars::Bar0Index].Address();
     const auto bar2Address = bars[PciBars::Bar2Index].Address();
     void* lease = nullptr;
-    Check(MapBar1(fixture, &lease) == NV_OK);
+    EXPECT_TRUE(MapBar1(fixture, &lease) == NV_OK);
     bars.SuspendDemandMappings();
-    Check(bars.Count() == 3);
-    Check(fixture.unmaps[1] == 1);
-    Check(bars[1].Address() == nullptr);
-    Check(MapBar1(fixture, &lease) == NV_ERR_OBJECT_NOT_FOUND);
-    Check(bars.RestoreDemandMappings() == STATUS_SUCCESS);
-    Check(bars[PciBars::Bar0Index].Address() == bar0Address);
-    Check(bars[PciBars::Bar2Index].Address() == bar2Address);
-    Check(fixture.maps[0] == 1 && fixture.unmaps[0] == 0);
-    Check(fixture.maps[2] == 1 && fixture.unmaps[2] == 0);
-    Check(MapBar1(fixture, &lease) == NV_OK);
+    EXPECT_TRUE(bars.Count() == 3);
+    EXPECT_TRUE(fixture.unmaps[1] == 1);
+    EXPECT_TRUE(bars[1].Address() == nullptr);
+    EXPECT_TRUE(MapBar1(fixture, &lease) == NV_ERR_OBJECT_NOT_FOUND);
+    EXPECT_TRUE(bars.RestoreDemandMappings() == STATUS_SUCCESS);
+    EXPECT_TRUE(bars[PciBars::Bar0Index].Address() == bar0Address);
+    EXPECT_TRUE(bars[PciBars::Bar2Index].Address() == bar2Address);
+    EXPECT_TRUE(fixture.maps[0] == 1 && fixture.unmaps[0] == 0);
+    EXPECT_TRUE(fixture.maps[2] == 1 && fixture.unmaps[2] == 0);
+    EXPECT_TRUE(MapBar1(fixture, &lease) == NV_OK);
     NvPlatformRmUnmapPhysical(lease);
-    Check(fixture.unmaps[1] == 2);
+    EXPECT_TRUE(fixture.unmaps[1] == 2);
     bars.Reset();
     bars.Reset();
-    Check(bars.Count() == 0);
-    Check(fixture.Initialize(bars) == STATUS_SUCCESS);
+    EXPECT_TRUE(bars.Count() == 0);
+    EXPECT_TRUE(fixture.Initialize(bars) == STATUS_SUCCESS);
 }
 
-void TestFailures()
+TEST_F(PciBarsTest, RollsBackInitializationAndRejectsInvalidRestores)
 {
     for (int failingBar : { 0, 2 })
     {
@@ -207,11 +212,11 @@ void TestFailures()
         fixture.failingBar = failingBar;
         PciBars bars;
         const unsigned errors = traceErrors;
-        Check(fixture.Initialize(bars) == STATUS_INSUFFICIENT_RESOURCES);
-        Check(bars.Count() == 0);
-        Check(traceErrors > errors);
+        EXPECT_TRUE(fixture.Initialize(bars) == STATUS_INSUFFICIENT_RESOURCES);
+        EXPECT_TRUE(bars.Count() == 0);
+        EXPECT_TRUE(traceErrors > errors);
         fixture.failingBar = -1;
-        Check(fixture.Initialize(bars) == STATUS_SUCCESS);
+        EXPECT_TRUE(fixture.Initialize(bars) == STATUS_SUCCESS);
     }
     for (unsigned failure = 0; failure < 5; ++failure)
     {
@@ -238,33 +243,34 @@ void TestFailures()
         else
         {
             fixture.configCount = 2;
-            Check(fixture.config.Initialize(fixture.Device()) == STATUS_SUCCESS);
+            EXPECT_TRUE(fixture.config.Initialize(fixture.Device()) == STATUS_SUCCESS);
         }
-        Check(fixture.Initialize(bars) < 0);
-        Check(bars.Count() == 0);
-        Check(traceErrors > errors);
+        EXPECT_TRUE(fixture.Initialize(bars) < 0);
+        EXPECT_TRUE(bars.Count() == 0);
+        EXPECT_TRUE(traceErrors > errors);
         void* lease = nullptr;
-        Check(MapBar1(fixture, &lease) == NV_ERR_OBJECT_NOT_FOUND);
+        EXPECT_TRUE(MapBar1(fixture, &lease) == NV_ERR_OBJECT_NOT_FOUND);
     }
     {
         Fixture fixture;
         PciBars bars;
         const unsigned errors = traceErrors;
-        Check(bars.RestoreDemandMappings() == STATUS_INVALID_DEVICE_STATE);
-        Check(traceErrors > errors);
-        Check(fixture.Initialize(bars) == STATUS_SUCCESS);
+        EXPECT_TRUE(bars.RestoreDemandMappings() == STATUS_INVALID_DEVICE_STATE);
+        EXPECT_TRUE(traceErrors > errors);
+        EXPECT_TRUE(fixture.Initialize(bars) == STATUS_SUCCESS);
         void* lease = nullptr;
-        Check(MapBar1(fixture, &lease) == NV_OK);
-        Check(bars.RestoreDemandMappings() == STATUS_INVALID_DEVICE_STATE);
-        Check(fixture.unmaps[1] == 0);
+        EXPECT_TRUE(MapBar1(fixture, &lease) == NV_OK);
+        // Reject duplicate restoration without draining the existing aliases.
+        EXPECT_TRUE(bars.RestoreDemandMappings() == STATUS_INVALID_DEVICE_STATE);
+        EXPECT_TRUE(fixture.unmaps[1] == 0);
         void* alias = nullptr;
-        Check(MapBar1(fixture, &alias) == NV_OK);
-        Check(alias == lease);
-        Check(fixture.maps[1] == 1);
+        EXPECT_TRUE(MapBar1(fixture, &alias) == NV_OK);
+        EXPECT_TRUE(alias == lease);
+        EXPECT_TRUE(fixture.maps[1] == 1);
         NvPlatformRmUnmapPhysical(lease);
         NvPlatformRmUnmapPhysical(alias);
         bars.SuspendDemandMappings();
-        Check(bars.RestoreDemandMappings() == STATUS_SUCCESS);
+        EXPECT_TRUE(bars.RestoreDemandMappings() == STATUS_SUCCESS);
     }
 }
 
@@ -305,9 +311,9 @@ NTSTATUS RegisterAperture::InitializeRange(
     MEMORY_CACHING_TYPE cacheType) noexcept
 {
     auto& fixture = *reinterpret_cast<Fixture*>(device);
-    Check(current == &fixture);
+    EXPECT_TRUE(current == &fixture);
     Reset();
-    Check(nv::platform::IsSupportedUserMmioRange(
+    EXPECT_TRUE(nv::platform::IsSupportedUserMmioRange(
         static_cast<ULONGLONG>(physicalAddress.QuadPart), length, 4096));
     for (ULONG index = 0; index < 3; ++index)
     {
@@ -317,15 +323,19 @@ NTSTATUS RegisterAperture::InitializeRange(
         {
             continue;
         }
-        Check(!fixture.mappings[index]);
-        Check(cacheType == (index == 0 ? MmNonCached : MmWriteCombined));
+        EXPECT_TRUE(!fixture.mappings[index]);
+        EXPECT_TRUE(cacheType == (index == 0 ? MmNonCached : MmWriteCombined));
         if (fixture.failingBar == static_cast<int>(index))
         {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         auto mapping = std::make_unique<Mapping>();
         mapping->address = VirtualAlloc(nullptr, length, MEM_RESERVE, PAGE_NOACCESS);
-        Check(mapping->address != nullptr);
+        if (mapping->address == nullptr)
+        {
+            ADD_FAILURE() << "Unable to reserve fake BAR aperture";
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
         device_ = device;
         address_ = mapping->address;
         pseudoAddress_ = mapping.get();
@@ -335,7 +345,7 @@ NTSTATUS RegisterAperture::InitializeRange(
         ++fixture.maps[index];
         return STATUS_SUCCESS;
     }
-    Check(false);
+    EXPECT_TRUE(false);
     return STATUS_DEVICE_CONFIGURATION_ERROR;
 }
 
@@ -381,18 +391,9 @@ NV_PLATFORM_MMIO_ACCESS RegisterAperture::Access() noexcept
 
 } // namespace nv::iddcx
 
-int main()
-{
-    static_assert(!std::is_copy_constructible_v<PciBars>);
-    static_assert(!std::is_move_constructible_v<PciBars>);
-    static_assert(!std::is_copy_constructible_v<PciBar>);
-    static_assert(!std::is_move_constructible_v<PciBar>);
-    static_assert(!std::is_copy_constructible_v<RegisterAperture>);
-    static_assert(!std::is_move_constructible_v<RegisterAperture>);
-    wdfFunctions[WdfCmResourceListGetCountTableIndex] = reinterpret_cast<WDFFUNC>(ResourceCount);
-    wdfFunctions[WdfCmResourceListGetDescriptorTableIndex] = reinterpret_cast<WDFFUNC>(ResourceDescriptor);
-    TestOwnership();
-    TestRecovery();
-    TestFailures();
-    std::printf("PASS: %u production PCI BAR ownership/lifecycle checks (mock WDF/config backend)\n", cases);
-}
+static_assert(!std::is_copy_constructible_v<PciBars>);
+static_assert(!std::is_move_constructible_v<PciBars>);
+static_assert(!std::is_copy_constructible_v<PciBar>);
+static_assert(!std::is_move_constructible_v<PciBar>);
+static_assert(!std::is_copy_constructible_v<RegisterAperture>);
+static_assert(!std::is_move_constructible_v<RegisterAperture>);

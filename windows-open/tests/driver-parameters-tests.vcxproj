@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{3F73514B-B46A-44D6-BF89-663241908C02}</ProjectGuid>
+    <NvTestUsesWdf>true</NvTestUsesWdf>
+    <NvTestUsesWil>true</NvTestUsesWil>
+  </PropertyGroup>
+  <Import Project="host-test.props" />
+  <ItemGroup><ClCompile Include="..\iddcx\tests\driver_parameters_test.cpp" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Project="host-test.targets" />
+</Project>

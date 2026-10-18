@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{3F73514B-B46A-44D6-BF89-663241908C0E}</ProjectGuid>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="host-test.props" />
+  <Import Project="nvkms-test.props" />
+  <ItemDefinitionGroup><ClCompile><PreprocessorDefinitions>NV_USER_MODE;NV_WINDOWS_IDDCX;NV_LINUX;NV_SMG_IN_NVKMS;NVHDMIPKT_RM_CALLS_INTERNAL=0;NVHDMIPKT_NVKMS;NV_XZ_CUSTOM_MEM_HOOKS;NV_XZ_USE_NVTYPES;XZ_DEC_SINGLE;_LANGUAGE_C;NVRM;SOFTFLOAT_FAST_DIV32TO16;SOFTFLOAT_FAST_DIV64TO32;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile></ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="..\modeset\tests\mpo_request_tests.cpp" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Project="host-test.targets" />
+</Project>
