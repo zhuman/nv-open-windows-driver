@@ -21,6 +21,7 @@
     <Project Path="tests/pma-scrub-removal-tests.vcxproj" />
     <Project Path="tests/presentation-locks-tests.vcxproj" />
     <Project Path="tests/scrubber-removal-tests.vcxproj" />
+    <Project Path="tests/vrr-cursor-tests.vcxproj" />
   </Folder>
   <Project Path="common/kernel/nvcommon-kernel.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="c83a5fea-a7e8-45c5-a0d6-34e95160b902" />
   <Project Path="common/user/nvcommon-user.vcxproj" Type="bc8a1ffa-bee3-4634-8014-f334798102b3" Id="20d7d8a6-432f-4dfa-8dba-7affd8aa1e61" />

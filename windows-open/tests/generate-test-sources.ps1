@@ -48,6 +48,20 @@ switch ($Project) {
             Replace('const NVFlipChannelEvoHwState *pState', 'const TestFlipState *pState') |
             Set-Content -LiteralPath (Join-Path $OutputDirectory 'flip_channel_validation.hpp') -Encoding ascii
     }
+    'vrr-cursor-tests' {
+        $source = (Get-Content -LiteralPath (Join-Path $repo 'src\nvidia-modeset\src\nvkms-vrr.c') -Raw).Replace("`r`n", "`n")
+        $production = "#include `"nvkms-vrr.h`"`n"
+        $production += "#if !defined(NV_WINDOWS_IDDCX)`n"
+        $production += Get-Section $source 'static NvBool AnyActiveVrrHeads(' 'static NvBool DpyAllowsAdaptiveSync('
+        $production += "#endif`n"
+        $production += Get-Section $source "#if defined(NV_WINDOWS_IDDCX)`nstatic void VrrRecordCursorFrameRelease(" '/* Get active vrr type used by the flips. */'
+        $production += Get-Section ($source + "`n/* END_VRR_CURSOR_TEST_SOURCE */") "#if defined(NV_WINDOWS_IDDCX)`nstatic void VrrUnstallCursorApiHead(" '/* END_VRR_CURSOR_TEST_SOURCE */'
+        $evo = Get-Content -LiteralPath (Join-Path $repo 'src\nvidia-modeset\src\nvkms-evo.c') -Raw
+        $production += "`nvoid UnregisterFlipOccurredEventOneHead(NVDispEvoPtr, NvU32);`n"
+        $production += (Get-Section $evo 'static void ClearApiHeadStateOneDisp(' 'static void ClearApiHeadState(').
+            Replace('static void ClearApiHeadStateOneDisp(', 'void NvTestClearApiHeadStateOneDisp(')
+        $production | Set-Content -LiteralPath (Join-Path $OutputDirectory 'vrr_cursor_production.c') -Encoding ascii
+    }
     'gsp-timeout-tests' {
         $source = (Get-Content -LiteralPath (Join-Path $repo 'src\nvidia\src\kernel\gpu\gsp\kernel_gsp.c') -Raw).Replace("`r`n", "`n")
         Get-Section $source "static NV_STATUS`n_kgspCheckIfMemsysError" '/*' |

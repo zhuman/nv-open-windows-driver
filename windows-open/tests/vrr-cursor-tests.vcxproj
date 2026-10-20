@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{3F73514B-B46A-44D6-BF89-663241908C12}</ProjectGuid>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="host-test.props" />
+  <Import Project="nvkms-test.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions Condition="'$(NvTestProfile)' == 'default'">NV_WINDOWS_IDDCX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NV_USER_MODE;NV_LINUX;_LANGUAGE_C;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\modeset\tests\vrr_cursor_tests.cpp" />
+    <ClCompile Include="$(IntDir)vrr_cursor_production.c" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Project="host-test.targets" />
+</Project>

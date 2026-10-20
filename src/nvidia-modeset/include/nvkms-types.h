@@ -1931,6 +1931,10 @@ typedef struct _NVDispApiHeadStateEvoRec {
     struct {
         NvBool active;
         NvBool pendingCursorMotion;
+#if defined(NV_WINDOWS_IDDCX)
+        NvU64 lastCursorFrameReleaseUsec;
+        nvkms_timer_handle_t *cursorUnstallTimer;
+#endif
     } vrr;
     
     NVDispStereoParamsEvoRec stereo;

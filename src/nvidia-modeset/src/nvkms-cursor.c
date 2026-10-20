@@ -169,7 +169,7 @@ SetCursorImage(NVDispEvoPtr pDispEvo,
      * a VRR unstall.  Also, if the cursor changed from an image to no image
      * (i.e., hiding the cursor), that should trigger a VRR unstall, too.
      */
-    nvTriggerVrrUnstallSetCursorImage(pDispEvo, changed);
+    nvTriggerVrrUnstallSetCursorImage(pDispEvo, apiHead, changed);
 }
 
 static NvBool
@@ -273,7 +273,7 @@ void nvEvoMoveCursorInternal(NVDispEvoPtr pDispEvo,
     /* If the cursor is visible, trigger VRR unstall to display the
      * cursor at the new postion */
     if (pEvoSubDev->headState[head].cursor.pSurfaceEvo) {
-        nvTriggerVrrUnstallMoveCursor(pDispEvo);
+        nvTriggerVrrUnstallMoveCursor(pDispEvo, head);
     }
 }
 

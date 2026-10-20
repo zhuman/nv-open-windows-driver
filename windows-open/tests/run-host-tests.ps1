@@ -38,7 +38,7 @@ $groups = [ordered]@{
     BarResources = @('bar-resources-tests', 'pci-bars-tests')
     MonitorI2c = @('monitor-i2c-tests')
     Removal = @('device-removal-tests', 'scrubber-removal-tests', 'pma-scrub-removal-tests')
-    Modeset = @('mpo-request-tests')
+    Modeset = @('mpo-request-tests', 'vrr-cursor-tests')
     Platform = @('debug-log-tests', 'gsp-timeout-tests')
     DisplayPort = @('dp-trace-tests')
 }
@@ -56,7 +56,7 @@ foreach ($project in $projects) {
             $profiles += 'baseline'
             if ($project -eq 'device-removal-tests') { $profiles += 'dma-baseline' }
         }
-    } elseif ($project -eq 'gsp-timeout-tests') {
+    } elseif ($project -in @('gsp-timeout-tests', 'vrr-cursor-tests')) {
         $profiles += 'native-policy'
     }
     foreach ($profile in $profiles) {

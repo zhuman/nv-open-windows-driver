@@ -4887,6 +4887,10 @@ static void ClearApiHeadStateOneDisp(NVDispEvoRec *pDispEvo)
         NVDispApiHeadStateEvoRec *pApiHeadState =
             &pDispEvo->apiHeadState[apiHead];
 
+#if defined(NV_WINDOWS_IDDCX)
+        nvkms_free_timer(pApiHeadState->vrr.cursorUnstallTimer);
+        pApiHeadState->vrr.cursorUnstallTimer = NULL;
+#endif
         nvAssert(pApiHeadState->rmVBlankCallbackHandle == 0);
 
         for (layer = 0; layer < ARRAY_LEN(pApiHeadState->flipOccurredEvent); layer++) {
@@ -9913,4 +9917,3 @@ NvBool nvEvoIsConsoleActive(const NVDevEvoRec *pDevEvo)
 
     return FALSE;
 }
-

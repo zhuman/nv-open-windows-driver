@@ -901,6 +901,18 @@ void nvApplyVrrBaseFlipOverrides(const NVDispEvoRec *pDispEvo, NvU32 head,
     }
 }
 
+#if defined(NV_WINDOWS_IDDCX)
+static void VrrRecordCursorFrameRelease(NVDispEvoPtr pDispEvo, NvU32 apiHead)
+{
+    NVDispApiHeadStateEvoRec *pApiHeadState = &pDispEvo->apiHeadState[apiHead];
+
+    nvkms_free_timer(pApiHeadState->vrr.cursorUnstallTimer);
+    pApiHeadState->vrr.cursorUnstallTimer = NULL;
+    pApiHeadState->vrr.pendingCursorMotion = NV_FALSE;
+    pApiHeadState->vrr.lastCursorFrameReleaseUsec = nvkms_get_usec();
+}
+#endif
+
 void nvCancelVrrFrameReleaseTimers(NVDevEvoPtr pDevEvo,
                                    const NvU32 applyAllowVrrApiHeadMasks[NVKMS_MAX_SUBDEVICES])
 {
@@ -922,6 +934,9 @@ void nvCancelVrrFrameReleaseTimers(NVDevEvoPtr pDevEvo,
             } else {
                 // clear pendingCursorMotion for all flipped apiHeads
                 pDispEvo->apiHeadState[apiHead].vrr.pendingCursorMotion = NV_FALSE;
+#if defined(NV_WINDOWS_IDDCX)
+                VrrRecordCursorFrameRelease(pDispEvo, apiHead);
+#endif
             }
         }
         
@@ -954,6 +969,28 @@ enum NvKmsVrrFlipType nvGetActiveVrrType(const NVDevEvoRec *pDevEvo)
     return NV_KMS_VRR_FLIP_NON_VRR;
 }
 
+#if defined(NV_WINDOWS_IDDCX)
+static void VrrUnstallCursorApiHead(NVDispEvoPtr pDispEvo, NvU32 apiHead)
+{
+    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
+    NVDispApiHeadStateEvoRec *pApiHeadState = &pDispEvo->apiHeadState[apiHead];
+    NvU32 head;
+
+    if (pApiHeadState->vrr.active) {
+        FOR_EACH_EVO_HW_HEAD_IN_MASK(pApiHeadState->hwHeadsMask, head) {
+            if (nvHeadIsActive(pDispEvo, head)) {
+                pDevEvo->cursorHal->ReleaseElv(pDevEvo, head);
+            }
+        }
+    }
+    VrrRecordCursorFrameRelease(pDispEvo, apiHead);
+}
+
+static void VrrCursorUnstallTimer(void *dataPtr, NvU32 apiHead)
+{
+    VrrUnstallCursorApiHead(dataPtr, apiHead);
+}
+#else
 static void
 VrrUnstallNow(NVDispEvoPtr pDispEvo)
 {
@@ -982,6 +1019,7 @@ VrrUnstallTimer(void *dataPtr, NvU32 dataU32)
     VrrUnstallNow(pDispEvo);
     pDispEvo->vrr.unstallTimer = NULL;
 }
+#endif
 
 /*!
  * Schedule a timer to trigger a VRR unstall if no flip occurs soon.
@@ -997,13 +1035,56 @@ VrrUnstallTimer(void *dataPtr, NvU32 dataU32)
  * On nvdisplay, this schedules an nvkms timer and uses a method to trigger an
  * unstall. On EVO, it calls into RM to do something equivalent.
  */
-void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo)
+void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo, NvU32 head)
 {
     NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
-    const NvU32 timeoutMs = 33; // 30 fps
-
+#if defined(NV_WINDOWS_IDDCX)
     NvU32 apiHead;
 
+    if (head >= pDevEvo->numHeads) {
+        return;
+    }
+    for (apiHead = 0; apiHead < pDevEvo->numApiHeads; apiHead++) {
+        NVDispApiHeadStateEvoRec *pApiHeadState = &pDispEvo->apiHeadState[apiHead];
+        const NVHwModeTimingsEvo *pTimings = &pApiHeadState->timings;
+        NvU64 frameUsec, elapsedUsec;
+
+        if (!pApiHeadState->vrr.active ||
+            !(pApiHeadState->hwHeadsMask & NVBIT(head))) {
+            continue;
+        }
+        pApiHeadState->vrr.pendingCursorMotion = NV_TRUE;
+        if (pTimings->pixelClock == 0 ||
+            pTimings->rasterSize.x == 0 || pTimings->rasterSize.y == 0) {
+            nvAssert(!"Active VRR head has invalid raster timings");
+            nvkms_log(NVKMS_LOG_LEVEL_ERROR, NULL,
+                      "Cannot pace VRR cursor refresh with invalid raster timings");
+            return;
+        }
+        // Preserve fractional refresh rates instead of rounding to whole Hz.
+        frameUsec = (1000ULL * pTimings->rasterSize.x * pTimings->rasterSize.y +
+                     pTimings->pixelClock - 1) / pTimings->pixelClock;
+        elapsedUsec = nvkms_get_usec() - pApiHeadState->vrr.lastCursorFrameReleaseUsec;
+        if (pApiHeadState->vrr.lastCursorFrameReleaseUsec == 0 ||
+            elapsedUsec >= frameUsec) {
+            VrrUnstallCursorApiHead(pDispEvo, apiHead);
+        } else if (pApiHeadState->vrr.cursorUnstallTimer == NULL) {
+            // Coalesce motion without postponing the final position indefinitely.
+            pApiHeadState->vrr.cursorUnstallTimer = nvkms_alloc_timer(
+                VrrCursorUnstallTimer, pDispEvo, apiHead, frameUsec - elapsedUsec);
+            if (pApiHeadState->vrr.cursorUnstallTimer == NULL) {
+                nvkms_log(NVKMS_LOG_LEVEL_WARN, NULL,
+                          "VRR cursor timer allocation failed; releasing frame immediately");
+                VrrUnstallCursorApiHead(pDispEvo, apiHead);
+            }
+        }
+        return;
+    }
+#else
+    const NvU32 timeoutMs = 33; // 30 fps
+    NvU32 apiHead;
+
+    (void)head;
     if (!AnyActiveVrrHeads(pDevEvo)) {
         return;
     }
@@ -1017,16 +1098,30 @@ void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo)
         pDispEvo->vrr.unstallTimer =
             nvkms_alloc_timer(VrrUnstallTimer, pDispEvo, 0, timeoutMs * 1000);
     }
+#endif
 }
 
 /*!
  * Trigger a VRR unstall in response to a cursor image change.
  */
 void nvTriggerVrrUnstallSetCursorImage(NVDispEvoPtr pDispEvo,
+                                       NvU32 apiHead,
                                        NvBool elvReleased)
 {
     NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
 
+#if defined(NV_WINDOWS_IDDCX)
+    if (apiHead >= pDevEvo->numApiHeads ||
+        !pDispEvo->apiHeadState[apiHead].vrr.active) {
+        return;
+    }
+    if (elvReleased) {
+        VrrRecordCursorFrameRelease(pDispEvo, apiHead);
+    } else {
+        VrrUnstallCursorApiHead(pDispEvo, apiHead);
+    }
+#else
+    (void)apiHead;
     if (AnyActiveVrrHeads(pDevEvo)) {
         if (!elvReleased) {
             // On nvdisplay, no unstall is necessary if the cursor image update
@@ -1037,4 +1132,5 @@ void nvTriggerVrrUnstallSetCursorImage(NVDispEvoPtr pDispEvo,
             VrrUnstallNow(pDispEvo);
         }
     }
+#endif
 }

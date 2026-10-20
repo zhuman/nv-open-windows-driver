@@ -53,8 +53,9 @@ void nvApplyVrrBaseFlipOverrides(const NVDispEvoRec *pDispEvo, NvU32 head,
                                  const NVFlipChannelEvoHwState *pOld,
                                  NVFlipChannelEvoHwState *pNew);
 enum NvKmsVrrFlipType nvGetActiveVrrType(const NVDevEvoRec *pDevEvo);
-void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo);
+void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo, NvU32 head);
 void nvTriggerVrrUnstallSetCursorImage(NVDispEvoPtr pDispEvo,
+                                       NvU32 apiHead,
                                        NvBool elvReleased);
 void nvGetDpyMinRefreshRateValidValues(
     const NVHwModeTimingsEvo *pTimings,

@@ -253,6 +253,17 @@ Common NVKMS ioctl/timer locking is unchanged. Cursor-image uploads still
 share CE bandwidth, and allocation/modeset work remains exclusive; these
 operations are not made asynchronous by the lock split.
 
+For active VRR heads, visible hardware-cursor motion requests a frame release
+at most once per mode frame interval (about 8.334 ms at 120 Hz), rather than
+the common NVKMS 33 ms cursor fallback. An overdue cursor update releases
+immediately; otherwise a per-head timer coalesces motion and releases the final
+position even if no more input arrives. Pixel flips and cursor-image releases
+cancel redundant cursor timers and restart that interval. Fixed-refresh and
+non-Windows behavior are unchanged. This requests refreshes, not pixel uploads
+or extra primary-plane flips; Windows scheduling and the display engine still
+determine actual presentation time. Timer-allocation failure is logged and
+falls back to an immediate release rather than stranding the final update.
+
 ## BAR1 resources and bounded mappings
 
 `ConfigSpace` owns PCI configuration/address discovery; `PciBar`/`PciBars`
@@ -401,7 +412,7 @@ physical-monitor index (default 0), and hold time is capped at 60 seconds.
 
 ## Native host tests
 
-The 17 standalone console `.vcxproj` projects under [tests](tests) appear in
+The 18 standalone console `.vcxproj` projects under [tests](tests) appear in
 the solution's **Host tests** group. They do not link into drivers or require
 a GPU. A normal solution `Build` builds default profiles but never runs tests,
 installs drivers, or performs hardware operations.
@@ -445,7 +456,10 @@ The removal matrix preserves Windows/native policy, verbose diagnostics
 on/off, and downstream-fix on/off profiles. Applicable projects accept
 `/p:NvTestProfile=diagnostics`, `native-policy`, `native-diagnostics`,
 `downstream-disabled`, or `native-downstream-disabled`. GSP timeout tests
-also retain a native-policy variant. `-VerifyBaseline` adds `baseline` and,
+also retain a native-policy variant, as do the VRR cursor tests in `Modeset`.
+The latter cover exact/fractional frame deadlines, coalescing and final-motion
+delivery, pixel-flip cancellation, independent/split heads, and timer ownership
+through API-head teardown. `-VerifyBaseline` adds `baseline` and,
 where applicable, `dma-baseline` profiles using the generator's pinned
 pre-fix sources. They positively assert reproduction; a nonzero process exit
 is never a successful baseline test. Profile outputs/assets do not share
