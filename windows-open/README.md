@@ -401,7 +401,7 @@ physical-monitor index (default 0), and hold time is capped at 60 seconds.
 
 ## Native host tests
 
-The 16 standalone console `.vcxproj` projects under [tests](tests) appear in
+The 17 standalone console `.vcxproj` projects under [tests](tests) appear in
 the solution's **Host tests** group. They do not link into drivers or require
 a GPU. A normal solution `Build` builds default profiles but never runs tests,
 installs drivers, or performs hardware operations.
@@ -422,7 +422,7 @@ From the repository root:
 ```
 
 Select `-Suite Presentation`, `BarResources`, `MonitorI2c`, `Removal`, `Modeset`,
-or `Platform`; `-Filter` accepts a GoogleTest filter. The six focused runner
+`Platform`, or `DisplayPort`; `-Filter` accepts a GoogleTest filter. The six focused runner
 scripts in the IddCx/modeset/platform test directories remain compatibility
 entrypoints to this shared runner. Tool discovery supports `-VisualStudio`
 or `-VcVarsPath`, plus `-WdfIncludePath` and `-WilIncludePath` overrides.
@@ -458,7 +458,154 @@ and fake-boundary fault injection do not establish hardware behavior, and
 looped assertions are not independent GoogleTest case counts. Control-app
 model tests remain separate; see its README.
 
+The `DisplayPort` suite captures real TraceLogging events to temporary ETL files
+using an in-process private ETW session and decodes their names, types, and
+payloads through TDH. It requires neither elevation nor a GPU. The DPlib event
+bridge and RM-control wrapper are production sources; RM responses are faked.
+It checks all existing structured event schemas, 64-bit variadic payloads,
+text chunking/severity, runtime filters, AUX bytes/lengths/error paths,
+DP 2.x control records, and bounded firmware-recorder reads. It does not
+establish firmware recorder availability or on-wire AUX coverage.
+
 ## Diagnostics and limitations
+
+### DisplayPort TraceLogging
+
+The IddCx driver registers the self-describing
+`NVIDIA.OpenGPU.DisplayPort` provider, GUID
+`{F4B9D5D8-9A13-4B5F-A295-5E616C83C6C1}`. It needs no event manifest, TMF,
+or matching PDB to decode events. Registration failure is reported through
+the existing WPP provider without preventing driver startup. The provider
+is unregistered after device teardown.
+
+There is no registry change or special build required. ETW enablement is
+the runtime gate, independently of the existing WPP/debugger logging:
+
+| Keyword | Minimum level | Events |
+| --- | --- | --- |
+| `0x1` text | Information (`4`), Warning (`3`), or Error (`2`), according to message severity | `DpText`: NVKMS text, including DPlib `DP_PRINTF` discovery, EDID, MST communications, and training diagnostics. |
+| `0x2` structured | Information (`4`); warning events also work at Warning (`3`) | `Hotplug`, `NewSinkDetected`, `NewSinkReported`, `NewMstDevice`, `LostDevice`, `LinkAssessment`, `LinkTrainingStart`, `LinkTrainingDone`, `AttachBegin`, `AttachStatus`, `AttachEnd`, `DetachBegin`, `DetachEnd`, `MessageExpired`, and paired `LinkControlRequest`/`LinkControlResponse`. |
+| `0x4` driver AUX | Verbose (`5`) | Paired `AuxRequest`/`AuxResponse`, including full valid payloads, native AUX, I2C/MOT, address-only, and write-status operations. |
+| `0x8` physical-RM AUX recorder | Verbose (`5`) | `RmAuxPoll` results and `RmAuxRecord` records returned by physical RM/GSP. Experimental: see limitations below. |
+
+All records carry `Origin`. Text, lifecycle, control-boundary events and poll
+results use `Driver`; recorder records use `Firmware`, with
+`CapturePoint=PhysicalRmAuxRecorder`. This labels the observation source,
+not whether a transaction was originally requested by the driver: the same
+operation can appear in both views. The firmware view is physical-RM/GSP
+recorder output, not an independent hardware analyzer.
+
+Start a short capture from an **elevated PowerShell** session:
+
+```powershell
+$provider = '{F4B9D5D8-9A13-4B5F-A295-5E616C83C6C1}'
+# Text and structured events only.
+logman create trace NvDp -o "$env:TEMP\nv-dp.etl" -p $provider 0x3 5 -ets
+# Opt into driver AUX payloads and experimental firmware-recorder reads live.
+logman update trace NvDp -p $provider 0xF 5 -ets
+# Reproduce detection, hotplug, modeset, or link-training behavior, then stop.
+logman stop NvDp -ets
+tracerpt "$env:TEMP\nv-dp.etl" -of XML -lr -o "$env:TEMP\nv-dp.xml" -summary "$env:TEMP\nv-dp-summary.txt" -y
+```
+
+`-lr` avoids strict XML-schema warnings when decoding self-describing events.
+Verify provider readiness from actual decoded events, not from
+`logman query providers`: that query can report "Element not found" for this
+dynamic provider even while its events are being captured successfully.
+
+Use keyword mask `0x7` instead of `0xF` to capture driver AUX without querying
+the firmware recorder. `0x3` disables payload capture again without restarting
+the driver. WPA's Generic Events view and other TDH/TraceLogging-aware consumers
+can decode the ETL directly. Check session event loss before treating a trace
+as complete. AUX/EDID/HDCP-related payloads and monitor identifiers can be
+sensitive; use short, intentional captures and handle ETLs accordingly.
+
+In WPA, add **System Activity > Generic Events** to the analysis view and
+expand **NVIDIA.OpenGPU.DisplayPort**. The **Task Name** groups separate
+`DpText`, `AuxRequest`/`AuxResponse`, `RmAuxPoll`/`RmAuxRecord`, and training
+events. Expand a group to individual events to inspect text and payload
+fields. Correlate driver request/response pairs by process and `TransactionId`;
+the counter restarts when the provider's driver module is reloaded.
+
+#### Event details and boundaries
+
+- `DpText` retains mapped NVKMS severity, GPU prefix, and untruncated input text.
+  Messages longer than 4095 bytes are split into events sharing `MessageId`,
+  with zero-based `ChunkIndex` and `LastChunk`. The legacy 1024-byte
+  debugger/WPP formatting remains unchanged. General NVKMS text is included
+  to retain discovery/EDID and monitor-control diagnostics; this keyword
+  is not limited to DPlib.
+- Structured DPlib hooks carry named fields rather than opaque argument
+  arrays. Existing rate values retain the producers' units (DPlib `PeakRate`
+  is in 10-MHz link-rate units); `PixelClockHz` is in Hz. Topology
+  address words and their length are preserved. These pre-existing hooks
+  do not all provide a GPU/connector ID; do not infer one from interleaving.
+- The driver AUX tap is at the common `nvRmApiControl` boundary, covering
+  DPlib, SST EDID AUX requests, and Windows monitor-control AUX calls through
+  that boundary. Each request has client/object/subdevice/display identity,
+  raw command and address, address-only flag, raw zero-based input size,
+  normalized requested byte count, and write bytes. Each response has the
+  matching `TransactionId`, RM status, raw reply type and returned size,
+  retry delay, and ACK read bytes. Retries made by the driver are separate
+  transactions; retries hidden inside RM/hardware are not.
+- Raw input sizes are zero-based; returned sizes are byte counts. Failed,
+  deferred, NACK, write-status and address-only reads do not publish stale
+  read-buffer contents. `ReplyValid` is false on RM failure. Invalid sizes
+  remain visible in the raw fields with `ValidLength=false`, but are never
+  used to read past the 16-byte buffers or the requested read size.
+- Driver AUX and link-control request/response timestamps use QPC;
+  `DurationQpc` excludes recorder-drain time. Use the machine's QPC frequency
+  (available in the ETL header) to convert ticks. Link-control records expose
+  raw `NV0073_CTRL_CMD_DP_CTRL` and DP 2.x training-stage commands/data and
+  returned error bits, including attempts that fall back. They are not
+  per-lane training-pattern or electrical measurements.
+- No AUX snapshots, extra RM reads, or payload events are generated when the
+  corresponding keywords are disabled. Existing debugger/WPP logging and
+  protocol forwarding/return statuses are preserved. ETW is best-effort;
+  enabling high-volume logging can affect timing.
+
+#### What the firmware recorder can and cannot establish
+
+The API is
+`NV0073_CTRL_CMD_DP_GET_AUXLOGGER_BUFFER_DATA` (`0x731373`). Its generated
+RM dispatch is routed to physical RM; GSP-client configurations forward
+physical-RM controls through GSP RPC. This tree contains the retrieval ABI
+and NVKMS reader, but **not the firmware producer or a documented recording
+activation switch**. The TraceLogging implementation does not invent an
+activation key or interpret a successful empty query as proof of recording.
+
+With keyword `0x8` enabled, the control wrapper polls immediately before and
+after AUX and DP/DP 2.x training controls, using the same client/object and
+subdevice. Each drain is bounded to four batches of 50 records. `RmAuxPoll`
+reports status, returned count, validity and `DrainLimitReached`; unsupported,
+failed and malformed queries are explicit and never replace the original
+operation's result. There is no background timer or idle/teardown drain,
+so firmware-only activity after the last triggering control can remain unread.
+Recorder calls retain normal RM timeouts and can perturb training timing.
+
+`RmAuxRecord` preserves sequence number, port, address, event/request/reply
+types, raw event bits (including I2C write-status variants), both firmware
+timestamps, requested/reported lengths, and up to 16 recorded bytes. The
+single recorder payload array is exposed as supplied, without pretending
+it contains distinct request and response payloads. Firmware timestamps
+retain their raw, undocumented clock domain; do not subtract them from QPC
+or assume a conversion without firmware evidence. Sequence discontinuities,
+drain limits and ETW loss must be considered when assessing completeness.
+
+The recorder might fill in RM-internal training/retry traffic if the running
+firmware supports and populates it. Only hardware capture can establish that.
+Use a connected native DisplayPort sink for that test, and verify successful
+AUX transactions and actual link-control/training events in the trace.
+Disconnected-port AUX failures with successful empty recorder polls establish
+query reachability only, not active recording or coverage of firmware traffic.
+Driver-side RM controls that perform multiple AUX transactions internally
+(for example firmware-managed EDID/training operations) are not expanded by
+the driver AUX tap. Do not concurrently consume the same recorder via the
+older NVKMS AUX-log query attribute: reads drain shared records.
+The older `ENABLE_OCA_LOGGING`/DPlib ring-buffer path remains stubbed and is
+not used for this capture.
+
+### Existing WPP diagnostics
 
 The IddCx WPP provider mirrors RM platform output, including Xid, assertion
 frames, and fail-fast codes. Enable `TRACE_DRIVER` at informational level or

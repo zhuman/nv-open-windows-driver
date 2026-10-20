@@ -7,7 +7,11 @@
   <Import Project="host-test.props" />
   <Import Project="nvkms-test.props" />
   <ItemDefinitionGroup><ClCompile><PreprocessorDefinitions>NV_USER_MODE;NV_WINDOWS_IDDCX;NV_LINUX;NV_SMG_IN_NVKMS;NVHDMIPKT_RM_CALLS_INTERNAL=0;NVHDMIPKT_NVKMS;NV_XZ_CUSTOM_MEM_HOOKS;NV_XZ_USE_NVTYPES;XZ_DEC_SINGLE;_LANGUAGE_C;NVRM;SOFTFLOAT_FAST_DIV32TO16;SOFTFLOAT_FAST_DIV64TO32;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile></ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="..\modeset\tests\mpo_request_tests.cpp" /></ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\modeset\tests\mpo_request_tests.cpp" />
+    <ClCompile Include="..\modeset\dp_tracelogging.cpp" />
+  </ItemGroup>
+  <ItemDefinitionGroup><Link><AdditionalDependencies>advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link></ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="host-test.targets" />
 </Project>

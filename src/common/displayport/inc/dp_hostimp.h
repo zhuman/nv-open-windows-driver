@@ -44,6 +44,7 @@ extern "C" void dpPrintf(DP_LOG_LEVEL severity, const char * formatter, ...)
     __attribute__ ((format (printf, 2, 3)))
 #endif
 ;
+// Variadic event payloads use NvU64; producers should use NV_DPTRACE_*.
 extern "C" void dpTraceEvent(NV_DP_TRACING_EVENT event,
                              NV_DP_TRACING_PRIORITY priority, NvU32 numArgs, ...);
 

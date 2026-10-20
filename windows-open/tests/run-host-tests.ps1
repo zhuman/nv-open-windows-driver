@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Presentation', 'BarResources', 'MonitorI2c', 'Removal', 'Modeset', 'Platform')]
+    [ValidateSet('All', 'Presentation', 'BarResources', 'MonitorI2c', 'Removal', 'Modeset', 'Platform', 'DisplayPort')]
     [string]$Suite = 'All',
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [ValidateSet('x64', 'ARM64')][string]$Platform = 'x64',
@@ -40,6 +40,7 @@ $groups = [ordered]@{
     Removal = @('device-removal-tests', 'scrubber-removal-tests', 'pma-scrub-removal-tests')
     Modeset = @('mpo-request-tests')
     Platform = @('debug-log-tests', 'gsp-timeout-tests')
+    DisplayPort = @('dp-trace-tests')
 }
 $projects = if ($Suite -eq 'All') { @($groups.Values | ForEach-Object { $_ }) } else { $groups[$Suite] }
 $runs = 0

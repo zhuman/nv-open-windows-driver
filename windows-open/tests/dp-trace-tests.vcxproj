@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{9B2CBA48-5829-451E-87D4-5DDB2E8BDE79}</ProjectGuid>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="host-test.props" />
+  <Import Project="nvkms-test.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>NV_WINDOWS_IDDCX;NV_LINUX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)' == 'Debug'">DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link><AdditionalDependencies>advapi32.lib;tdh.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\modeset\tests\dp_trace_tests.cpp" />
+    <ClCompile Include="..\modeset\dp_tracelogging.cpp" />
+    <ClCompile Include="$(RepoRoot)src\nvidia-modeset\src\dp\nvdp-host.cpp" />
+    <ClCompile Include="$(RepoRoot)src\nvidia-modeset\src\nvkms-rmapi-dgpu.c" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Project="host-test.targets" />
+</Project>

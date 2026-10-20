@@ -98,31 +98,34 @@ typedef enum NV_DP_TRACING_PRIORITY
 #define _NV_DPTRACE_SEND_N(priority, argc, ...) _NV_DPTRACE_EXPAND(_NV_DPTRACE_##argc(priority, __VA_ARGS__))  
 
 // The first argument is the event - macro number is one higher than num args passed to dpTraceEvent
+// Normalize variadic payload widths for hosts that consume the event arguments.
+#define _NV_DPTRACE_ARG(value) ((NvU64)(value))
+
 #define _NV_DPTRACE_1(priority, event)                                               \
     dpTraceEvent(TRACE_DP_ID_##event, priority, 0);
 
 #define _NV_DPTRACE_2(priority, event, p1)                                           \
-    dpTraceEvent(TRACE_DP_ID_##event, priority, 1, p1);
+    dpTraceEvent(TRACE_DP_ID_##event, priority, 1, _NV_DPTRACE_ARG(p1));
 
 #define _NV_DPTRACE_3(priority, event, p1, p2)                                       \
-    dpTraceEvent(TRACE_DP_ID_##event, priority, 2, p1, p2);
+    dpTraceEvent(TRACE_DP_ID_##event, priority, 2, _NV_DPTRACE_ARG(p1), _NV_DPTRACE_ARG(p2));
 
 #define _NV_DPTRACE_4(priority, event, p1, p2, p3)                                   \
-    dpTraceEvent(TRACE_DP_ID_##event, priority, 3, p1, p2, p3);
+    dpTraceEvent(TRACE_DP_ID_##event, priority, 3, _NV_DPTRACE_ARG(p1), _NV_DPTRACE_ARG(p2), _NV_DPTRACE_ARG(p3));
 
 #define _NV_DPTRACE_5(priority, event, p1, p2, p3, p4)                               \
-    dpTraceEvent(TRACE_DP_ID_##event, priority, 4, p1, p2, p3, p4);
+    dpTraceEvent(TRACE_DP_ID_##event, priority, 4, _NV_DPTRACE_ARG(p1), _NV_DPTRACE_ARG(p2), _NV_DPTRACE_ARG(p3), _NV_DPTRACE_ARG(p4));
 
 #define _NV_DPTRACE_6(priority, event, p1, p2, p3, p4, p5)                           \
-    dpTraceEvent(TRACE_DP_ID_##event, priority, 5, p1, p2, p3, p4, p5);
+    dpTraceEvent(TRACE_DP_ID_##event, priority, 5, _NV_DPTRACE_ARG(p1), _NV_DPTRACE_ARG(p2), _NV_DPTRACE_ARG(p3), _NV_DPTRACE_ARG(p4), _NV_DPTRACE_ARG(p5));
 
 #define _NV_DPTRACE_7(priority, event, p1, p2, p3, p4, p5, p6)                       \
-    dpTraceEvent(TRACE_DP_ID_##event, priority, 6, p1, p2, p3, p4, p5, p6);
+    dpTraceEvent(TRACE_DP_ID_##event, priority, 6, _NV_DPTRACE_ARG(p1), _NV_DPTRACE_ARG(p2), _NV_DPTRACE_ARG(p3), _NV_DPTRACE_ARG(p4), _NV_DPTRACE_ARG(p5), _NV_DPTRACE_ARG(p6));
 
 #define _NV_DPTRACE_8(priority, event, p1, p2, p3, p4, p5, p6, p7)                   \
-    dpTraceEvent(TRACE_DP_ID_##event, priority, 7, p1, p2, p3, p4, p5, p6, p7);
+    dpTraceEvent(TRACE_DP_ID_##event, priority, 7, _NV_DPTRACE_ARG(p1), _NV_DPTRACE_ARG(p2), _NV_DPTRACE_ARG(p3), _NV_DPTRACE_ARG(p4), _NV_DPTRACE_ARG(p5), _NV_DPTRACE_ARG(p6), _NV_DPTRACE_ARG(p7));
 
 #define _NV_DPTRACE_9(priority, event, p1, p2, p3, p4, p5, p6, p7, p8)               \
-    dpTraceEvent(TRACE_DP_ID_##event, priority, 8, p1, p2, p3, p4, p5, p6, p7, p8);
+    dpTraceEvent(TRACE_DP_ID_##event, priority, 8, _NV_DPTRACE_ARG(p1), _NV_DPTRACE_ARG(p2), _NV_DPTRACE_ARG(p3), _NV_DPTRACE_ARG(p4), _NV_DPTRACE_ARG(p5), _NV_DPTRACE_ARG(p6), _NV_DPTRACE_ARG(p7), _NV_DPTRACE_ARG(p8));
 
 #endif // INCLUDED_DP_TRACING_H

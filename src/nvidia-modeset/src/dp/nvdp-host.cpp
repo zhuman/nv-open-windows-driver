@@ -30,6 +30,10 @@
 #include "dp_hostimp.h"
 #include "dp_printf.h"
 
+#if defined(NV_WINDOWS_IDDCX)
+#include "nv-dp-tracelogging.h"
+#endif
+
 void *dpMalloc(NvLength sz)
 {
     return nvAlloc(sz);
@@ -87,6 +91,22 @@ void dpAssert(const char *expression, const char *file,
 void dpTraceEvent(NV_DP_TRACING_EVENT event,
                   NV_DP_TRACING_PRIORITY priority, NvU32 numArgs, ...)
 {
-    // To support DPlib tracing, implement this function.
-}
+#if defined(NV_WINDOWS_IDDCX)
+    if (!NvDpTraceEventEnabled(priority)) return;
 
+    NvU64 args[NV_DPTRACE_MAX_PARAMS] = {};
+    if (numArgs > NV_DPTRACE_MAX_PARAMS) {
+        NvDpTraceEvent(event, priority, numArgs, NULL);
+        return;
+    }
+    va_list ap;
+    va_start(ap, numArgs);
+    for (NvU32 i = 0; i < numArgs; i++) {
+        args[i] = va_arg(ap, NvU64);
+    }
+    va_end(ap);
+    NvDpTraceEvent(event, priority, numArgs, args);
+#else
+    // Other hosts may provide a platform-specific event sink here.
+#endif
+}

@@ -53,6 +53,7 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="dp_tracelogging.cpp" />
     <ClCompile Include="nvkms_windows.cpp">
       <CompileAs>CompileAsCpp</CompileAs>
     </ClCompile>
@@ -63,6 +64,7 @@
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\common\include\nv-dp-tracelogging.h" />
     <ClInclude Include="monitor_i2c.hpp" />
     <ClInclude Include="monitor_i2c_aux.hpp" />
     <ClInclude Include="monitor_i2c_native.hpp" />

@@ -8,6 +8,7 @@
     <Project Path="tests/debug-log-tests.vcxproj" />
     <Project Path="tests/device-removal-tests.vcxproj" />
     <Project Path="tests/dirty-regions-tests.vcxproj" />
+    <Project Path="tests/dp-trace-tests.vcxproj" />
     <Project Path="tests/driver-parameters-tests.vcxproj" />
     <Project Path="tests/frame-slots-tests.vcxproj" />
     <Project Path="tests/gsp-timeout-tests.vcxproj" />

@@ -3,6 +3,7 @@
 #include "monitor_i2c_aux.hpp"
 #include "monitor_i2c_native.hpp"
 #include "presentation_locks.hpp"
+#include "nv-dp-tracelogging.h"
 
 #include "nv-kernel-rmapi-ops.h"
 #include "nv-gpu-info.h"
@@ -851,6 +852,7 @@ extern "C" int nvkms_snprintf(char* string, size_t size, const char* format, ...
 
 extern "C" void nvkms_log(int level, const char* gpuPrefix, const char* message)
 {
+    NvDpTraceText(level, gpuPrefix, message);
     char output[1024] = {};
     const char* const levelPrefix = level == NVKMS_LOG_LEVEL_ERROR ? "ERROR: " :
         level == NVKMS_LOG_LEVEL_WARN ? "WARNING: " : "";

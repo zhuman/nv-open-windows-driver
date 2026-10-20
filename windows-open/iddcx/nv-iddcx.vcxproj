@@ -61,7 +61,7 @@
       <WholeProgramOptimization Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</WholeProgramOptimization>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>d3d11.lib;d3d12.lib;dxgi.lib;avrt.lib;OneCoreUAP.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;d3d12.lib;dxgi.lib;avrt.lib;advapi32.lib;OneCoreUAP.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <LinkTimeCodeGeneration Condition="'$(Configuration)|$(Platform)'=='Release|x64'">UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
     <DriverSign>

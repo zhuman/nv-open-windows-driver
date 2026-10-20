@@ -6,6 +6,7 @@
 #include "device.hpp"
 #include "driver_parameters.hpp"
 #include "nvplatform_common.h"
+#include "nv-dp-tracelogging.h"
 #include "trace.h"
 
 #include "driver.tmh"
@@ -45,6 +46,7 @@ void DriverDestroy(WDFOBJECT driverObject)
     {
         GetDriverContext(driverObject)->~DriverContext();
         NvPlatformSetDebugLog(nullptr);
+        NvDpTraceShutdown();
         WPP_CLEANUP(WdfDriverWdmGetDriverObject(static_cast<WDFDRIVER>(driverObject)));
     }
 }
@@ -73,6 +75,10 @@ extern "C" NTSTATUS DriverEntry(
     PUNICODE_STRING registryPath)
 {
     WPP_INIT_TRACING(driverObject, registryPath);
+    const NvU32 traceStatus = NvDpTraceInitialize();
+    if (traceStatus != ERROR_SUCCESS)
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "DisplayPort TraceLogging registration failed: %u", traceStatus);
     NvPlatformSetDebugLog(PlatformDebugLog);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "DriverEntry");
 
@@ -109,6 +115,7 @@ extern "C" NTSTATUS DriverEntry(
             "WdfDriverCreate failed: %!STATUS!",
             status);
         NvPlatformSetDebugLog(nullptr);
+        NvDpTraceShutdown();
         WPP_CLEANUP(driverObject);
     }
     return status;

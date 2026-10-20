@@ -27,6 +27,10 @@
 #include "nvkms-rmapi.h"
 #include "nv_assert.h"
 
+#if defined(NV_WINDOWS_IDDCX)
+#include "nv-dp-tracelogging.h"
+#endif
+
 NvU32 nvRmApiAlloc(
     NvU32 hClient,
     NvU32 hParent,
@@ -78,7 +82,11 @@ NvU32 nvRmApiAllocMemory64(
     return ops.params.allocMemory64.status;
 }
 
+#if defined(NV_WINDOWS_IDDCX)
+static NvU32 nvRmApiControlRaw(
+#else
 NvU32 nvRmApiControl(
+#endif
     NvU32 hClient,
     NvU32 hObject,
     NvU32 cmd,
@@ -99,6 +107,19 @@ NvU32 nvRmApiControl(
 
     return ops.params.control.status;
 }
+
+#if defined(NV_WINDOWS_IDDCX)
+NvU32 nvRmApiControl(
+    NvU32 hClient,
+    NvU32 hObject,
+    NvU32 cmd,
+    void *pParams,
+    NvU32 paramsSize)
+{
+    return NvDpTraceControl(hClient, hObject, cmd, pParams, paramsSize,
+                            nvRmApiControlRaw);
+}
+#endif
 
 NvU32 nvRmApiDupObject2(
     NvU32 hClient,
