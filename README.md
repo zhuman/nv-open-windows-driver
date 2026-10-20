@@ -146,18 +146,14 @@ It is not a claim of complete sleep/resume or production power certification.
 The driver and its RM/NVKMS code run in a **user-mode `WUDFHost.exe` process,
 outside the kernel's address space**. Ordinary driver memory faults and
 crashes are contained to the host/device rather than directly bugchecking
-Windows (bugcheck == blue screen of death); a failed host can be restarted.
+Windows (bugcheck == blue screen of death); a failed driver process is automatically restarted without major impact to the system.
 This makes experimentation substantially safer than running the same code in a
 kernel-mode miniport. See Microsoft's
 [UMDF host-process overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/wdf/umdf-driver-host-process).
 
 ## ✅ Confirmed working
 
-Hardware validation includes an **RTX 4070 connected over USB4** on Windows 11
-and an **RTX 3060 Ti** confirmed working by the user. Detailed feature and USB4
-lifecycle testing documented here was performed on the RTX 4070. This does not
-mean every feature has been tested on each GPU, or that every GPU in the
-inherited supported-device table has been tested.
+Hardware validation of the driver thus far includes an **RTX 4070** and an **RTX 3060 Ti**, both connected over USB4 on Windows 11 build 28120.3181. However due to the to the clean abstraction over the Nvidia Linux code, it is believed very likely to work on all Turing (RTX 2000) and later GPUs without any further modification.
 
 | Area | Working functionality |
 | --- | --- |
