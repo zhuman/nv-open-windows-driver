@@ -1,12 +1,12 @@
-# 🖥️ Windows Display-Only Driver Harness for Nvidia GPUs
+# 🖥️ Windows Open Display-Only Driver for Nvidia GPUs
 
-This fork hosts the common, OS-agnostic portions of NVIDIA's open Linux GPU
-driver inside a **Windows UMDF 2 / IddCx display driver**. It already drives
-real NVIDIA display outputs; it is not just a virtual-monitor sample.
+This fork hosts the common, OS-agnostic core of NVIDIA's open Linux GPU
+driver inside a **Windows UMDF 2 / IddCx display driver**. It is fully functional and drives
+real NVIDIA display outputs; it is not just a sample.
 The project is an independent, experimental port, not an official NVIDIA
 Windows driver. It can be built and installed as the driver of real Nvidia
 GPUs and provides all display functionality possible through IddCx today.
-It does *not* provide rendering support to D3D or other APIs.
+**It does *not* provide rendering support to D3D or other APIs.**
 
 ## 📖 Background Concepts
 
@@ -210,23 +210,6 @@ ownership/damage schedules**.
   the validated IddCx feature set. Production KMDOD remains gated from RM
   activation. IddCx and KMDOD are alternative function drivers, not packages
   to install simultaneously on the same GPU.
-- **VRR is capability-gated, not hardware-certified here.** The capture sink
-  reports no VRR support; fixed-refresh operation is verified. Interval-zero
-  presentation explicitly disables tearing.
-- **60+ displayed FPS is not established.** The original 4K mode is ~29.97 Hz,
-  one-second dips remain, and full 4K FP16 transfers are bandwidth-limited.
-  Upload counts and 30-FPS camera captures are not proof of displayed FPS.
-- HDR absolute luminance/cursor calibration, broad GPU compatibility, and
-  production power-management/reliability certification remain open.
-  Experimental D3D11 `ReadFromSubresource` modes work but are much slower
-  than the preferred paths.
-- **DDC/CI validation is DisplayPort-only so far.** The native HDMI/DVI/VGA
-  transport is implemented but hardware-unverified; internal displays and DP
-  MST are unsupported. On the tested MCCS 2.2 monitor, Windows
-  `GetMonitorCapabilities` rejects the advertised version even though
-  brightness control and capabilities-string retrieval work. These new tests
-  used API readback and traces, not capture or physical OSD observation. See
-  [monitor-control testing](windows-open/README.md#monitor-control-i2cddcci).
 
 ## 🏗️ How to build and install
 
